@@ -5,9 +5,9 @@ import hashlib
 import platform
 import threading
 import contextlib
-from dataclasses import dataclass
 from copy import copy
 from concurrent import futures
+from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
@@ -446,7 +446,7 @@ def tiled_promptable_segmentation_2d(
 
     # Grouped by tile, so an object is segmented in every tile that holds one of its prompts.
     # Points are (y, x), boxes (y0, x0, y1, x1), and a mask is cropped to the tile's outer block.
-    tile_points, tile_labels, tile_boxes, tile_masks = {}, {}, {}, {}
+    tile_points, tile_labels, tile_boxes, tile_masks, tile_box_ids = {}, {}, {}, {}, {}
     if have_points:
         for point, label in zip(np.asarray(points), np.asarray(labels)):
             tid = _tile_index_for(tiling, halo, int(round(point[0])), int(round(point[1])))
@@ -458,6 +458,7 @@ def tiled_promptable_segmentation_2d(
             # A box can span several tiles. Segment its clipped portion in each (boxes are y0,x0,y1,x1).
             for tid, clipped in _box_to_tiles(tiling, halo, np.asarray(box)).items():
                 tile_boxes.setdefault(tid, []).append(clipped)
+                tile_box_ids.setdefault(tid, []).append(bidx + 1)
                 tile_masks.setdefault(tid, []).append(
                     None if box_mask is None else _crop_mask_to_tile(tiling, halo, tid, box_mask)
                 )
@@ -516,6 +517,9 @@ def tiled_promptable_segmentation_2d(
 
         local, glob = _inner_block_slices(tiling, halo, tile_id)
         region = tile_seg[local]
+        # The tile counts its boxes from 1, so map them back to the global box ids.
+        if not batched and tile_id in tile_box_ids:
+            region = np.array([0] + tile_box_ids[tile_id], dtype="uint32")[region]
         # Unioned by id, so an object spanning tiles is merged across the boundary.
         sub = out[glob]
         positive = region > 0

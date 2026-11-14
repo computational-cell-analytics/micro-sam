@@ -27,6 +27,10 @@ Examples:
 \b
   # Apply a trained pixel classifier to new images
   micro_sam inference pixel-classification -i image.tif -o prediction.tif --classifier rf.joblib
+
+\b
+  # Train a model on your own images and labels, for interactive and automatic segmentation
+  micro_sam train -i images/ --image_key '*.tif' -l labels/ --label_key '*.tif' --mode joint
 """
 
 
@@ -102,7 +106,8 @@ def _interactive_options(f):
     """`_model_options` plus the optional decoder weights used by the segmentation / tracking annotators."""
     f = click.option(
         "--decoder_path", default=None,
-        help="Optional decoder-only weights to enable decoder-based instance segmentation."
+        help="Optional decoder weights to enable decoder-based instance segmentation. By default the decoder comes "
+        "from the checkpoint, or from the file '<name>_decoder' next to it."
     )(f)
     return _model_options(f)
 
@@ -235,14 +240,15 @@ def annotator_object_classification(
     different categories.
     """
     import numpy as np
-    from .util import load_image_data
-    from .sam_annotator.object_classifier import object_classifier
     from .v2.util import DEFAULT_MODEL
+    from .util import load_image_data, prepare_annotation_image
+    from .sam_annotator.object_classifier import object_classifier
 
     image = load_image_data(input_, key=key)
     if segmentation_result is None:
-        seg_ndim = ndim if ndim is not None else (image.ndim - 1 if image.shape[-1] == 3 else image.ndim)
-        segmentation = np.zeros(image.shape[:seg_ndim], dtype="uint32")
+        # The classifier prepares the image in the same way, so the empty segmentation matches it.
+        prepared, seg_ndim, _ = prepare_annotation_image(image, ndim=ndim)
+        segmentation = np.zeros(prepared.shape[:seg_ndim], dtype="uint32")
     else:
         segmentation = load_image_data(segmentation_result, key=segmentation_key)
 
@@ -493,7 +499,10 @@ def _view_result(image_path, key, segmentation):
     "-m", "--model_type", default=None,
     help="The SAM2 model to use. Needs a registered decoder or a '--checkpoint'. Default: 'hvit_t_cells'."
 )
-@click.option("-c", "--checkpoint", "checkpoint_path", default=None, help="Decoder checkpoint to load the model from.")
+@click.option(
+    "-c", "--checkpoint", "checkpoint_path", default=None,
+    help="Custom checkpoint for the SAM2 model and its decoder. The model size is read from it.",
+)
 @click.option(
     "--tile_shape", default=None,
     help="The tile shape for tiled prediction, comma-separated, e.g. '384,384' (2D) or '4,384,384' (3D). "
@@ -552,6 +561,7 @@ def inference_segmentation(
 
     from .util import load_image_data
     from .v2.util import DEFAULT_MODEL
+    from .v2.instance_segmentation import NoDecoderError
     from .v1.automatic_segmentation import _get_inputs_from_paths
     from .v2.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
@@ -576,10 +586,13 @@ def inference_segmentation(
 
     # Only an initial guess: 'automatic_instance_segmentation' swaps in the tiling variant that
     # matches the image it reads, rebuilding it from the already loaded model and decoder.
-    predictor, segmenter = get_predictor_and_segmenter(
-        model_type=model_type, checkpoint=checkpoint_path, device=device,
-        segmentation_mode=engine, is_tiled=tile_shape is not None, ndim=segmenter_ndim,
-    )
+    try:
+        predictor, segmenter = get_predictor_and_segmenter(
+            model_type=model_type, checkpoint=checkpoint_path, device=device,
+            segmentation_mode=engine, is_tiled=tile_shape is not None, ndim=segmenter_ndim,
+        )
+    except NoDecoderError as e:
+        raise click.ClickException(str(e))
 
     has_one_input = len(input_paths) == 1
     output_paths = _resolve_output_paths(input_paths, output_path)
@@ -631,7 +644,10 @@ def inference_segmentation(
     "-m", "--model_type", default=None,
     help="The SAM2 model to use. Needs a registered decoder or a '--checkpoint'. Default: 'hvit_t_cells'."
 )
-@click.option("-c", "--checkpoint", "checkpoint_path", default=None, help="Decoder checkpoint to load the model from.")
+@click.option(
+    "-c", "--checkpoint", "checkpoint_path", default=None,
+    help="Custom checkpoint for the SAM2 model and its decoder. The model size is read from it.",
+)
 @click.option(
     "--tile_shape", default=None,
     help="The tile shape for tiled per-frame prediction, comma-separated, e.g. '384,384'. By default "
@@ -662,6 +678,7 @@ def inference_tracking(
     for sparse or '--beta' for dense) can be passed through and are forwarded.
     """
     from .v2.util import DEFAULT_MODEL
+    from .v2.instance_segmentation import NoDecoderError
     from .v2.automatic_segmentation import get_predictor_and_segmenter, automatic_tracking
 
     model_type = model_type or DEFAULT_MODEL
@@ -669,10 +686,13 @@ def inference_tracking(
     halo = _parse_shape(halo)
     generate_kwargs = _parse_extra(ctx.args)
 
-    predictor, segmenter = get_predictor_and_segmenter(
-        model_type=model_type, checkpoint=checkpoint_path, device=device,
-        segmentation_mode="ais", is_tiled=tile_shape is not None,
-    )
+    try:
+        predictor, segmenter = get_predictor_and_segmenter(
+            model_type=model_type, checkpoint=checkpoint_path, device=device,
+            segmentation_mode="ais", is_tiled=tile_shape is not None,
+        )
+    except NoDecoderError as e:
+        raise click.ClickException(str(e))
     automatic_tracking(
         predictor=predictor,
         segmenter=segmenter,
@@ -883,11 +903,11 @@ def precompute_embeddings(
 ):
     """Precompute image embeddings (and optionally the automatic-segmentation state)."""
     from .precompute_state import precompute_state
-    from .v2.util import _DEFAULT_MODEL
+    from .v2.util import DEFAULT_BASE_MODEL
 
     precompute_state(
         input_path, embedding_path,
-        model_type=model_type or _DEFAULT_MODEL, checkpoint_path=checkpoint_path,
+        model_type=model_type or DEFAULT_BASE_MODEL, checkpoint_path=checkpoint_path,
         pattern=pattern, key=key, ndim=ndim,
         precompute_autoseg_state=precompute_autoseg_state,
         prefer_decoder=prefer_decoder,
@@ -896,7 +916,168 @@ def precompute_embeddings(
     )
 
 
+TRAINING_MODE_HELP = (
+    "What to train: 'interactive' (segmentation with points, boxes and masks), 'automatic' (the decoder for "
+    "automatic instance segmentation, AIS and APG), 'joint' (both) or 'semantic' (semantic segmentation)."
+)
+
+
+def _resolve_training_data(
+    images, image_key, labels, label_key, val_images, val_labels, val_image_key, val_label_key, val_fraction,
+):
+    """Resolve the training and validation data, and split off validation files if none are given."""
+    from .v2.training.loaders import resolve_data_paths, split_train_val_files
+
+    if len(val_images) != len(val_labels) or bool(val_images) != bool(val_labels):
+        raise click.UsageError("Pass both '--val_images' and '--val_labels', or neither.")
+    if not val_images:
+        images, image_key = resolve_data_paths(list(images), image_key)
+        labels, label_key = resolve_data_paths(list(labels), label_key)
+        if len(images) != len(labels):
+            raise click.UsageError(f"There are {len(images)} images, but {len(labels)} label images.")
+        try:
+            images, labels, val_images, val_labels = split_train_val_files(images, labels, val_fraction)
+        except ValueError as e:
+            raise click.UsageError(str(e))
+        print(f"Training on {len(images)} files and validating on {len(val_images)} files.")
+        return (images, image_key, labels, label_key), (val_images, image_key, val_labels, label_key)
+    val_image_key = image_key if val_image_key is None else val_image_key
+    val_label_key = label_key if val_label_key is None else val_label_key
+    return (
+        (list(images), image_key, list(labels), label_key),
+        (list(val_images), val_image_key, list(val_labels), val_label_key),
+    )
+
+
 @cli.command("train")
+@click.option(
+    "-i", "--images", multiple=True, required=True,
+    help="The training images: image files, a folder (with a pattern in '--image_key') or container files. "
+    "Repeat the option for several files or folders."
+)
+@click.option(
+    "-l", "--labels", multiple=True, required=True,
+    help="The training labels, in the same form and order as '--images'. Instance segmentations for "
+    "'interactive', 'automatic' and 'joint' training, class ids for 'semantic' training. 0 is the background."
+)
+@click.option(
+    "--image_key", default=None,
+    help="The key of the images: e.g. 'raw' in a h5, zarr or n5 file, or a pattern like '*.tif' for a folder. "
+    "Leave it out for image files and ome-zarr images, which then use their full resolution."
+)
+@click.option(
+    "--label_key", default=None,
+    help="The key of the labels: e.g. 'labels' in a h5, zarr or n5 file, the label group in an ome-zarr file, "
+    "e.g. 'labels/cells', or a pattern for a folder."
+)
+@click.option("--val_images", multiple=True, help="The validation images, in the same form as '--images'.")
+@click.option("--val_labels", multiple=True, help="The validation labels, in the same form as '--labels'.")
+@click.option("--val_image_key", default=None, help="The key of the validation images. By default '--image_key'.")
+@click.option("--val_label_key", default=None, help="The key of the validation labels. By default '--label_key'.")
+@click.option(
+    "--val_fraction", type=float, default=0.1,
+    help="Without validation data, this fraction of the training files is used for validation instead."
+)
+@click.option(
+    "--mode", type=click.Choice(["interactive", "automatic", "joint", "semantic"]), default="joint",
+    help=TRAINING_MODE_HELP + " By default 'joint'."
+)
+@click.option(
+    "-m", "--model_type", default=None,
+    help="The model to start from: a micro-sam2 model, e.g. 'hvit_t_cells', or a SAM2 model, e.g. 'hvit_t'. "
+    "By default 'hvit_t_cells'."
+)
+@click.option(
+    "-c", "--checkpoint_path", default=None,
+    help="A custom checkpoint to start from, for 'interactive' and 'joint' training. The model size is read from it."
+)
+@click.option(
+    "--patch_shape", default="512,512",
+    help="The patch shape, comma-separated: 'y,x' for 2d images or the 2d slices of volumes, 'z,y,x' for 3d "
+    "training on volumes. By default '512,512'."
+)
+@click.option(
+    "--num_classes", type=int, default=None,
+    help="The number of classes, the background included. Required for 'semantic' training."
+)
+@click.option("--n_epochs", type=int, default=100, help="The number of epochs to train. By default 100.")
+@click.option(
+    "--n_iterations", type=int, default=None, help="The number of iterations to train. Overrides '--n_epochs'."
+)
+@click.option("--batch_size", type=int, default=1, help="The batch size. By default 1.")
+@click.option("--num_workers", type=int, default=4, help="The number of data loader workers. By default 4.")
+@click.option(
+    "--max_num_objects", type=int, default=10,
+    help="The number of objects per patch that are prompted in each step of 'interactive' and 'joint' training."
+)
+@click.option("--lr", type=float, default=1e-5, help="The learning rate. By default 1e-5.")
+@click.option("-s", "--save_root", default=None, help="The folder for the checkpoints and logs. By default the cwd.")
+@click.option("--name", default=None, help="The name of the checkpoint folder. By default 'sam2_<mode>'.")
+@click.option(
+    "-d", "--device", default=None,
+    help="The device to train on: 'cuda', 'cpu' or 'mps'. By default the best available device is used."
+)
+def train(
+    images, labels, image_key, label_key, val_images, val_labels, val_image_key, val_label_key, val_fraction,
+    mode, model_type, checkpoint_path, patch_shape, num_classes, n_epochs, n_iterations, batch_size,
+    num_workers, max_num_objects, lr, save_root, name, device,
+):
+    """Train a micro-sam2 model on your own images and labels.
+
+    \b
+    Examples:
+      # Interactive and automatic segmentation, on tif files in two folders
+      micro_sam train -i images/ --image_key '*.tif' -l labels/ --label_key '*.tif' --mode joint
+    \b
+      # Automatic segmentation, on 3d patches of volumes in h5 files
+      micro_sam train -i train.h5 --image_key raw -l train.h5 --label_key labels \\
+        --val_images val.h5 --val_labels val.h5 --mode automatic --patch_shape 8,512,512
+    """
+    import os
+    from .v2.util import DEFAULT_MODEL
+    from .v2.training.loaders import default_sam2_loader
+
+    if checkpoint_path is not None and mode in ("automatic", "semantic"):
+        raise click.UsageError(
+            f"'--checkpoint_path' is supported for 'interactive' and 'joint' training, not '{mode}'."
+        )
+    if mode == "semantic" and num_classes is None:
+        raise click.UsageError("Pass '--num_classes' for 'semantic' training.")
+    model_type = DEFAULT_MODEL if model_type is None else model_type
+    name = f"sam2_{mode}" if name is None else name
+    patch_shape = _parse_shape(patch_shape)
+    if len(patch_shape) not in (2, 3):
+        raise click.UsageError(f"Expected two or three entries for '--patch_shape', got '{patch_shape}'.")
+
+    train_data, val_data = _resolve_training_data(
+        images, image_key, labels, label_key, val_images, val_labels, val_image_key, val_label_key, val_fraction,
+    )
+    loader_kwargs = dict(patch_shape=patch_shape, mode=mode, num_classes=num_classes, num_workers=num_workers)
+    train_loader = default_sam2_loader(*train_data, batch_size=batch_size, **loader_kwargs)
+    val_loader = default_sam2_loader(*val_data, batch_size=1, is_train=False, **loader_kwargs)
+
+    kwargs = dict(
+        name=name, model_type=model_type, train_loader=train_loader, val_loader=val_loader, n_epochs=n_epochs,
+        n_iterations=n_iterations, device=device, lr=lr, save_root=save_root,
+    )
+    if mode == "interactive":
+        from .v2.training import train_sam2
+        train_sam2(checkpoint_path=checkpoint_path, max_num_objects=max_num_objects, **kwargs)
+    elif mode == "automatic":
+        from .v2.training import train_automatic
+        train_automatic(with_boundaries=True, **kwargs)
+    elif mode == "joint":
+        from .v2.training import train_joint_sam2
+        train_joint_sam2(
+            checkpoint_path=checkpoint_path, max_num_objects=max_num_objects, with_boundaries=True, **kwargs,
+        )
+    else:
+        from .v2.training import train_semantic
+        train_semantic(num_classes=num_classes, **kwargs)
+    print("The trained model is saved at", os.path.join(save_root or ".", "checkpoints", name, "best.pt"))
+
+
+@cli.command("train-generalist")
 @click.option("-i", "--input_path", required=True, help="Root of the generalist training data (dataset subfolders).")
 @click.option("-m", "--model_type", default="hvit_t", help="SAM2 variant: hvit_t, hvit_s, hvit_b, hvit_l.")
 @click.option("-s", "--save_root", default=None, help="Directory for checkpoints and logs. Default: current dir.")
@@ -908,7 +1089,7 @@ def precompute_embeddings(
 @click.option("--batch_size_2d", type=int, default=8, help="Batch size per GPU for 2d groups.")
 @click.option("--z_slices", type=int, multiple=True, default=(8,), help="Z-slice counts for 3d groups.")
 @click.option("-c", "--checkpoint_path", default=None, help="SAM2 checkpoint to start from; default downloaded.")
-def train(
+def train_generalist(
     input_path, model_type, save_root, name, dataset_choice, n_epochs, n_iterations,
     batch_size, batch_size_2d, z_slices, checkpoint_path,
 ):

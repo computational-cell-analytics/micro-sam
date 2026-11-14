@@ -14,8 +14,8 @@ import torch
 from elf.io import open_file
 
 import torch_em
-from torch_em.transform import get_augmentations
 from torch_em.transform.generic import Compose
+from torch_em.transform import get_augmentations
 from torch_em.data import datasets, MinInstanceSampler, ConcatDataset
 
 from . import cochleanet_data
@@ -361,10 +361,14 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
                 )
             )
         for name, raw, labels, splits in [
-            ("Platynereis-Nuclei-CBG", platy_nuclei_raw, platy_nuclei_labels,
-             (EMBEDSEG_PLATY_NUCLEI_TRAIN_TIMEPOINTS, EMBEDSEG_PLATY_NUCLEI_VAL_TIMEPOINTS)),
-            ("Mouse-Organoid-Cells-CBG", organoid_raw, organoid_labels,
-             (EMBEDSEG_ORGANOID_TRAIN_TIMEPOINTS, EMBEDSEG_ORGANOID_VAL_TIMEPOINTS)),
+            (
+                "Platynereis-Nuclei-CBG", platy_nuclei_raw, platy_nuclei_labels,
+                (EMBEDSEG_PLATY_NUCLEI_TRAIN_TIMEPOINTS, EMBEDSEG_PLATY_NUCLEI_VAL_TIMEPOINTS)
+            ),
+            (
+                "Mouse-Organoid-Cells-CBG", organoid_raw, organoid_labels,
+                (EMBEDSEG_ORGANOID_TRAIN_TIMEPOINTS, EMBEDSEG_ORGANOID_VAL_TIMEPOINTS)
+            ),
         ]:
             for timepoints, ds_list in zip(splits, (train_ds, val_ds)):
                 ds_list.append(
@@ -816,8 +820,9 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
     # 28. DynamicNuclearNet (nucleus segmentation in fluorescence time-lapse frames)
     dnn_kwargs = {"path": os.path.join(input_path, "dynamicnuclearnet"), "patch_shape": patch_shape, **kwargs}
     train_ds.append(
-        UniDataWrapper(datasets.get_dynamicnuclearnet_dataset(split="train", n_samples=600, **dnn_kwargs),
-                       source_ndim=2)
+        UniDataWrapper(
+            datasets.get_dynamicnuclearnet_dataset(split="train", n_samples=600, **dnn_kwargs), source_ndim=2
+        )
     )
     val_ds.append(
         UniDataWrapper(datasets.get_dynamicnuclearnet_dataset(split="val", n_samples=50, **dnn_kwargs), source_ndim=2)
@@ -1017,8 +1022,9 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
         **{**kwargs, "transform": _with_flips(_pannuke_random_resize_and_pad_trafo, patch_shape)},
     }
     train_ds.append(
-        UniDataWrapper(datasets.get_microbeseg_dataset(split="train", n_samples=150, **microbeseg_kwargs),
-                       source_ndim=2)
+        UniDataWrapper(
+            datasets.get_microbeseg_dataset(split="train", n_samples=150, **microbeseg_kwargs), source_ndim=2
+        )
     )
     val_ds.append(
         UniDataWrapper(datasets.get_microbeseg_dataset(split="val", n_samples=50, **microbeseg_kwargs), source_ndim=2)
@@ -1405,8 +1411,10 @@ def _get_lm_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo):
                     "is_seg_dataset": True,
                     "raw_transform": _resize_raw_to_512 if resize else kwargs["raw_transform"],
                     "label_transform2": (
-                        (partial(_resize_then_em_label_trafo, em_trafo_fn=label_trafo(instances=True)) if resize
-                         else label_trafo())
+                        (
+                            partial(_resize_then_em_label_trafo, em_trafo_fn=label_trafo(instances=True)) if resize
+                            else label_trafo()
+                        )
                         if label_trafo is not None else kwargs.get("label_transform2")
                     ),
                     "sampler": MinInstanceSampler(min_num_instances=3, exclude_ids=[0]),
@@ -1597,7 +1605,9 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 partial(
                     _em_label_trafo, label_trafo=label_trafo(instances=True), ignore_label=PLATY_IGNORE_LABEL
                 )
-                if label_trafo is not None else kwargs.get("label_transform2")
+                if label_trafo is not None else partial(
+                    _ignore_label_trafo, ignore_label=PLATY_IGNORE_LABEL, label_trafo=kwargs.get("label_transform2")
+                )
             ),
             # The neuropil ignore label is not an instance, so the sampler must not count it.
             "sampler": MinInstanceSampler(min_num_instances=1, exclude_ids=[0, PLATY_IGNORE_LABEL]),
@@ -1715,7 +1725,10 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 partial(
                     _em_label_trafo, label_trafo=label_trafo(instances=True), ignore_label=MISSING_RAW_IGNORE_LABEL
                 )
-                if label_trafo is not None else kwargs.get("label_transform2")
+                if label_trafo is not None else partial(
+                    _ignore_label_trafo, ignore_label=MISSING_RAW_IGNORE_LABEL,
+                    label_trafo=kwargs.get("label_transform2"),
+                )
             ),
             # Some slices hold missing tiles (exact-zero raw) that still carry labels; they become ignore. The test
             # needs the stored intensities, so the raw is only prepared here and normalized inside the transform.
@@ -1990,7 +2003,10 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                     _em_label_trafo, label_trafo=label_trafo(instances=True, sampling=(2, 1, 1)),
                     ignore_label=MISSING_RAW_IGNORE_LABEL,
                 )
-                if label_trafo is not None else kwargs.get("label_transform2")
+                if label_trafo is not None else partial(
+                    _ignore_label_trafo, ignore_label=MISSING_RAW_IGNORE_LABEL,
+                    label_trafo=kwargs.get("label_transform2"),
+                )
             ),
             "raw_transform": _prepare_identity,  # the missing-tile test needs the stored intensities
             "transform": partial(
@@ -2022,7 +2038,9 @@ def _get_em_datasets(input_path, patch_shape, z_slices, kwargs, label_trafo, _em
                 _em_label_trafo, label_trafo=label_trafo(instances=True, sampling=(2.5, 1, 1)),
                 ignore_label=MISSING_RAW_IGNORE_LABEL,
             )
-            if label_trafo is not None else kwargs.get("label_transform2")
+            if label_trafo is not None else partial(
+                _ignore_label_trafo, ignore_label=MISSING_RAW_IGNORE_LABEL, label_trafo=kwargs.get("label_transform2")
+            )
         )
         j0251_splits = [(ZEBRAFINCH_J0251_TRAIN_BOXES, train_ds, 500), (ZEBRAFINCH_J0251_VAL_BOXES, val_ds, 50)]
         for boxes, ds_list, n_samples in j0251_splits:

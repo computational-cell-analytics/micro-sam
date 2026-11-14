@@ -5,15 +5,15 @@ import json
 import warnings
 from glob import glob
 from pathlib import Path
-from functools import lru_cache
 from itertools import islice
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import xxhash
 import numpy as np
 import imageio.v3 as imageio
-from skimage.measure import label as connected_components
 from sklearn.model_selection import train_test_split
+from skimage.measure import label as connected_components
 
 import torch
 
@@ -23,8 +23,8 @@ from torch_em.data import datasets
 from torch_em.util.image import load_image
 from torch_em.util.segmentation import size_filter
 
-from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 from micro_sam.v2.normalization import normalize_raw
+from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 from micro_sam.v2.datasets.generalist_loader import (
     ASTIH_SUBSETS, AXONEM_TEST_VOLUMES, AXONEM_VAL_VOLUMES, FAFB_TEST_BOXES, FAFB_VAL_BOXES, FIB25_TEST_SAMPLE,
     LICONN_ROI, MALECNS_TEST_BOXES, MALECNS_VAL_BOXES, TUMOR_SPHEROID_TEST_SLICES, TUMOR_SPHEROID_VAL_SLICES,
@@ -50,14 +50,14 @@ DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 # Derived evaluation data (slide tiles, movie frames) is cached here, since not every dataset folder is writable.
 EVAL_CACHE_ROOT = os.path.join(DATA_ROOT, "eval_cache")
 
-_MODELS_DIR = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2"
+MODELS_DIR = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2"
 
 # The pretrained SAM2 backbones. Only SAM2.1 is supported by micro_sam.v2.
 CHECKPOINT_PATHS = {
-    "hvit_t": os.path.join(_MODELS_DIR, "sam2.1_hiera_tiny.pt"),
-    "hvit_s": os.path.join(_MODELS_DIR, "sam2.1_hiera_small.pt"),
-    "hvit_b": os.path.join(_MODELS_DIR, "sam2.1_hiera_base_plus.pt"),
-    "hvit_l": os.path.join(_MODELS_DIR, "sam2.1_hiera_large.pt"),
+    "hvit_t": os.path.join(MODELS_DIR, "sam2.1_hiera_tiny.pt"),
+    "hvit_s": os.path.join(MODELS_DIR, "sam2.1_hiera_small.pt"),
+    "hvit_b": os.path.join(MODELS_DIR, "sam2.1_hiera_base_plus.pt"),
+    "hvit_l": os.path.join(MODELS_DIR, "sam2.1_hiera_large.pt"),
 }
 
 MODEL_TYPES = list(CHECKPOINT_PATHS)
@@ -257,12 +257,12 @@ def drop_excluded_livecell(raw_paths, label_paths, split=None) -> Tuple[List[str
 # one process when it had not. Set the env var before the process starts (a shell `export`, or a
 # subprocess/sbatch job) for the common case, or pass an explicit path to `build_model` directly.
 def _joint_checkpoint_root() -> str:
-    return os.environ.get("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", os.path.join(_MODELS_DIR, "joint", "v2", "checkpoints"))
+    return os.environ.get("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", os.path.join(MODELS_DIR, "joint", "v2", "checkpoints"))
 
 
 # The joint checkpoints are split into loadable weight files here, see 'export_joint_checkpoint'.
 def _joint_export_root() -> str:
-    return os.environ.get("MICRO_SAM2_JOINT_EXPORT_ROOT", os.path.join(_MODELS_DIR, "exported", "joint", "v2"))
+    return os.environ.get("MICRO_SAM2_JOINT_EXPORT_ROOT", os.path.join(MODELS_DIR, "exported", "joint", "v2"))
 
 
 # HPA is evaluated on the microtubules, nuclei and ER channels, stacked in that order.
@@ -547,8 +547,10 @@ VAL_SPLITS = {
         DATASETS_2D_LM_CELL_ID + DATASETS_2D_LM_NUCLEUS_ID + DATASETS_2D_LM_LABEL_FREE_ID
         + DATASETS_2D_LM_CELL_SUPPLEMENTARY + DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY
         + DATASETS_2D_LM_LABEL_FREE_SUPPLEMENTARY
-        + ["plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "embedseg_organoid", "embedseg_platy_nuclei",
-           "celegans_atlas", "gonuclear", "nucverse3d"]
+        + [
+            "plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "embedseg_organoid", "embedseg_platy_nuclei",
+            "celegans_atlas", "gonuclear", "nucverse3d"
+        ]
     )
 }
 VAL_SPLITS.update({
@@ -2431,8 +2433,9 @@ def _get_3d_em_data_paths(
         return paths, paths, "raw", "labels"
 
     if dataset_name in ("microns_basil", "ionsem"):
-        folder = os.path.join(p, "emneuron", "valid", "OutofDistribution",
-                              "Microns[B]" if dataset_name == "microns_basil" else "Ionsem")
+        folder = os.path.join(
+            p, "emneuron", "valid", "OutofDistribution", "Microns[B]" if dataset_name == "microns_basil" else "Ionsem"
+        )
         return [os.path.join(folder, "raw.tif")], [os.path.join(folder, "label.tif")], None, None
 
     if dataset_name == "humanneurons":
@@ -2612,8 +2615,8 @@ def load_volume(
     return raw.astype("float32"), labels.astype("uint32"), valid_roi
 
 
-_UNISAM2_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/automatic/v1"
-UNISAM2_CHECKPOINT = os.path.join(_UNISAM2_ROOT, "checkpoints", "unisam2-both", "best.pt")
+UNISAM2_ROOT = "/mnt/vast-nhr/projects/cidas/cca/models/micro_sam2/automatic/v1"
+UNISAM2_CHECKPOINT = os.path.join(UNISAM2_ROOT, "checkpoints", "unisam2-both", "best.pt")
 
 
 def get_joint_checkpoint(model_type: str, checkpoint: str = "best") -> str:
@@ -3326,7 +3329,7 @@ def evaluate_samples(
             tmp_path = f"{row_path}.{os.getpid()}.tmp"
             row = run_dataset_evaluation([labels], [seg], dataset_name, tmp_path)
             if misses:
-                row["unmatched"], row["genuine_misses"] = misses[0]
+                row["unmatched"], row["genuine_misses"] = misses[-1]
             row.to_csv(tmp_path, index=False)
             os.replace(tmp_path, row_path)
         else:
@@ -3499,12 +3502,47 @@ def check_data_download(dataset_name: str, data_root: str, download: bool = True
     print(f"Data check passed for '{dataset_name}': {len(raw_paths)} sample(s).")
 
 
+# The environment variables of the data experiments. Each of them changes the data for every method.
+EXPERIMENT_VARIABLES = ("EVAL_CROP_SHAPE_2D", "EVAL_UPSCALE_2D", "EVAL_HPA_CHANNEL_ORDER", "EVAL_NORM_PERCENTILES")
+
+
+def check_experiment_variables(experiment_folder):
+    """Make sure that the results of an experiment folder all come from the same data experiment.
+
+    The result files do not name the experiment variables, and a run skips a result file that exists. The first run
+    in a folder records the variables, and a later run with other values fails, so it cannot reuse wrong results.
+
+    Args:
+        experiment_folder: The experiment folder of the run.
+
+    Raises:
+        RuntimeError: If the folder holds the results of other values of the experiment variables.
+    """
+    settings = {name: os.environ.get(name) for name in EXPERIMENT_VARIABLES}
+    path = os.path.join(experiment_folder, "experiment_variables.json")
+    if os.path.exists(path):
+        with open(path) as f:
+            stored = json.load(f)
+        if stored != settings:
+            raise RuntimeError(
+                f"'{experiment_folder}' holds the results of {stored}, but this run uses {settings}. "
+                "Use a separate experiment folder for each data experiment."
+            )
+        return
+    os.makedirs(experiment_folder, exist_ok=True)
+    # Array tasks start at the same time, so rename a complete file into place.
+    tmp_path = f"{path}.{os.getpid()}.tmp"
+    with open(tmp_path, "w") as f:
+        json.dump(settings, f, indent=2)
+    os.replace(tmp_path, path)
+
+
 # The center crop that 2d samples are scored on. EVAL_CROP_SHAPE_2D overrides it for a crop-size experiment, as one
 # side length or 'full' for the whole image; such runs belong in their own experiment folder.
-_crop_override = os.environ.get("EVAL_CROP_SHAPE_2D")
+crop_override = os.environ.get("EVAL_CROP_SHAPE_2D")
 CROP_SHAPE_2D = (
-    (512, 512) if _crop_override is None else
-    (10 ** 9, 10 ** 9) if _crop_override == "full" else (int(_crop_override), int(_crop_override))
+    (512, 512) if crop_override is None else
+    (10 ** 9, 10 ** 9) if crop_override == "full" else (int(crop_override), int(crop_override))
 )
 CROP_SHAPE_3D = (8, 512, 512)
 
@@ -3513,7 +3551,7 @@ CROP_SHAPE_3D = (8, 512, 512)
 # image encoder at the native size. EVAL_UPSCALE_2D overrides it for all datasets in an upscaling experiment; such
 # runs belong in their own experiment folder.
 UPSCALE_2D = {"wing_disc_timelapse": 2}
-_upscale_override = os.environ.get("EVAL_UPSCALE_2D")
+upscale_override = os.environ.get("EVAL_UPSCALE_2D")
 
 # The 2d datasets scored on the whole stored image instead of the center crop, e.g. the TEM benchmark images (most of
 # them 1024 x 1024, whose center crop drops half of the mitochondria).
@@ -3806,7 +3844,7 @@ def load_evaluation_sample_2d(
     gt = connected_components(labels).astype("uint32")
     gt = drop_severed_objects(gt, GT_MIN_SIZE_2D.get(dataset_name, 0))
     image = image[roi]
-    factor = UPSCALE_2D.get(dataset_name, 1) if _upscale_override is None else int(_upscale_override)
+    factor = UPSCALE_2D.get(dataset_name, 1) if upscale_override is None else int(upscale_override)
     if factor > 1:
         from skimage.transform import rescale
         image = rescale(image, factor, order=1, preserve_range=True, channel_axis=-1 if image.ndim == 3 else None)

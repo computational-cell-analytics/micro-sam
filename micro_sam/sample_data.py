@@ -198,47 +198,39 @@ def sample_data_hela_2d():
 def fetch_3d_example_data(save_directory: Union[str, os.PathLike]) -> str:
     """Download the sample data for the 3d annotator.
 
-    This downloads the Lucchi++ datasets from https://casser.io/connectomics/.
-    It is a dataset for mitochondria segmentation in EM.
+    This downloads the test volume of the Lucchi dataset for mitochondria segmentation in EM,
+    from https://www.epfl.ch/labs/cvlab/data/data-em/.
 
     Args:
         save_directory: Root folder to save the downloaded data.
 
     Returns:
-        The folder that contains the downloaded data.
+        The path of the downloaded volume, a tif file.
     """
     save_directory = Path(save_directory)
     os.makedirs(save_directory, exist_ok=True)
     print("Example data directory is:", save_directory.resolve())
-    unpack_filenames = [os.path.join("Lucchi++", "Test_In", f"mask{str(i).zfill(4)}.png") for i in range(165)]
-    unpack = pooch.Unzip(members=unpack_filenames)
-    fname = "lucchi_pp.zip"
+    fname = "lucchi-test-volume.tif"
     pooch.retrieve(
-        url="http://www.casser.io/files/lucchi_pp.zip",
-        known_hash="770ce9e98fc6f29c1b1a250c637e6c5125f2b5f1260e5a7687b55a79e2e8844d",
+        url="https://documents.epfl.ch/groups/c/cv/cvlab-unit/www/data/%20ElectronMicroscopy_Hippocampus/testing.tif",
+        known_hash="2450a904a804164f241144b7d7170eeb7e5299b0b56de1e24d5359a27d2aa35b",
         fname=fname,
         path=save_directory,
         progressbar=True,
-        processor=unpack,
     )
-    lucchi_dir = save_directory.joinpath(f"{fname}.unzip", "Lucchi++", "Test_In")
-    return str(lucchi_dir)
+    return str(save_directory.joinpath(fname))
 
 
 def sample_data_3d():
-    """Provides Lucchi++ 3d example image to napari."""
+    """Provides the Lucchi 3d example volume to napari."""
     # Return list of tuples
     # [(data1, add_image_kwargs1), (data2, add_image_kwargs2)]
     # Check the documentation for more information about the
     # add_image_kwargs
     # https://napari.org/stable/api/napari.Viewer.html#napari.Viewer.add_image
     base_data_directory = os.path.join(get_cache_directory(), "sample_data")
-    data_directory = fetch_3d_example_data(base_data_directory)
-    fnames = os.listdir(data_directory)
-    full_filenames = [os.path.join(data_directory, f) for f in fnames]
-    full_filenames.sort()
-    data = np.stack([imageio.imread(f) for f in full_filenames], axis=0)
-    add_image_kwargs = {"name": "lucchi++"}
+    data = imageio.imread(fetch_3d_example_data(base_data_directory))
+    add_image_kwargs = {"name": "lucchi"}
     return [(data, add_image_kwargs)]
 
 

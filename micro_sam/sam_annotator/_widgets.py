@@ -4,9 +4,9 @@ import gc
 import os
 import json
 import hashlib
-import multiprocessing as mp
 from pathlib import Path
 from typing import Optional
+import multiprocessing as mp
 
 import z5py
 import numpy as np
@@ -780,7 +780,7 @@ def clear_volume(
     if all_slices:
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.dims.point[0])
+        i = vutil.current_slice(viewer, viewer.layers["current_object"])
         vutil.clear_annotations_slice(viewer, i=i)
 
     # If this is a SAM2 promptable segmentation workflow,
@@ -806,7 +806,7 @@ def clear_track(
         _reset_tracking_state(viewer)
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.dims.point[0])
+        i = vutil.current_slice(viewer, viewer.layers["current_object"])
         vutil.clear_annotations_slice(viewer, i=i)
 
     # Perform garbage collection.
@@ -1213,22 +1213,24 @@ def commit_track(
         viewer, layer, preserve_mode, preservation_threshold
     )
 
-    # Update the lineages.
+    # Update the lineages: the ones of the automatic tracking, or the single one of the interactive tracking.
     state = AnnotatorState()
-    lineage = state.lineage
-
-    if isinstance(
-        lineage, list
-    ):  # This is a list of lineages from auto-tracking.
-        assert id_offset == 0
-        assert len(state.committed_lineages) == 0
-        state.committed_lineages.extend(lineage)
-    else:  # This is a single lineage from interactive tracking.
-        updated_lineage = {
+    if layer == "auto_segmentation":
+        if state.auto_lineages is None:
+            # A segmentation without tracking: every object is a track of its own, without divisions.
+            lineage = {int(object_id): [] for object_id in np.unique(seg[mask]) if object_id != 0}
+            if lineage:
+                state.committed_lineages.append(lineage)
+        else:
+            state.committed_lineages.extend(
+                {parent + id_offset: [child + id_offset for child in children] for parent, children in lineage.items()}
+                for lineage in state.auto_lineages
+            )
+    else:
+        state.committed_lineages.append({
             parent + id_offset: [child + id_offset for child in children]
             for parent, children in state.lineage.items()
-        }
-        state.committed_lineages.append(updated_lineage)
+        })
 
     if commit_path is not None:
         _commit_to_file(
@@ -1243,6 +1245,13 @@ def commit_track(
 
     if layer == "current_object":
         vutil.clear_annotations(viewer)
+    else:
+        # Clear the committed result, so that it is not committed a second time.
+        state.auto_lineages = None
+        viewer.layers["auto_segmentation"].data = np.zeros(
+            viewer.layers["auto_segmentation"].data.shape, dtype="uint32"
+        )
+        viewer.layers["auto_segmentation"].refresh()
 
     # Create / update the tracking layer.
     layer_name = "tracks"
@@ -1257,8 +1266,9 @@ def commit_track(
     else:
         viewer.add_tracks(track_data, name=layer_name, graph=parent_graph)
 
-    # Reset the tracking state.
-    _reset_tracking_state(viewer)
+    # Reset the interactive tracking state, which an automatic result does not use.
+    if layer == "current_object":
+        _reset_tracking_state(viewer)
 
     # Perform garbage collection.
     gc.collect()
@@ -1804,30 +1814,9 @@ class EmbeddingWidget(_WidgetBase):
 
         # Section 3: The button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Compute Embeddings")
-        self.run_button.clicked.connect(self._initialize_image)
         self.run_button.clicked.connect(self.__call__)
         self.run_button.setToolTip(get_tooltip("embedding", "run_button"))
         self.layout().addWidget(self.run_button)
-
-    def _initialize_image(self):
-        state = AnnotatorState()
-        layer = self.image_selection.get_value()
-
-        # This is encountered when there is no image layer available / selected.
-        # In this case, we need not specify other image-level parameters to the state. Hence, we skip them.
-        # NOTE: On code-level, this happens as the first step when "Compute Embedding" click is triggered.
-        if layer is None:
-            return
-
-        # Drop the channel axis for RGB images so the shape and ndim describe the spatial dims only.
-        if layer.rgb:
-            state.ndim = layer.data.ndim - 1
-            state.image_shape = layer.data.shape[:-1]
-        else:
-            state.ndim = layer.data.ndim
-            state.image_shape = layer.data.shape
-        state.image_scale = tuple(layer.scale)
-        state.image_name = layer.name
 
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
@@ -1859,7 +1848,8 @@ class EmbeddingWidget(_WidgetBase):
             self.custom_weights
         ):  # Whether the user provided a filepath to custom finetuned model weights.
             msg += f"the model located at '{os.path.abspath(self.custom_weights)}' "
-            size_key = _model_type[4] if len(_model_type) > 4 else ""
+            # The size letter follows the backbone prefix: 'hvit_b...' for SAM2, 'vit_b...' for SAM1.
+            size_key = _model_type[len("hvit_") if _model_type.startswith("hvit_") else len("vit_"):][:1]
             msg += f"of size '{self._model_size_map.get(size_key, self.model_size)}'."
         else:
             msg += (
@@ -2470,8 +2460,9 @@ class EmbeddingWidget(_WidgetBase):
         ndim = len(state.image_shape)
         state.ndim = ndim
 
-        # Set layer scale
+        # The image is set only now, after the validation, so a cancel keeps the state of the current image.
         state.image_scale = tuple(image.scale)
+        state.image_name = image.name
 
         # Process tile_shape and halo, set other data. Tiling is only applied when enabled.
         if self.tiling == "yes":
@@ -2983,11 +2974,7 @@ class UnifiedSegmentWidget(_WidgetBase):
         """
         shape = self._viewer.layers["current_object"].data.shape[1:]
 
-        position_world = self._viewer.dims.point
-        position = self._viewer.layers["point_prompts"].world_to_data(
-            position_world
-        )
-        z = int(position[0])
+        z = vutil.current_slice(self._viewer, self._viewer.layers["point_prompts"])
 
         prompt_layer = self._viewer.layers["prompts"]
         prompts = vutil.collect_frame_prompts(
@@ -3092,8 +3079,10 @@ class UnifiedSegmentWidget(_WidgetBase):
 
         points, labels, boxes, masks = prompts.points, prompts.labels, prompts.boxes, prompts.masks
         if prompts.have_scribbles and not boxes and not np.any(labels == 1):
-            show_info("A negative scribble alone cannot segment an object. "
-                      "Add a positive point, positive scribble, box or mask prompt.")
+            show_info(
+                "A negative scribble alone cannot segment an object. "
+                "Add a positive point, positive scribble, box or mask prompt."
+            )
             return None
 
         # The tracking annotator is SAM2-only: segment the frame via the video predictor.
@@ -3112,7 +3101,7 @@ class UnifiedSegmentWidget(_WidgetBase):
         """Execute per-frame segmentation for the current track (tracking mode)."""
         state = AnnotatorState()
         shape = state.image_shape[1:]
-        t = int(self._viewer.dims.point[0])
+        t = vutil.current_slice(self._viewer, self._viewer.layers["current_object"])
 
         track_id = state.current_track_id
         new_mask = self._segment_track_on_frame(state, t, track_id, shape)
@@ -3677,7 +3666,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
         if self._ndim == 2 or self.apply_to_volume:
             vutil.clear_annotations(self._viewer)
         else:
-            i = int(self._viewer.dims.point[0])
+            i = vutil.current_slice(self._viewer, self._viewer.layers["current_object"])
             vutil.clear_annotations_slice(self._viewer, i=i)
 
         # If this is a SAM2 promptable segmentation workflow,
@@ -3782,7 +3771,7 @@ class InteractiveTrackingWidget(_WidgetBase):
             _reset_tracking_state(self._viewer)
             vutil.clear_annotations(self._viewer)
         else:
-            i = int(self._viewer.dims.point[0])
+            i = vutil.current_slice(self._viewer, self._viewer.layers["current_object"])
             vutil.clear_annotations_slice(self._viewer, i=i)
 
         state = AnnotatorState()
@@ -3798,9 +3787,10 @@ class InteractiveTrackingWidget(_WidgetBase):
 
 # Every automatic segmentation mode runs off the UniSAM2 decoder predictions, so a model without a
 # decoder has no automatic segmentation at all.
-_NO_DECODER_MESSAGE = (
+NO_DECODER_MESSAGE = (
     "Automatic segmentation requires a UniSAM2 model with a decoder. Load one via the model dropdown "
-    "or the 'custom weights' path in the embedding widget."
+    "or the 'custom weights' path in the embedding widget. A model trained for interactive segmentation "
+    "only has no decoder."
 )
 
 # APG prompts the SAM2 video predictor with every candidate, which needs an accelerator to finish in
@@ -3808,7 +3798,7 @@ _NO_DECODER_MESSAGE = (
 # 2d APG on an image or a single slice has no such restriction and runs on the CPU like the other
 # modes. This is an annotator-level restriction only - 'micro_sam.v2.automatic_prompt_generation' and
 # the CLI still run wherever they are pointed.
-_APG_ACCELERATORS = ("cuda", "mps")
+APG_ACCELERATORS = ("cuda", "mps")
 
 
 def _apg_runs_on_this_device(state):
@@ -3820,7 +3810,7 @@ def _apg_runs_on_this_device(state):
     Returns:
         Whether the device is one APG's volume / tracking path supports.
     """
-    return util.device_type(next(state.decoder.parameters()).device) in _APG_ACCELERATORS
+    return util.device_type(next(state.decoder.parameters()).device) in APG_ACCELERATORS
 
 
 def _apg_error(state, volumetric, is_tracking=False):
@@ -3937,7 +3927,7 @@ class AutoSegmentWidget(_WidgetBase):
         # when the user explicitly chose CPU on a machine with an accelerator.
         state = AnnotatorState()
         device = util.get_device() if state.decoder is None else next(state.decoder.parameters()).device
-        if util.device_type(device) not in _APG_ACCELERATORS:
+        if util.device_type(device) not in APG_ACCELERATORS:
             return ("sparse", *(mode for mode in modes if mode != "sparse"))
         return modes
 
@@ -3993,7 +3983,7 @@ class AutoSegmentWidget(_WidgetBase):
         # Without a decoder none of the modes can run, so the button is disabled and says why.
         self.run_button.setEnabled(self.with_decoder)
         self.run_button.setToolTip(
-            get_tooltip(*self._RUN_TOOLTIP) if self.with_decoder else _NO_DECODER_MESSAGE
+            get_tooltip(*self._RUN_TOOLTIP) if self.with_decoder else NO_DECODER_MESSAGE
         )
 
     def _reset_segmentation_mode(self, with_decoder, model_type=None):
@@ -4617,7 +4607,7 @@ class AutoSegmentWidget(_WidgetBase):
     def __call__(self):
         state = AnnotatorState()
         if not self.with_decoder or state.decoder is None:
-            return _generate_message("error", _NO_DECODER_MESSAGE)
+            return _generate_message("error", NO_DECODER_MESSAGE)
         if _validate_layers(self._viewer, automatic_segmentation=True):
             return
         # Every mode reuses the precomputed image embeddings, so they must exist and match
@@ -4635,7 +4625,7 @@ class AutoSegmentWidget(_WidgetBase):
         if apply_to_volume:
             run_raw, ndim = raw, 3
         elif self.volumetric:  # segment only the current slice
-            z = int(self._viewer.dims.point[0])
+            z = vutil.current_slice(self._viewer, self._viewer.layers[image_name])
             run_raw, ndim = raw[z], 2
         else:
             run_raw, ndim = raw, 2
@@ -4811,7 +4801,7 @@ class AutoTrackWidget(AutoSegmentWidget):
         finally:
             pbar_signals.pbar_stop.emit()
 
-        state.lineage = lineages
+        state.auto_lineages = lineages
         self._viewer.layers["auto_segmentation"].data = segmentation
         self._viewer.layers["auto_segmentation"].refresh()
         _select_layer(self._viewer, "auto_segmentation")
@@ -4820,7 +4810,7 @@ class AutoTrackWidget(AutoSegmentWidget):
     def __call__(self):
         state = AnnotatorState()
         if not self.with_decoder or state.decoder is None:
-            return _generate_message("error", _NO_DECODER_MESSAGE)
+            return _generate_message("error", NO_DECODER_MESSAGE)
         # Tracking prompts the video predictor per frame, so APG needs an accelerator here for a
         # single frame just as much as for the whole timeseries. Checked before the single-frame
         # delegation below so both paths are covered.

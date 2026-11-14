@@ -28,7 +28,6 @@ SCRIBBLE_DRAW_MODES = ("add_path", "add_polyline", "add_line")
 
 # The image normalization is shared with the headless entry points, so the GUI and the CLI read the
 # same array the same way. It lives in 'micro_sam.util', which does not import napari.
-_channels_to_rgb = util._channels_to_rgb
 prepare_annotation_image = util.prepare_annotation_image
 
 
@@ -197,6 +196,15 @@ def sync_prompt_shape_current_color(layer_or_event):
     is_scribble_tool = layer.mode in SCRIBBLE_DRAW_MODES
     color_index = 1 if is_scribble_tool and label == "negative" else 0
     layer.current_edge_color = LABEL_COLOR_CYCLE[color_index]
+
+
+def current_slice(viewer: napari.Viewer, layer) -> int:
+    """@private
+
+    The index of the slice that the viewer shows, in the data coordinates of a layer. The viewer
+    position is in world coordinates, which differ from the index when the layer has a scale.
+    """
+    return int(round(layer.world_to_data(viewer.dims.point)[0]))
 
 
 def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:

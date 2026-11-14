@@ -6,8 +6,8 @@ from joblib import dump, hash as joblib_hash, load
 import numpy as np
 
 import napari
-from napari.utils.colormaps import DirectLabelColormap, label_colormap
 from napari.utils.notifications import show_info, show_warning
+from napari.utils.colormaps import DirectLabelColormap, label_colormap
 
 from qtpy import QtCore, QtGui, QtWidgets
 from magicgui.widgets import CheckBox, ComboBox, Container, FileEdit, FunctionGui, Label, PushButton, SpinBox, Widget
@@ -483,7 +483,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
 
     def _current_slice(self):
         # The z index currently shown in the viewer (for 3d per-slice operations).
-        return int(self._viewer.dims.current_step[0])
+        return vutil.current_slice(self._viewer, self._viewer.layers["annotations"])
 
     def _get_cached_upsampler(self):
         # Load the AnyUp model once and cache it on the state (small model, reused across runs).

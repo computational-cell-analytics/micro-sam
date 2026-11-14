@@ -39,7 +39,8 @@ def get_predictor_and_segmenter(
     Args:
         model_type: The SAM2 model. Either a finetuned model with a registered decoder (see
             `micro_sam.v2.util.get_model_names`) or a base backbone combined with `checkpoint`.
-        checkpoint: Optional path to a decoder checkpoint to build the UniSAM2 decoder from.
+        checkpoint: Optional path to a custom checkpoint. It defines the SAM2 model, and the UniSAM2 decoder.
+            The model size is read from the checkpoint.
         device: The torch device. By default the best available device is selected.
         segmentation_mode: The segmentation engine, one of 'amg', 'ais' or 'apg'. By default 'ais' is
             used if a decoder is available, otherwise 'amg'.
@@ -50,9 +51,13 @@ def get_predictor_and_segmenter(
 
     Returns:
         The SAM2 predictor (used to precompute embeddings) and the automatic segmentation generator.
+
+    Raises:
+        NoDecoderError: If `checkpoint` has no decoder, because it was trained for interactive segmentation
+            only, and `segmentation_mode` is not 'amg'.
     """
     from ..util import get_device, _get_sam_model
-    from .instance_segmentation import get_decoder, get_instance_segmentation_generator
+    from .instance_segmentation import NoDecoderError, get_decoder, get_instance_segmentation_generator
 
     # Kept apart from the placement below, so 'use all visible GPUs' stays distinct from one device.
     requested_device = device
@@ -61,8 +66,10 @@ def get_predictor_and_segmenter(
     # Volumetric APG propagates its prompts, so it needs the video predictor, which also encodes.
     predictor, _ = _get_sam_model(
         model_type=model_type, ndim=3 if (segmentation_mode == "apg" and ndim == 3) else 2,
-        device=model_device, checkpoint_path=None, decoder_path=None, use_cli=True,
+        device=model_device, checkpoint_path=checkpoint, decoder_path=None, use_cli=True,
     )
+    # A custom checkpoint can hold another backbone than the name.
+    model_type = predictor.model_type
 
     # 'ais' and 'apg' require a decoder, 'amg' never uses one, and 'auto' prefers one if it loads.
     decoder = None
@@ -71,6 +78,9 @@ def get_predictor_and_segmenter(
             # Reuse the predictor's encoder, so no second SAM2 backbone is built.
             encoder = getattr(getattr(predictor, "model", predictor), "image_encoder", None)
             decoder = get_decoder(model_type, checkpoint=checkpoint, device=model_device, encoder=encoder)
+        except NoDecoderError:
+            # A custom checkpoint without decoder was trained for interactive segmentation only.
+            raise
         except Exception as e:
             if segmentation_mode in ("ais", "apg"):
                 raise
@@ -401,6 +411,9 @@ def automatic_tracking(
     # than per frame, then pass the resolved settings down.
     tile_shape, halo, is_tiled = _resolve_tiling(timeseries.shape[1:], tile_shape, halo, with_z_axis=False)
     segmenter = retile_instance_segmentation_generator(segmenter, is_tiled=is_tiled)
+    # None means "default" to the per-frame call, so keep an untiled run explicit.
+    if not is_tiled:
+        tile_shape, halo = (0, 0), (0, 0)
 
     # Segment every frame independently and relabel so ids do not overlap across frames.
     segmentation = np.zeros(timeseries.shape, dtype="uint32")

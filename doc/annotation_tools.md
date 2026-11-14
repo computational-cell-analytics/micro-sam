@@ -1,6 +1,6 @@
 # Annotation Tools
 
-`micro_sam` provides applications for fast interactive 2d segmentation, 3d segmentation and tracking.
+`micro_sam` provides applications for fast interactive 2d and 3d segmentation, tracking, and object and pixel classification.
 See an example for interactive cell segmentation in phase-contrast microscopy (left), interactive segmentation
 of mitochondria in volume EM (middle) and interactive tracking of cells (right).
 
@@ -8,16 +8,20 @@ of mitochondria in volume EM (middle) and interactive tracking of cells (right).
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/dfca3d9b-dba5-440b-b0f9-72a0683ac410" width="256">
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/aefbf99f-e73a-4125-bb49-2e6592367a64" width="256">
 
-The annotation tools can be started from the napari plugin menu, the command line or from python scripts.
+The annotation tools can be started from the napari plugin menu (`Plugins -> Segment Anything for Microscopy`), the command line or from python scripts.
 They are built as napari plugin and make use of existing napari functionality wherever possible. If you are not familiar with napari, we recommend to [start here](https://napari.org/stable/tutorials/fundamentals/quick_start.html).
 The `micro_sam` tools mainly use the [point layer](https://napari.org/stable/howtos/layers/points.html), [shape layer](https://napari.org/stable/howtos/layers/shapes.html) and [label layer](https://napari.org/stable/howtos/layers/labels.html).
 
-The annotation tools are explained in detail below. We also provide [video tutorials](https://youtube.com/playlist?list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&si=qNbB8IFXqAX33r_Z).
+The plugin menu contains the following tools:
+- [Segmentation Annotator](#segmentation-annotator): interactive and automatic segmentation of 2d images and 3d volumes.
+- [Tracking Annotator](#tracking-annotator): interactive and automatic tracking of cells in a timeseries.
+- [Batch Annotator](#batch-annotator): annotation of all images in a folder, one after the other.
+- [Object Classifier](#object-classifier): classification of segmented objects.
+- [Pixel Classifier](#pixel-classifier): semantic segmentation by classifying every pixel.
 
-The annotation tools can be started from the napari plugin menu:
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/napari-plugin.png" width="768">
+The plugin menu also contains sample data, and `Set cache directory` for choosing where the models and embeddings are stored.
 
-You can find additional information on the annotation tools [in the FAQ section](#usage-question).
+You can find additional information on the annotation tools [in the FAQ section](#usage-questions).
 
 HINT: If you would like to start napari to use `micro-sam` from the plugin menu, you must start it by activating the environment where `micro-sam` has been installed using:
 
@@ -27,145 +31,82 @@ napari
 ```
 
 
-## Annotator 2D
+## Segmentation Annotator
 
-The 2d annotator can be started by
-- clicking `Annotator 2d` in the plugin menu after starting `napari`.
-- running `$ micro_sam.annotator_2d` in the command line.
-- calling `micro_sam.sam_annotator.annotator_2d` in a python script. Check out [examples/annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_2d.py) for details.
+The segmentation annotator is used for 2d images and 3d volumes. It can be started by
+- clicking `Segmentation Annotator` in the plugin menu after starting `napari`.
+- running `$ micro_sam annotator segmentation -i <IMAGE>` in the command line.
+- calling `micro_sam.sam_annotator.annotator` in a python script. Check out [examples/annotator_2d.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_2d.py) and [examples/annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_3d.py) for details.
 
-The user interface of the 2d annotator looks like this:
+The tool detects if the image is 2d, 2d with color channels, or 3d. You can change this in the embedding menu if the detection is wrong, for example for a 3d array that is a 2d image with channels.
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/2d-annotator-menu.png" width="1024">
+The tool uses the following napari layers:
+- `prompts`: shape layer for box prompts. Prompts can be given as rectangle, ellipse or polygon.
+- `point_prompts`: point layer for point prompts. Positive prompts (green points) mark the object you want to segment, negative prompts (red points) mark the outside of the object.
+- `current_object`: label layer for the object(s) you are currently segmenting.
+- `auto_segmentation`: label layer with the results of the automatic segmentation.
+- `committed_objects`: label layer with the objects that you have already segmented.
 
-It contains the following elements:
-1. The napari layers for the segmentations and prompts:
-    - `prompts`: shape layer that is used to provide box prompts to Segment Anything. Prompts can be given as rectangle (marked as box prompt in the image), ellipse or polygon.
-    - `point_prompts`: point layer that is used to provide point prompts to Segment Anything. Positive prompts (green points) for marking the object you want to segment, negative prompts (red points) for marking the outside of the object.
-    - `committed_objects`: label layer with the objects that have already been segmented.
-    - `auto_segmentation`: label layer with the results from automatic instance segmentation.
-    - `current_object`: label layer for the object(s) you're currently segmenting.
-2. The embedding menu. For selecting the image to process, the Segment Anything model that is used and computing its image embeddings. The `Embedding Settings` contain advanced settings for loading cached embeddings from file or for using tiled embeddings.
-3. The prompt menu for changing whether the currently selected point is a positive or a negative prompt. This can also be done by pressing `T`.
-4. The menu for interactive segmentation. Clicking `Segment Object` (or pressing `S`) will run segmentation for the current prompts. The result is displayed in `current_object`. Activating `batched` enables segmentation of multiple objects with point prompts. In this case one object will be segmented per positive prompt.
-5. The menu for automatic segmentation. Clicking `Automatic Segmentation` will segment all objects n the image. The results will be displayed in the `auto_segmentation` layer. We support two different methods for automatic segmentation: automatic mask generation (supported for all models) and instance segmentation with an additional decoder (only supported for our models).
-Changing the parameters under `Automatic Segmentation Settings` controls the segmentation results, check the tooltips for details.
-6. The menu for commiting the segmentation. When clicking `Commit` (or pressing `C`) the result from the selected layer (either `current_object` or `auto_segmentation`) will be transferred from the respective layer to `committed_objects`. The layer of the last segmentation is selected automatically: `Segment Object` selects `current_object` and `Automatic Segmentation` selects `auto_segmentation`. You can still change the layer by hand.
-When `commit_path` is given the results will automatically be saved there.
-7. The menu for clearing the current annotations. Clicking `Clear Annotations` (or pressing `Shift + C`) will clear the current annotations and the current segmentation.
+The tool has the following menus:
+- The embedding menu, for selecting the image and the model, and computing the image embeddings with `Compute Embeddings`. The `Embedding Settings` contain the settings for saving the embeddings to a file and loading them from it, for tiled embeddings of large images, for custom model weights and for the device.
+- The menu for interactive segmentation. `Segment Object` (or `S`) segments the object from the current prompts and shows it in `current_object`. Press `T` to switch a prompt between positive and negative.
+    - For 3d data, `Apply to Volume` extends the segmentation of the current object through the whole volume. Otherwise only the current slice is segmented.
+- The menu for automatic segmentation. `Automatic Segmentation` segments all objects and shows them in `auto_segmentation`. The `mode` selects the method: `apg`, or AIS with the `sparse` or `dense` post-processing (see [APG](#apg)). Automatic segmentation needs a model with a decoder, for example one of the `micro-sam2` models.
+    - For 3d data, `Apply to Volume` segments the whole volume. Otherwise only the current slice is segmented.
+- The menu for committing the segmentation. `Commit` (or `C`) transfers the result of the selected layer (`current_object` or `auto_segmentation`) to `committed_objects`. The layer of the last segmentation is selected automatically, but you can change it.
+- The menu for clearing the annotations. `Clear Annotations` (or `Shift + C`) clears the current prompts and the current segmentation.
 
-Point prompts and box prompts can be combined. When you're using point prompts you can only segment one object at a time, unless the `batched` mode is activated. With box prompts you can segment several objects at once, both in the normal and `batched` mode.
+Point prompts and box prompts can be combined.
 
-Check out [the video tutorial](https://youtu.be/9xjJBg_Bfuc) for an in-depth explanation on how to use this tool.
+## Tracking Annotator
 
+The tracking annotator is used for 2d timeseries. It can be started by
+- clicking `Tracking Annotator` in the plugin menu after starting `napari`.
+- running `$ micro_sam annotator tracking -i <TIMESERIES>` in the command line.
+- calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_tracking.py) for details.
 
-## Annotator 3D
+Most elements are the same as in the [segmentation annotator](#segmentation-annotator):
+- The tracking settings: `track_state` marks that the object you are tracking divides in the current frame, and `track_id` selects which of the tracks after a division you are following.
+- The menu for interactive tracking: `Segment Object` (or `S`) segments the object in the current frame. With `Apply to Volume`, the object is tracked through the whole timeseries.
+- The menu for automatic tracking: `Automatic Tracking` segments each frame and links the objects across frames with [trackastra](https://github.com/weigertlab/trackastra). Automatic tracking can take quite long without a GPU.
+- `Commit` stores the tracks in `committed_objects` and shows them in the `tracks` layer. The tracking results can be exported in the Cell Tracking Challenge, GEFF and TrackMate formats.
 
-The 3d annotator can be started by
-- clicking `Annotator 3d` in the plugin menu after starting `napari`.
-- running `$ micro_sam.annotator_3d` in the command line.
-- calling `micro_sam.sam_annotator.annotator_3d` in a python script. Check out [examples/annotator_3d.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_3d.py) for details.
+The tracking annotator only supports 2d image data with a time dimension. Volumetric data with a time dimension is not supported.
 
-The user interface of the 3d annotator looks like this:
+## Batch Annotator
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/3d-annotator-menu.png" width="1024">
+The batch annotator runs one of the other tools for all images in a folder, one image after the other. This makes it convenient to annotate many images without having to restart the tool for every image. It can be started by
+- clicking `Batch Annotator` in the plugin menu after starting `napari`.
+- running `$ micro_sam annotator batch -i <FOLDER> -o <OUTPUT_FOLDER> --task <TASK>` in the command line.
+- calling `micro_sam.sam_annotator.batch_annotator` or `micro_sam.sam_annotator.image_folder_annotator` in a python script. Check out [examples/image_series_annotator.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/image_series_annotator.py) for details.
 
-Most elements are the same as in [the 2d annotator](#annotator-2d):
-1. The napari layers that contain the segmentations and prompts.
-2. The embedding menu.
-3. The prompt menu.
-4. The menu for interactive segmentation in the current slice.
-5. The menu for interactive 3d segmentation. Clicking `Segment All Slices` (or pressing `Shift + S`) will extend the segmentation of the current object across the volume by projecting prompts across slices. The parameters for prompt projection can be set in `Segmentation Settings`, please refer to the tooltips for details.
-6. The menu for automatic segmentation. The functionality is similar to [the 2d annotator](#annotator-2d). To segment the full volume `Apply to Volume` needs to be activated, otherwise only the current slice will be segmented. For volumetric segmentation, each slice is first segmented individually and then [Multicut](https://www.nature.com/articles/nmeth.4151) based on object overlap is used to merge objects across slices. Note that 3D segmentation can take quite long without a GPU.
-7. The menu for committing the current object.
-8. The menu for clearing the current annotations. If `all slices` is set all annotations will be cleared, otherwise they are only cleared for the current slice.
+You select the task (segmentation, tracking, object classification or pixel classification), the folder with your images, a pattern for selecting a subset of the images (for example `*.tif`), and the folder where the results are saved. The other options are the settings of the embedding menu.
+`Next Image` (or `N`) saves the result of the current image and opens the next one. The classification tasks can also go back to the previous image (`Shift + N`), and with `Keep Classifier` the classifier is trained on the annotations of all images so far.
+For segmentation and tracking, images that already have a result in the output folder are skipped, so you can continue an annotation session later.
 
-You can only segment one object at a time using the interactive segmentation functionality with this tool.
+## Object Classifier
 
-Check out [the video tutorial](https://youtu.be/nqpyNQSyu74) for an in-depth explanation on how to use this tool.
-
-
-## Annotator Tracking
-
-The tracking annotator can be started by
-- clicking `Annotator Tracking` in the plugin menu after starting `napari`.
-- running `$ micro_sam.annotator_tracking` in the command line.
-- calling `micro_sam.sam_annotator.annotator_tracking` in a python script. Check out [examples/annotator_tracking.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_tracking.py) for details. 
-
-The user interface of the tracking annotator looks like this:
-
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/tracking-annotator-menu.png" width="1024">
-
-Most elements are the same as in [the 2d annotator](#annotator-2d):
-1. The napari layers that contain the segmentations and prompts. Same as for [the 2d segmentation application](#annotator-2d) but without the `auto_segmentation` layer.
-2. The embedding menu.
-3. The prompt menu.
-4. The menu with tracking settings: `track_state` is used to indicate that the object you are tracking is dividing in the current frame. `track_id` is used to select which of the tracks after division you are following.
-5. The menu for interactive segmentation in the current frame.
-6. The menu for interactive tracking. Click `Track Object` (or press `Shift + S`) to segment the current object across time.
-7. The menu for automatic tracking. The functionality is similar to [the 2d annotator](#annotator-2d). To track cells across time `Track Timeseries` needs to be activated, otherwise only the current frame will be segmented. For tracking, each frame is first segmented individually and then tracked with [trackastra](https://github.com/weigertlab/trackastra). You need to [install trackastra](#trackastra-installation) to use this feature. Note that automatic tracking can take quite long without a GPU.
-8. The menu for committing the current tracking result.
-9. The menu for clearing the current annotations.
-
-The tracking annotator only supports 2d image data with a time dimension, volumetric data + time is not supported.
-Check out [the video tutorial](https://youtu.be/1gg8OPHqOyc) for an in-depth explanation on how to use this tool.
-
-
-## Image Series Annotator
-
-The image series annotation tool enables running the [2d annotator](#annotator-2d) or [3d annotator](#annotator-3d) for multiple images that are saved in a folder. This makes it convenient to annotate many images without having to restart the tool for every image. It can be started by
-- clicking `Image Series Annotator` in the plugin menu after starting `napari`.
-- running `$ micro_sam.image_series_annotator` in the command line.
-- calling `micro_sam.sam_annotator.image_series_annotator` in a python script. Check out [examples/image_series_annotator.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/image_series_annotator.py) for details. 
-
-When starting this tool via the plugin menu the following interface opens:
-
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/series-menu.png" width="512">
-
-You can select the folder where your images are saved with `Input Folder`. The annotation results will be saved in `Output Folder`.
-You can specify a rule for loading only a subset of images via `pattern`, for example `*.tif` to only load tif images. Set `is_volumetric` if the data you want to annotate is 3d. The rest of the options are settings for the image embedding computation and are the same as for the embedding menu (see above).
-Once you click `Annotate Images` the images from the folder you have specified will be loaded and the annotation tool is started for them.
-
-This menu will not open if you start the image series annotator from the command line or via python. In this case the input folder and other settings are passed as parameters instead.
-
-Check out [the video tutorial](https://youtu.be/HqRoImdTX3c) for an in-depth explanation on how to use the image series annotator.
-
-
-## Object Classification
-
-We have recently implemented an experimental workflow for object classification with `micro_sam`. It can be started by:
+The object classifier classifies segmented objects into the classes you choose. It can be started by:
 - clicking `Object Classifier` in the plugin menu after starting `napari`.
-- calling `micro_sam.sam_annotator.object_classifier.object_classifier` in a python script.
+- running `$ micro_sam annotator object-classification -i <IMAGE> -s <SEGMENTATION>` in the command line.
+- calling `micro_sam.sam_annotator.object_classifier.object_classifier` in a python script. Check out [examples/object_classifier.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/object_classifier.py) for details.
 
-When starting this workflow the following interface opens up.
+Load an image and a segmentation (for example from the segmentation annotator), and compute the image embeddings as in the other tools.
+Then mark some objects of each class in the `annotations` layer: one brush stroke or dot per object is enough. You can add classes with `Add Class`.
+`Train and Predict` (or `Shift + T`) trains a random forest classifier on the objects you have marked, using the image embeddings of each object as features, and applies it to all objects. The result is shown in the `prediction` layer.
+You can export the trained classifier and apply it to other images with `micro_sam inference object-classification`.
 
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/object-classifier.png" width="512">
+## Pixel Classifier
 
-You can load an image (here: `livecell`) and a segmentation (here, `segmentation`, for example from another `micro_sam` widget).
-Compute image embeddings as in the other widgets.
-Then, draw annotations for the different types of objects in your image in the `annotation` layer, see also the brushstroke labels visible in some cells in the image.
-By clicking `Train and predict` you train a random forest classifer on the objects you have annotated, that uses the image embeddings projected to the objects as features.
-It is then applied to all objects to obtain the semantic segmentation shown in `prediction`.
+The pixel classifier assigns a class to every pixel, for example to segment tissue types or cell compartments. It can be started by:
+- clicking `Pixel Classifier` in the plugin menu after starting `napari`.
+- running `$ micro_sam annotator pixel-classification -i <IMAGE>` in the command line.
+- calling `micro_sam.sam_annotator.pixel_classifier.pixel_classifier` in a python script. Check out [examples/pixel_classifier.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/pixel_classifier.py) for details.
 
-**This workflow is still experimental. It may significantly change in the future and we are working on a publication to explain the underlying methodology and to document it properly. Feedback is already welcome in case you use it.**
+Draw brush strokes for each class in the `annotations` layer and click `Train and Predict` (or `Shift + T`). A random forest classifier is trained on the image embeddings of the annotated pixels and applied to the whole image. The result is shown in the `prediction` layer. You can add more strokes where the prediction is wrong and train again.
+Optional settings add classical image features, or upsample the embeddings with [AnyUp](https://github.com/wimmerth/anyup) for finer details.
+You can export the trained classifier and apply it to other images with `micro_sam inference pixel-classification`.
 
+## Training a Model
 
-## Finetuning UI
-
-We also provide a graphical inferface for fine-tuning models on your own data. It can be started by clicking `Finetuning` in the plugin menu after starting `napari`.
-
-**Note:** if you know a bit of python programming we recommend to use a script for model finetuning instead. This will give you more options to configure the training. See [these instructions](#training-your-own-model) for details.
-
-When starting this tool via the plugin menu the following interface opens:
-
-<img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/images/finetuning-menu.png" width="512">
-
-You can select the image data via `Path to images`. You can either load images from a folder or select a single image file. By providing `Image data key` you can either provide a pattern for selecting files from the folder or provide an internal filepath for HDF5, Zarr or similar fileformats.
-
-You can select the label data via `Path to labels` and `Label data key`, following the same logic as for the image data. The label masks are expected to have the same size as the image data. You can for example use annotations created with one of the `micro_sam` annotation tools for this, they are stored in the correct format. See [the FAQ](#fine-tuning-questions) for more details on the expected label data.
-
-The `Configuration` option allows you to choose the hardware configuration for training. We try to automatically select the correct setting for your system, but it can also be changed. Details on the configurations can be found [here](#training-your-own-model).
-
-NOTE: We recommend to fine-tune Segment Anything models on your data by
-- running `$ micro_sam.train` in the command line.
-- calling `micro_sam.v1.training.train_sam` in a python script. Check out [examples/finetuning/finetune_hela.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/finetuning/finetune_hela.py) OR [notebooks/sam_finetuning.ipynb](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) for details.
+The previous version of `micro_sam` had a graphical interface for finetuning. To train a model on your own data, use the command line (`micro_sam train`) or the python library instead, see [training your own model](#training-your-own-model).

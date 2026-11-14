@@ -7,6 +7,7 @@ from .util import (  # noqa
 )
 from .sam2_trainer import Sam2Trainer, Sam2Logger, UniSAM2Trainer, UniSAM2Logger  # noqa
 from .joint_sam2_trainer import JointSam2Trainer, JointSam2Logger  # noqa
+from .loaders import TRAINING_MODES, default_sam2_dataset, default_sam2_loader  # noqa
 from .training import (  # noqa
     train_sam2, train_sam2_multi_gpu,
     train_automatic, train_automatic_multi_gpu,

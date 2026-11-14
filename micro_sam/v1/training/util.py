@@ -18,7 +18,7 @@ from .trainable_sam import TrainableSAM
 from ...prompt_generators import PointAndBoxPromptGenerator
 from ...util import (
     get_centers_and_bounding_boxes, get_device,
-    segmentation_to_one_hot, _DEFAULT_MODEL,
+    segmentation_to_one_hot, DEFAULT_SAM1_MODEL,
 )
 
 
@@ -75,7 +75,7 @@ def get_raw_transform(preprocess: Optional[str] = None) -> Optional[Callable]:
 
 
 def get_trainable_sam_model(
-    model_type: str = _DEFAULT_MODEL,
+    model_type: str = DEFAULT_SAM1_MODEL,
     device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     freeze: Optional[List[str]] = None,

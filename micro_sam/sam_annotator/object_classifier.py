@@ -17,16 +17,16 @@ from qtpy import QtWidgets
 from magicgui.widgets import ComboBox
 
 from .. import util
-from ._batch import run_batch
 from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
-from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ._titles import get_dock_title
 from ._annotator import _ClassifierBase
 from .util import _sync_embedding_widget
-from ._batch_classification import ClassificationBatchTask
+from ._batch import load_batch_image, run_batch
 from ..classical_features import OBJECT_FEATURES
+from ._batch_classification import ClassificationBatchTask
+from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ..object_classification import compute_object_features, project_prediction_to_segmentation
 
 # Object features are the object area plus the per-channel mean of the 256-channel SAM/SAM2 image
@@ -35,7 +35,7 @@ N_OBJECT_FEATURES = 257
 INTERNAL_LABEL_LAYER_NAMES = {"annotations", "prediction"}
 
 
-def _accumulate_labels(segmentation, annotations):
+def _accumulate_labels(segmentation, annotations, seg_ids):
 
     def majority_label(mask, annotation):
         ids, counts = np.unique(annotation[mask], return_counts=True)
@@ -49,7 +49,9 @@ def _accumulate_labels(segmentation, annotations):
         segmentation, intensity_image=annotations, properties=("label",),
         extra_properties=[majority_label],
     )
-    return all_features["majority_label"].astype("int")
+    labels = dict(zip(all_features["label"], all_features["majority_label"].astype("int")))
+    # Match the rows of the features, which leave out the objects that vanish in the embedding resize.
+    return np.array([labels[seg_id] for seg_id in seg_ids], dtype="int")
 
 
 def _train_rf(
@@ -126,7 +128,7 @@ class ObjectClassifier(_ClassifierBase):
         segmentation_layer = self._get_selected_segmentation_layer()
         if segmentation_layer is None:
             return None
-        return _accumulate_labels(segmentation_layer.data, self._viewer.layers["annotations"].data)
+        return _accumulate_labels(segmentation_layer.data, self._viewer.layers["annotations"].data, aux)
 
     def _train(self, features, labels, previous_features, previous_labels, n_components, random_state):
         return _train_rf(
@@ -248,8 +250,8 @@ def object_classifier(
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
-    if ndim is None:
-        ndim = image.ndim - 1 if image.shape[-1] == 3 and image.ndim in (3, 4) else image.ndim
+    # Prepare the image in the same way as the annotator: squeeze singletons and map the channels to RGB.
+    image, ndim, rgb = util.prepare_annotation_image(image, ndim=ndim)
 
     state = AnnotatorState()
     state.image_shape = image.shape[:ndim]
@@ -269,8 +271,8 @@ def object_classifier(
     if viewer is None:
         viewer = napari.Viewer()
 
-    viewer.add_image(image, name="image")
-    viewer.add_labels(segmentation, name="segmentation")
+    viewer.add_image(image, name="image", rgb=rgb)
+    viewer.add_labels(util.match_image_shape(segmentation, state.image_shape), name="segmentation")
 
     annotator = ObjectClassifier(viewer)
 
@@ -321,12 +323,14 @@ class ObjectClassificationBatchTask(ClassificationBatchTask):
         seg = self.visited_segmentations.get(index, seg)
         if seg is not None and not isinstance(seg, np.ndarray):
             seg = imageio.imread(seg)
+        if seg is not None:
+            seg = util.match_image_shape(seg, AnnotatorState().image_shape)
+        # Without a segmentation, an empty one, so the objects of the previous item are not carried over.
+        if seg is None:
+            seg = np.zeros(tuple(AnnotatorState().image_shape), dtype="uint32")
         if "segmentation" in viewer.layers:
-            if seg is not None:
-                viewer.layers["segmentation"].data = seg
+            viewer.layers["segmentation"].data = seg
         else:
-            if seg is None:
-                seg = np.zeros(tuple(AnnotatorState().image_shape), dtype="uint32")
             viewer.add_labels(seg, name="segmentation")
 
 
@@ -385,8 +389,7 @@ def batch_object_classifier(
 
     have_inputs_as_arrays = isinstance(images[0], np.ndarray)
     if ndim is None:
-        first = images[0] if have_inputs_as_arrays else imageio.imread(images[0])
-        ndim = first.ndim - 1 if first.shape[-1] == 3 and first.ndim in (3, 4) else first.ndim
+        ndim = load_batch_image(images[0])[1]
 
     task = ObjectClassificationBatchTask(
         segmentations=segmentations, ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,

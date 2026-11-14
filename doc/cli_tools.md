@@ -1,26 +1,44 @@
 # Using the Command Line Interface (CLI)
 
-`micro-sam` extends access to a bunch of functionalities using the command line interface (CLI) scripts via terminal.
+`micro_sam` provides one command, `micro_sam`, with subcommands for annotation, automatic segmentation, embedding computation and training.
+Run `micro_sam --help` for an overview, and add `--help` to any subcommand for its options, for example `micro_sam annotator segmentation --help`.
 
-The supported CLIs can be used by
-- Running `$ micro_sam.info` for getting `micro-sam` package information and other necessary system-level information to use `micro-sam`.
-- Running `$ micro_sam.precompute_embeddings` for precomputing and caching the image embeddings.
-- Running `$ micro_sam.annotator_2d` for starting the 2d annotator.
-- Running `$ micro_sam.annotator_3d` for starting the 3d annotator.
-- Running `$ micro_sam.annotator_tracking` for starting the tracking annotator.
-- Running `$ micro_sam.image_series_annotator` for starting the image series annotator.
-- Running `$ micro_sam.train` for finetuning Segment Anything models on your data.
-- Running `$ micro_sam.automatic_segmentation` for automatic instance segmentation.
-    - We support all post-processing parameters for automatic instance segmentation (for AMG, AIS and APG).
-        - The automatic segmentation mode can be controlled by: `--mode <MODE_NAME>`, where the available choice for `MODE_NAME` is `amg` / `ais` / `apg`.
-        - AMG is supported by both default Segment Anything models and `micro-sam` models / finetuned models.
-        - AIS is supported by `micro-sam` models (or finetuned models; subjected to they are trained with the additional instance segmentation decoder)
-        - APG is supported by `micro-sam` models (or finetuned models; subjected to they are trained with the additional instance segmentation decoder)
-    - If these parameters are not provided by the user, `micro-sam` makes use of the best post-processing parameters (depending on the choice of model). 
-    - The post-processing parameters can be changed by parsing the parameters via the CLI using `--<PARAMETER_NAME> <VALUE>.` For example, one can update the parameter values (eg. `pred_iou_thresh`, `stability_iou_thresh`, etc. - supported by AMG) using `$ micro_sam.automatic_segmentation ... --pred_iou_thresh 0.6 --stability_iou_thresh 0.6 ...`
-        - Remember to specify the automatic segmentation mode using `--mode <MODE_NAME>` when using additional post-processing parameters.
-    - You can check details for supported parameters and their respective default values at `micro_sam/instance_segmentation.py` under the `generate` method for `AutomaticMaskGenerator`, `InstanceSegmentationWithDecoder` and `AutomaticPromptGenerator` class.
-    - A good practice is to set `--ndim <NDIM>`, where `<NDIM>` corresponds to the number of dimensions of input images.
-- Running `$ micro_sam.evaluate` for evaluating instance segmentation.
+The subcommands are:
+- `micro_sam info`: Display `micro_sam` and system information. `micro_sam info --download <MODEL>` downloads a model in advance.
+- `micro_sam annotator`: Start the [annotation tools](#annotation-tools).
+    - `micro_sam annotator segmentation`: Interactive segmentation of a 2d or 3d image.
+    - `micro_sam annotator tracking`: Interactive tracking of cells in a timeseries.
+    - `micro_sam annotator batch`: Annotation of all images in a folder, for segmentation, tracking, or object or pixel classification (`--task`).
+    - `micro_sam annotator object-classification`: Train and apply an object classifier interactively.
+    - `micro_sam annotator pixel-classification`: Train and apply a pixel classifier interactively.
+- `micro_sam inference`: Automatic prediction for one or many images.
+    - `micro_sam inference segmentation`: Automatic instance segmentation. Select the method with `--engine`: `ais` (the default), `apg` or `amg`, see [APG](#apg).
+    - `micro_sam inference tracking`: Automatic tracking for a timeseries.
+    - `micro_sam inference object-classification` and `micro_sam inference pixel-classification`: Apply a trained classifier.
+- `micro_sam precompute-embeddings`: Compute the image embeddings in advance and save them, so that the annotation tools and the automatic segmentation can reuse them.
+- `micro_sam train`: Train a model on your own data, see [training your own model](#training-your-own-model).
+- `micro_sam train-generalist`: Train a generalist model on the collection of datasets we use for the `micro-sam2` models.
+- `micro_sam v1`: The commands of the previous version for SAM1 models, for example `micro_sam v1 automatic_segmentation` and `micro_sam v1 evaluate`.
 
-NOTE: For all CLIs above, you can find more details by adding the argument `-h` to the CLI script (eg. `$ micro_sam.annotator_2d -h`).
+The automatic segmentation uses the best post-processing parameters for the chosen model by default.
+You can change a parameter by passing it to `micro_sam inference segmentation` as `--<PARAMETER_NAME> <VALUE>`, for example `--min_size 100` to remove smaller objects.
+The defaults are listed by `micro_sam.v2.postprocessing.default_postprocessing` (AIS) and `micro_sam.v2.automatic_prompt_generation.default_prompt_generation` (APG).
+
+Some examples:
+```bash
+# Automatic segmentation of all tif images in a folder (quote the pattern so that the shell does not expand it).
+micro_sam inference segmentation -i images/ -o segmentations/ --pattern '*.tif'
+
+# Automatic segmentation with APG and a larger model.
+micro_sam inference segmentation -i image.tif -o segmentation.tif -m hvit_b_cells --engine apg
+
+# Automatic tracking of a timeseries, saved in the Cell Tracking Challenge format.
+micro_sam inference tracking -i timeseries.tif -o tracking_result/
+
+# Precompute the embeddings and start the annotator with them.
+micro_sam precompute-embeddings -i image.tif -e embeddings.zarr -m hvit_t_cells
+micro_sam annotator segmentation -i image.tif -e embeddings.zarr -m hvit_t_cells
+
+# Train a model for interactive and automatic segmentation on your own data.
+micro_sam train -i images/ --image_key '*.tif' -l labels/ --label_key '*.tif' --mode joint
+```
