@@ -2,7 +2,7 @@ name: sam
 channels:
     - conda-forge
 dependencies:
-    - bioimage-cpp >=0.3,<0.8
+    - bioimage-cpp >=0.3,<0.11
     - bioimageio.core >=0.11,<0.12
     - imagecodecs
     - magicgui
