@@ -10,9 +10,9 @@ import argparse
 from glob import glob
 
 import h5py
-import numpy as np
-import tifffile
 import torch
+import tifffile
+import numpy as np
 
 
 CHECKPOINT_DIR = "checkpoints/gruen_lab_hvit_l_cells"

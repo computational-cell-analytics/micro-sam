@@ -1,15 +1,15 @@
-import argparse
-import json
 import os
+import json
+import argparse
 from glob import glob
-from inspect import signature
 from pathlib import Path
+from inspect import signature
 
 import h5py
-import imageio.v3 as imageio
-import pandas as pd
 import napari
 import numpy as np
+import pandas as pd
+import imageio.v3 as imageio
 
 from tqdm import tqdm
 

@@ -7,8 +7,8 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional, Union, Tuple
 
 import numpy as np
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 from segment_anything import SamPredictor
 
 import torch
@@ -248,8 +248,10 @@ def _get_prompt_caching(prompt_save_dir, use_points, use_boxes, n_positives, n_n
             use_boxes, "boxes.pkl"
         )
 
-    return (cached_point_prompts, save_point_prompts, point_prompt_save_path,
-            cached_box_prompts, save_box_prompts, box_prompt_save_path)
+    return (
+        cached_point_prompts, save_point_prompts, point_prompt_save_path,
+        cached_box_prompts, save_box_prompts, box_prompt_save_path
+    )
 
 
 def run_inference_with_prompts(
@@ -289,8 +291,10 @@ def run_inference_with_prompts(
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
 
-    (cached_point_prompts, save_point_prompts, point_prompt_save_path,
-     cached_box_prompts, save_box_prompts, box_prompt_save_path) = _get_prompt_caching(
+    (
+        cached_point_prompts, save_point_prompts, point_prompt_save_path,
+        cached_box_prompts, save_box_prompts, box_prompt_save_path
+    ) = _get_prompt_caching(
          prompt_save_dir, use_points, use_boxes, n_positives, n_negatives
      )
 

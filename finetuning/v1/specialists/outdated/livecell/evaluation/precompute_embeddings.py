@@ -1,7 +1,7 @@
 import os
 
-from micro_sam.v1.evaluation import precompute_all_embeddings
 from util import get_paths, get_model, get_default_arguments
+from micro_sam.v1.evaluation import precompute_all_embeddings
 
 
 def main():

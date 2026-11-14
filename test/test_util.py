@@ -2,17 +2,17 @@ import os
 import unittest
 from shutil import rmtree
 
-import pytest
-import numpy as np
-import requests
-import torch
 import zarr
 import z5py
+import torch
+import pytest
+import requests
+import numpy as np
 
-from skimage.data import binary_blobs
 from skimage.measure import label
-from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory, _compute_data_signature, _open_embeddings
+from skimage.data import binary_blobs
 from micro_sam.v1.util import get_sam_model, set_precomputed
+from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory, _compute_data_signature, _open_embeddings
 
 ZARR_MAJOR = int(zarr.__version__.split(".")[0])
 

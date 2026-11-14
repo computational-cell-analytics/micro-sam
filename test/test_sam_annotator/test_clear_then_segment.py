@@ -2,9 +2,9 @@
 
 import platform
 
-import numpy as np
 import torch
 import pytest
+import numpy as np
 
 from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator.annotator import annotator

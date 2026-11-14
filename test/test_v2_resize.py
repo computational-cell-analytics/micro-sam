@@ -1,7 +1,7 @@
 import types
 
-import numpy as np
 import torch
+import numpy as np
 
 from micro_sam.v2.instance_segmentation import ResizeLongestSideWrapper
 from micro_sam.v2.prompt_based_segmentation import _crop_to_original_shape

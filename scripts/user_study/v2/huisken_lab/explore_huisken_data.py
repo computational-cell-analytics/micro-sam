@@ -70,9 +70,9 @@ import zarr
 import tifffile
 import numpy as np
 from scipy import ndimage
-from skimage.exposure import equalize_adapthist
 from skimage.filters import sato
 from skimage.measure import block_reduce
+from skimage.exposure import equalize_adapthist
 from skimage.segmentation import find_boundaries
 
 from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
@@ -214,8 +214,9 @@ SMALL_SETTINGS = {
         "x2_p99.9_min100": {"scale": (2, 2, 2), "norm_percentiles": (2, 99.9), "min_size": 100},
         # min100 leaves 10 of the 922 objects of the dense crop as fragments inside a nucleus, this merges them.
         "x2_min100_merge": {"scale": (2, 2, 2), "min_size": 100, "merge_fragments": 400},
-        "x2_min100_merge_bright": {"scale": (2, 2, 2), "min_size": 100, "merge_fragments": 400,
-                                   "min_mean_intensity": 5},
+        "x2_min100_merge_bright": {
+            "scale": (2, 2, 2), "min_size": 100, "merge_fragments": 400, "min_mean_intensity": 5
+        },
     },
     # The background is at ~200-1000, the bright membranes on top at 10k-65k, the dim ones below at a few 1000.
     "membrane": {
@@ -234,8 +235,9 @@ SMALL_SETTINGS = {
         # The membranes are only ~1-2 px thin, the cells ~15-25 px wide. Tiles of 256 + 2 * 64 px magnify them 2.7x,
         # tiles of 128 + 2 * 32 px 5.3x, upsampling 2x in xy with tiles of 256 magnifies them 5.3x with more context.
         "z4_t256": {"scale": (4, 1, 1), "tile_shape": (256, 256), "halo": (64, 64)},
-        "z4_p1-99.9_t256": {"scale": (4, 1, 1), "norm_percentiles": (1, 99.9), "tile_shape": (256, 256),
-                            "halo": (64, 64)},
+        "z4_p1-99.9_t256": {
+            "scale": (4, 1, 1), "norm_percentiles": (1, 99.9), "tile_shape": (256, 256), "halo": (64, 64)
+        },
         "z4_t128": {"scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32)},
         "z4_x2_t256": {"scale": (4, 2, 2), "anisotropy": 2, "tile_shape": (256, 256), "halo": (64, 64)},
         "inv_z4": {"invert": True, "scale": (4, 1, 1)},
@@ -246,29 +248,47 @@ SMALL_SETTINGS = {
         # Tiling traces the small cells, t128 and x2_t256 best. x2_t256 splits them into more fragments (1518 of its
         # 2748 objects are < 200 voxels, 275 of 1101 for t128). Both segment noise in the dark interior and around the
         # specimen, and the tiled runs cut a few cells along the tile borders, which the larger halo should reduce.
-        "z4_t128_clean": {"scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32), "min_size": 200,
-                          "min_border_intensity": 1500},
-        "z4_t128_h64_clean": {"scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (64, 64), "min_size": 200,
-                              "min_border_intensity": 1500},
-        "z4_x2_t256_clean": {"scale": (4, 2, 2), "anisotropy": 2, "tile_shape": (256, 256), "halo": (64, 64),
-                             "min_size": 200, "min_border_intensity": 1500},
+        "z4_t128_clean": {
+            "scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32), "min_size": 200,
+            "min_border_intensity": 1500
+        },
+        "z4_t128_h64_clean": {
+            "scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (64, 64), "min_size": 200,
+            "min_border_intensity": 1500
+        },
+        "z4_x2_t256_clean": {
+            "scale": (4, 2, 2), "anisotropy": 2, "tile_shape": (256, 256), "halo": (64, 64),
+            "min_size": 200, "min_border_intensity": 1500
+        },
         # t128_clean leaves the dimmer tissue (e.g. the left side) unsegmented, next to the bright top epithelium.
         # Lifting the dim membranes: locally (CLAHE), globally (gamma) or by saturating the bright ones (p1-95).
-        "clahe_z4_t128_clean": {"clahe": 0.02, "scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32),
-                                "min_size": 200, "min_border_intensity": 1500},
-        "gamma_z4_t128_clean": {"gamma": 0.5, "scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32),
-                                "min_size": 200, "min_border_intensity": 1500},
-        "z4_p1-95_t128_clean": {"norm_percentiles": (1, 95), "scale": (4, 1, 1), "tile_shape": (128, 128),
-                                "halo": (32, 32), "min_size": 200, "min_border_intensity": 1500},
+        "clahe_z4_t128_clean": {
+            "clahe": 0.02, "scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32),
+            "min_size": 200, "min_border_intensity": 1500
+        },
+        "gamma_z4_t128_clean": {
+            "gamma": 0.5, "scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32),
+            "min_size": 200, "min_border_intensity": 1500
+        },
+        "z4_p1-95_t128_clean": {
+            "norm_percentiles": (1, 95), "scale": (4, 1, 1), "tile_shape": (128, 128),
+            "halo": (32, 32), "min_size": 200, "min_border_intensity": 1500
+        },
         # Neither of them segments the blurred tissue, not even in 2d. Of the deblurring tested in 2d (unsharp mask,
         # Richardson-Lucy, difference of gaussians, ridge filter), only the ridge filter recovers it: 490 objects on
         # z 15, 41 and 60 against 220 with CLAHE alone, and the sharp tissue gains cells too.
-        "ridge_clahe_z4_t128_clean": {"ridge": 0.5, "clahe": 0.02, "scale": (4, 1, 1), "tile_shape": (128, 128),
-                                      "halo": (32, 32), "min_size": 200, "min_border_intensity": 1500},
-        "ridge0.7_clahe_z4_t128_clean": {"ridge": 0.7, "clahe": 0.02, "scale": (4, 1, 1), "tile_shape": (128, 128),
-                                         "halo": (32, 32), "min_size": 200, "min_border_intensity": 1500},
-        "ridge_z4_t128_clean": {"ridge": 0.5, "scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32),
-                                "min_size": 200, "min_border_intensity": 1500},
+        "ridge_clahe_z4_t128_clean": {
+            "ridge": 0.5, "clahe": 0.02, "scale": (4, 1, 1), "tile_shape": (128, 128),
+            "halo": (32, 32), "min_size": 200, "min_border_intensity": 1500
+        },
+        "ridge0.7_clahe_z4_t128_clean": {
+            "ridge": 0.7, "clahe": 0.02, "scale": (4, 1, 1), "tile_shape": (128, 128),
+            "halo": (32, 32), "min_size": 200, "min_border_intensity": 1500
+        },
+        "ridge_z4_t128_clean": {
+            "ridge": 0.5, "scale": (4, 1, 1), "tile_shape": (128, 128), "halo": (32, 32),
+            "min_size": 200, "min_border_intensity": 1500
+        },
     },
 }
 
@@ -609,8 +629,10 @@ def stitch_slabs(downsample, min_size, z_range=None, slab_size=SLAB_SIZE, iou_th
         segmentation[core_start - z_range[0]:core_stop - z_range[0]] = slab[core_start - start:core_stop - start]
         offset = max(offset, int(slab.max()))
         previous = (slab, start, stop)
-    print(f"Read {len(slabs)} slabs and matched {len(matches)} objects across their overlaps in "
-          f"{time.time() - begin:.1f} s", flush=True)
+    print(
+        f"Read {len(slabs)} slabs and matched {len(matches)} objects across their overlaps in "
+        f"{time.time() - begin:.1f} s", flush=True
+    )
 
     segmentation, n_objects = merge_matched_ids(segmentation, matches, offset)
     print(f"Stitched {n_objects} objects in {time.time() - begin:.1f} s", flush=True)
@@ -857,8 +879,10 @@ def segment_small_slabs(volume, engine, settings, norm_bounds, slab_dir):
             with h5py.File(slab_path + ".tmp", "w") as f:
                 f.create_dataset("segmentation", data=slab, compression="lzf")
             os.replace(slab_path + ".tmp", slab_path)
-            print(f"Slab {index + 1} / {len(slabs)}: slices {start}-{stop}, {n_objects} objects in {runtime:.1f} s",
-                  flush=True)
+            print(
+                f"Slab {index + 1} / {len(slabs)}: slices {start}-{stop}, {n_objects} objects in {runtime:.1f} s",
+                flush=True
+            )
         with h5py.File(slab_path, "r") as f:
             slab = f["segmentation"][:]
         slab[slab != 0] += np.uint32(offset)
@@ -1764,8 +1788,10 @@ def main():
     parser.add_argument("--downsample", type=int, default=1, help="The factor to average the block by in zyx.")
     parser.add_argument("--min_size", type=int, default=AIS_MIN_SIZE, help="The minimum AIS object size.")
     parser.add_argument("--full", action="store_true", help="Segment the whole volume instead of the block.")
-    parser.add_argument("--preview_factor", type=int, default=PREVIEW_FACTOR,
-                        help="The extra downsampling of the whole volume preview for a laptop.")
+    parser.add_argument(
+        "--preview_factor", type=int, default=PREVIEW_FACTOR,
+        help="The extra downsampling of the whole volume preview for a laptop."
+    )
     parser.add_argument("--slab", type=int, help="Segment this z-slab of the whole volume with AIS.")
     parser.add_argument("--stitch", action="store_true", help="Stitch the z-slabs of the whole volume.")
     parser.add_argument("--z_range", nargs=2, type=int, help="Restrict the slabs to this downsampled z range.")
@@ -1773,13 +1799,18 @@ def main():
     parser.add_argument("--n_slabs", action="store_true", help="Print the number of slabs and exit.")
     parser.add_argument("--cache_embeddings", action="store_true", help="Keep the slab embeddings on vast.")
     parser.add_argument("--view", action="store_true", help="Show the block and its segmentations in napari.")
-    parser.add_argument("-d", "--dataset", choices=tuple(SMALL_DATA_PATHS),
-                        help="Segment one of the smaller volumes with the settings '-s' instead of the block.")
+    parser.add_argument(
+        "-d", "--dataset", choices=tuple(SMALL_DATA_PATHS),
+        help="Segment one of the smaller volumes with the settings '-s' instead of the block."
+    )
     parser.add_argument("-s", "--settings", nargs="+", help="The names of the SMALL_SETTINGS, by default all.")
-    parser.add_argument("--sweep", choices=tuple(SMALL_DATA_PATHS),
-                        help="Run every setting on one of the smaller volumes, on the crops for 'exm'.")
-    parser.add_argument("--crop", nargs="+", choices=tuple(EXM_CROPS),
-                        help="The exm crops to sweep, or the one to view.")
+    parser.add_argument(
+        "--sweep", choices=tuple(SMALL_DATA_PATHS),
+        help="Run every setting on one of the smaller volumes, on the crops for 'exm'."
+    )
+    parser.add_argument(
+        "--crop", nargs="+", choices=tuple(EXM_CROPS), help="The exm crops to sweep, or the one to view."
+    )
     parser.add_argument("--tag", help="A tag for the name of the output file of the smaller volumes.")
     parser.add_argument("--embryo", choices=tuple(EMBRYO_NAMES), help="Open this early embryo in the annotator.")
     parser.add_argument("-m", "--model_type", default=EMBRYO_MODEL_TYPE, help="The model for the early embryos.")

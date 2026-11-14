@@ -2,17 +2,17 @@ import os
 import platform
 import tempfile
 
-import numpy as np
 import pytest
-import imageio.v3 as imageio
+import numpy as np
 from joblib import load
-from skimage.data import binary_blobs
+import imageio.v3 as imageio
 from skimage.measure import label
+from skimage.data import binary_blobs
 
 from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator._state import AnnotatorState
-from micro_sam.sam_annotator.object_classifier import batch_object_classifier
 from micro_sam.sam_annotator.pixel_classifier import batch_pixel_classifier
+from micro_sam.sam_annotator.object_classifier import batch_object_classifier
 
 MODEL_TYPE = DEFAULT_MODEL
 
@@ -140,7 +140,7 @@ def test_object_classifier_forwards_state_by_default(make_napari_viewer_proxy):
         # Advance without annotating image 1: the forwarded classifier predicts on it.
         state.widgets["batch_next"]()
         assert viewer.layers["annotations"].data.sum() == 0  # no annotations on image 1
-        assert viewer.layers["prediction"].data.sum() > 0    # ...but it is predicted
+        assert viewer.layers["prediction"].data.sum() > 0  # ...but it is predicted
         assert state.batch_training_data[0][1].shape[0] == 2
 
         viewer.close()

@@ -1,5 +1,5 @@
-import pytest
 import torch
+import pytest
 
 from micro_sam.v2.models.util import UniSAM2
 
@@ -33,5 +33,7 @@ def test_unisam2_loads_a_narrow_state_dict_strictly(encoder):
     state = {key: torch.zeros_like(value) for key, value in narrow.state_dict().items()}
     rebuilt = UniSAM2(encoder=encoder, output_channels=4, device="cpu", initial_features=32)
     rebuilt.load_state_dict(state)
-    assert all(torch.equal(value, torch.zeros_like(value)) for key, value in rebuilt.state_dict().items()
-               if key.startswith(("out_conv", "base", "decoder")))
+    assert all(
+        torch.equal(value, torch.zeros_like(value)) for key, value in rebuilt.state_dict().items()
+        if key.startswith(("out_conv", "base", "decoder"))
+    )

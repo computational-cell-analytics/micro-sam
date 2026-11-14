@@ -1,5 +1,5 @@
-import numpy as np
 import torch
+import numpy as np
 import micro_sam.util as util
 
 from micro_sam.sam_3d_wrapper import get_3d_sam_model

@@ -1,11 +1,14 @@
 import copy
 import types
 
-import numpy as np
-import pytest
 import torch
+import pytest
+import numpy as np
 
+from micro_sam.v2.normalization import to_image
 from micro_sam.v2 import automatic_prompt_generation
+from micro_sam.v2.transforms.resize import ResizeLongestSideTransforms
+from micro_sam.v2.batched_inference import _volume_normalization_bounds
 from micro_sam.v2.instance_segmentation import (
     UniSAM2InstanceSegmentation, get_instance_segmentation_generator,
 )
@@ -13,9 +16,6 @@ from micro_sam.v2.automatic_prompt_generation import (
     AutomaticPromptGenerator, TiledAutomaticPromptGenerator, derive_point_prompts, merge_by_score,
     interior_points, derive_refinement_prompts, mask_to_logits, _parse_refinement, REFINEMENT_STATS_3D,
 )
-from micro_sam.v2.normalization import to_image
-from micro_sam.v2.batched_inference import _volume_normalization_bounds
-from micro_sam.v2.transforms.resize import ResizeLongestSideTransforms
 
 
 def test_apg_declares_no_postprocessing_mode():
@@ -757,8 +757,10 @@ def test_refinement_batches_pad_points_with_the_ignore_label(monkeypatch):
 
     # Instance 1 has two positives and one negative, instance 2 a single positive: padded to 3.
     point_prompts = {
-        1: {"points": np.array([[6, 6], [10, 10], [24, 6]], dtype="float32"),
-            "point_labels": np.array([1, 1, 0], dtype="int32")},
+        1: {
+            "points": np.array([[6, 6], [10, 10], [24, 6]], dtype="float32"),
+            "point_labels": np.array([1, 1, 0], dtype="int32")
+        },
         2: {"points": np.array([[24, 6]], dtype="float32"), "point_labels": np.array([1], dtype="int32")},
     }
     batch = [(1, (slice(4, 12), slice(4, 12))), (2, (slice(4, 12), slice(20, 28)))]
@@ -1073,8 +1075,7 @@ class _RecordingPropagator:
     def add_box_prompts(self, frame_ids, boxes=None, object_id=None):
         self.pushed.append(("box", int(frame_ids), int(object_id), np.asarray(boxes[0]).tolist()))
 
-    def add_prompt_set(self, frame_id, points=None, point_labels=None, box=None, object_id=1,
-                       clear_old_points=True):
+    def add_prompt_set(self, frame_id, points=None, point_labels=None, box=None, object_id=1, clear_old_points=True):
         self.pushed.append((
             "set", int(frame_id), int(object_id),
             None if points is None else np.asarray(points).tolist(),
@@ -1448,8 +1449,9 @@ def test_refined_conditioning_reaches_the_real_propagator(monkeypatch):
         def __init__(self):
             self.calls = []
 
-        def add_new_points_or_box(self, inference_state, frame_idx, obj_id, clear_old_points=False,
-                                  points=None, labels=None, box=None):
+        def add_new_points_or_box(
+            self, inference_state, frame_idx, obj_id, clear_old_points=False, points=None, labels=None, box=None
+        ):
             if points is not None:
                 torch.tensor(points, dtype=torch.float32)
             if labels is not None:
@@ -1512,8 +1514,9 @@ def test_every_conditioning_a_mode_produces_is_pushable(monkeypatch, refinement,
         def __init__(self):
             self.pushed = 0
 
-        def add_new_points_or_box(self, inference_state, frame_idx, obj_id, clear_old_points=False,
-                                  points=None, labels=None, box=None):
+        def add_new_points_or_box(
+            self, inference_state, frame_idx, obj_id, clear_old_points=False, points=None, labels=None, box=None
+        ):
             for array, dtype in ((points, torch.float32), (labels, torch.int32), (box, torch.float32)):
                 if array is not None:
                     torch.tensor(array, dtype=dtype)

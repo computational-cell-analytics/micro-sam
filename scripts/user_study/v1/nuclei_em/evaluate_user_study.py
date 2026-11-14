@@ -2,8 +2,8 @@ import os
 import pandas as pd
 
 import h5py
-import imageio.v3 as imageio
 import numpy as np
+import imageio.v3 as imageio
 
 from elf.evaluation import mean_segmentation_accuracy
 

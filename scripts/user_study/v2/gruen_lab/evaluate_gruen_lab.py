@@ -11,20 +11,20 @@ import os
 import argparse
 
 import h5py
+import tifffile
 import numpy as np
 import pandas as pd
-import tifffile
 import imageio.v3 as imageio
 
 import torch
 
 from elf.evaluation import mean_segmentation_accuracy
 
-from micro_sam.v2.models.util import joint_unetr_state
 from micro_sam.v2.normalization import normalize_raw
-from micro_sam.v2.util import get_sam2_model, get_sam2_image_predictor, _download_finetuned_sam2_model
-from micro_sam.v2.instance_segmentation import get_decoder, get_instance_segmentation_generator
+from micro_sam.v2.models.util import joint_unetr_state
 from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation
+from micro_sam.v2.instance_segmentation import get_decoder, get_instance_segmentation_generator
+from micro_sam.v2.util import get_sam2_model, get_sam2_image_predictor, _download_finetuned_sam2_model
 from micro_sam.v2.evaluation.inference import (
     get_prediction_dir_2d, get_prediction_paths_3d, run_interactive_segmentation_2d, run_interactive_segmentation_3d,
 )

@@ -207,8 +207,10 @@ def warn_missing_envs(envs: set) -> None:
         return
     missing = sorted(env for env in envs if env not in known)
     if missing:
-        print(f"Warning: these environments do not exist here: {', '.join(missing)}. "
-              f"Their jobs will fail on import. Override with --env.")
+        print(
+            f"Warning: these environments do not exist here: {', '.join(missing)}. "
+            f"Their jobs will fail on import. Override with --env."
+        )
 
 
 def modality_of(dataset_name: str) -> str:
@@ -424,8 +426,10 @@ def submit_job(script: Path, after: Optional[list] = None) -> Optional[str]:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("-d", "--data", nargs="+", default=None, choices=DATASETS,
-                        help="Datasets to evaluate. Required unless --all_datasets is set.")
+    parser.add_argument(
+        "-d", "--data", nargs="+", default=None, choices=DATASETS,
+        help="Datasets to evaluate. Required unless --all_datasets is set."
+    )
     parser.add_argument("--all_datasets", action="store_true", help="Evaluate every dataset of the selection.")
     parser.add_argument(
         "--supplementary", action="store_true",
@@ -438,18 +442,25 @@ def main():
     )
     parser.add_argument("--ndim", type=int, default=None, choices=(2, 3), help="Restrict to a dimensionality.")
     parser.add_argument("--segmentation_type", required=True, choices=("automatic", "interactive"))
-    parser.add_argument("--segmentation_mode", nargs="+", default=["ais"], choices=SEGMENTATION_MODES,
-                        help="The micro-sam2 automatic modes to run. One job group per mode.")
-    parser.add_argument("--method", nargs="+", default=None,
-                        help="Evaluate these baselines instead of micro-sam2. One job group per method.")
-    parser.add_argument("-m", "--model_type", nargs="+", default=None,
-                        help="Model types to evaluate. One job group per model type.")
+    parser.add_argument(
+        "--segmentation_mode", nargs="+", default=["ais"], choices=SEGMENTATION_MODES,
+        help="The micro-sam2 automatic modes to run. One job group per mode."
+    )
+    parser.add_argument(
+        "--method", nargs="+", default=None,
+        help="Evaluate these baselines instead of micro-sam2. One job group per method."
+    )
+    parser.add_argument(
+        "-m", "--model_type", nargs="+", default=None, help="Model types to evaluate. One job group per model type."
+    )
     parser.add_argument("-e", "--experiment_folder", type=str, default=EXPERIMENT_FOLDER)
     parser.add_argument("--data_root", type=str, default=DATA_ROOT, help="The root the data lives in.")
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Override the default checkpoint.")
-    parser.add_argument("--joint_checkpoint", type=str, default="best",
-                        help="Name of the joint trainer checkpoint the micro-sam2 weights are taken from, "
-                             "without the '.pt' suffix, e.g. 'best' or the name of a frozen copy.")
+    parser.add_argument(
+        "--joint_checkpoint", type=str, default="best",
+        help="Name of the joint trainer checkpoint the micro-sam2 weights are taken from, "
+             "without the '.pt' suffix, e.g. 'best' or the name of a frozen copy."
+    )
     parser.add_argument(
         "--registry_model", type=str, default=None,
         help="Evaluate the micro-sam2 registry models of this family, e.g. 'em_mito' or 'em_nuclei', instead of "
@@ -473,19 +484,27 @@ def main():
     parser.add_argument("--use_masks", action="store_true", help="microsam_vol only. Feed the previous masks back.")
     parser.add_argument("--n_workers", type=int, default=4, help="microsam_vol only. The volumes segmented at once.")
     parser.add_argument("--seed", type=int, default=0, help="microsam_vol only. The seed of a random start slice.")
-    parser.add_argument("--min_size", type=int, default=0,
-                        help="Drop ground-truth objects below this many pixels. The right value is dataset specific.")
+    parser.add_argument(
+        "--min_size", type=int, default=0,
+        help="Drop ground-truth objects below this many pixels. The right value is dataset specific."
+    )
     parser.add_argument("--partition", type=str, default=PARTITION, help="Slurm partition(s) to submit to.")
-    parser.add_argument("--gpu", type=str, default=None,
-                        help=f"Slurm GPU spec. Defaults to {GPU_2D} for 2d jobs and {GPU_3D} for 3d ones.")
-    parser.add_argument("--memory", default=None,
-                        help=f"Memory per job. Defaults to {MEMORY_2D} for 2d jobs and {MEMORY_3D} for 3d ones.")
+    parser.add_argument(
+        "--gpu", type=str, default=None,
+        help=f"Slurm GPU spec. Defaults to {GPU_2D} for 2d jobs and {GPU_3D} for 3d ones."
+    )
+    parser.add_argument(
+        "--memory", default=None,
+        help=f"Memory per job. Defaults to {MEMORY_2D} for 2d jobs and {MEMORY_3D} for 3d ones."
+    )
     parser.add_argument("--time_limit", type=str, default=TIME_LIMIT, help="Slurm time limit per job.")
     parser.add_argument("--qos", type=str, default=None, help="Slurm QoS. Use '2h' with --time_limit 02:00:00.")
     parser.add_argument("--max_concurrent", type=int, default=MAX_CONCURRENT, help="Array tasks that run at once.")
-    parser.add_argument("--env", type=str, default=None,
-                        help=f"Conda environment every job activates. Defaults to {DEFAULT_ENV}, "
-                             "or the method-specific one in METHOD_ENV.")
+    parser.add_argument(
+        "--env", type=str, default=None,
+        help=f"Conda environment every job activates. Defaults to {DEFAULT_ENV}, "
+             "or the method-specific one in METHOD_ENV."
+    )
     parser.add_argument("--dry", action="store_true", help="Only write the Slurm scripts; do not submit them.")
     args = parser.parse_args()
 

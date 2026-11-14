@@ -403,8 +403,9 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
             self.optimizer.zero_grad()
 
             with forward_context():
-                (loss, mask_loss, iou_regression_loss, model_iou,
-                 sampled_binary_y) = self._interactive_train_iteration(x, y)
+                (
+                    loss, mask_loss, iou_regression_loss, model_iou, sampled_binary_y
+                ) = self._interactive_train_iteration(x, y)
 
             backprop(loss)
 
@@ -459,8 +460,9 @@ class SamTrainer(torch_em.trainer.DefaultTrainer):
                 input_check_done = self._check_input_normalization(x, input_check_done)
 
                 with forward_context():
-                    (loss, mask_loss, iou_regression_loss, model_iou,
-                     sampled_binary_y, metric) = self._interactive_val_iteration(x, y, val_iteration)
+                    (
+                        loss, mask_loss, iou_regression_loss, model_iou, sampled_binary_y, metric
+                    ) = self._interactive_val_iteration(x, y, val_iteration)
 
                 loss_val += loss.item()
                 metric_val += metric.item()

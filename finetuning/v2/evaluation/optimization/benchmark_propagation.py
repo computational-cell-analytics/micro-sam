@@ -22,9 +22,9 @@ import numpy as np
 
 import torch
 
-from micro_sam.v2.util import get_sam2_model, precompute_image_embeddings, FINETUNED_MODELS
 from micro_sam.v2.models._video_predictor import CustomVideoPredictor
 from micro_sam.v2.prompt_based_segmentation import TiledPromptableSegmentation3D
+from micro_sam.v2.util import get_sam2_model, precompute_image_embeddings, FINETUNED_MODELS
 
 EVALUATION_ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, EVALUATION_ROOT)

@@ -1,8 +1,8 @@
 """Wrapper for ensuring all inputs are in a 3d pyramid structure for training UniSAM2.
 """
 
-import numpy as np
 import torch
+import numpy as np
 
 
 def _leaves(ds):

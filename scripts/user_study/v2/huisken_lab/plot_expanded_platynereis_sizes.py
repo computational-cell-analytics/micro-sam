@@ -15,12 +15,12 @@ Usage:
 import os
 import argparse
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
+import matplotlib.pyplot as plt  # noqa
 
 TABLE_PATH = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/expanded_platynereis_export/nucleus_sizes_s0.csv"
 UNIT_NAMES = {"um": "µm", "micrometer": "µm", "nanometer": "nm", "millimeter": "mm"}

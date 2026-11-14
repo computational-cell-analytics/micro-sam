@@ -3,10 +3,10 @@
 
 import os
 import warnings
-import multiprocessing as mp
-import xml.etree.ElementTree as ET
 from pathlib import Path
+import multiprocessing as mp
 from concurrent import futures
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from importlib.util import find_spec
 from typing import Dict, List, Optional, Union, Tuple

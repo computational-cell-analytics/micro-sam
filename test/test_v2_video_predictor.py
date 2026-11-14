@@ -1,9 +1,9 @@
 import contextlib
 from types import SimpleNamespace
 
-import numpy as np
-import pytest
 import torch
+import pytest
+import numpy as np
 
 from micro_sam.v2.models._video_predictor import _volume_geometry
 
@@ -261,8 +261,10 @@ def test_autocast_is_used_on_cuda_only(monkeypatch):
 
 @pytest.mark.parametrize(
     "capability, expected",
-    [((9, 0), torch.bfloat16), ((8, 0), torch.bfloat16), ((7, 5), torch.float16),
-     ((7, 0), torch.float16), ((6, 1), None), ((6, 0), None)],
+    [
+        ((9, 0), torch.bfloat16), ((8, 0), torch.bfloat16), ((7, 5), torch.float16),
+        ((7, 0), torch.float16), ((6, 1), None), ((6, 0), None)
+    ],
 )
 def test_the_precision_follows_the_compute_capability(monkeypatch, capability, expected):
     """bfloat16 from Ampere, float16 from Volta, fp32 below that, where there are no tensor cores."""

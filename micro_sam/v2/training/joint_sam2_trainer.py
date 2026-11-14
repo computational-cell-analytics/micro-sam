@@ -8,8 +8,8 @@ import numpy as np
 
 import torch
 import torch.distributed as dist
-from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 from torch.utils.tensorboard import SummaryWriter
+from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 
 from torch_em.trainer.logger_base import TorchEmLogger
 
@@ -349,8 +349,10 @@ class JointSam2Logger(TorchEmLogger):
         im, im_name = make_grid_image(image, y_dist, pred, selection, gradients)
         self.tb.add_image(f"{prefix}/automatic/{im_name}", im, step)
 
-    def log_train(self, step, total_loss, lr, interactive_loss, auto_loss,
-                  x=None, y=None, batch=None, outputs=None, y_dist=None, pred=None):
+    def log_train(
+        self, step, total_loss, lr, interactive_loss, auto_loss,
+        x=None, y=None, batch=None, outputs=None, y_dist=None, pred=None
+    ):
         if self.tb is None:
             return
         self.tb.add_scalar("train/total_loss", total_loss, global_step=step)

@@ -463,8 +463,10 @@ def plot_interactive_qualitative(region=None, right=None, beke=False):
 
 # One movie per column of panel a, where micro-sam2 has fewer tracking errors than CellposeSAM.
 AUTOMATIC_QUALITATIVE = [
-    ("DynamicNuclearNet", "3T3_nuc_s2_p1_1c", "DynamicNuclearNet_3T3_nuc_s2_p1_1c_stretch1.4", "ID",
-     "DynamicNuclearNet", 2),
+    (
+        "DynamicNuclearNet", "3T3_nuc_s2_p1_1c", "DynamicNuclearNet_3T3_nuc_s2_p1_1c_stretch1.4", "ID",
+        "DynamicNuclearNet", 2
+    ),
     ("WingDisc", "Ecd_20150608_P1", "WingDisc_Ecd_20150608_P1_window0.35", "OOD", "Wing disc", 2),
     ("Fluo-N3DH-SIM+", "1", "Fluo-N3DH-SIM+_01_floor", "OOD", "Fluo-N3DH-SIM+", 3),
 ]

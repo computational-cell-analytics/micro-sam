@@ -1,21 +1,21 @@
 import platform
 
-import numpy as np
 import pytest
-from napari.layers import Points, Shapes
+import numpy as np
 from skimage.data import binary_blobs
+from napari.layers import Points, Shapes
 
 from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator import annotator_tracking
 from micro_sam.sam_annotator._tooltips import get_tooltip
+from micro_sam._test_util import check_layer_initialization
+from micro_sam.sam_annotator.util import _validate_sam2_model_type
+from micro_sam.sam_annotator.annotator_tracking import AnnotatorTracking
 from micro_sam.sam_annotator._widgets import (
     AutoSegmentWidget,
     AutoTrackWidget,
     EmbeddingWidget,
 )
-from micro_sam.sam_annotator.util import _validate_sam2_model_type
-from micro_sam.sam_annotator.annotator_tracking import AnnotatorTracking
-from micro_sam._test_util import check_layer_initialization
 
 
 @pytest.mark.gui

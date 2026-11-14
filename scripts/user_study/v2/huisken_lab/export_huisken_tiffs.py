@@ -3,7 +3,7 @@
 Each time point is one ZYX tiff stack, with the voxel size in the ImageJ metadata:
 
     <output_folder>/<version>/tracked_nuclei/t000.tif ...  # the nuclei, the id of each nucleus is its track id
-    <output_folder>/<version>/cells/t000.tif ...           # the cells of the membrane segmentation
+    <output_folder>/<version>/cells/t000.tif ...  # the cells of the membrane segmentation
     <output_folder>/<version>/tracked_nuclei/res_track.txt  # the lineage in the CTC format
 
 The lineage file has one row per track: track_id t_start t_end parent_id, where parent_id 0 means no parent.
@@ -17,8 +17,8 @@ import os
 import argparse
 
 import h5py
-import numpy as np
 import tifffile
+import numpy as np
 
 from analyze_huisken_volume_ratio import DATA_DIR, VERSIONS
 

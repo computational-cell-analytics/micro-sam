@@ -551,10 +551,14 @@ def merge_test(output_dir, name, key, min_overlap, min_size, plot_path, margin=4
         if overlap >= 0.05:
             merge = "merge" if overlap >= min_overlap else "keep"
             print(f"{a} - {b}: overlap {overlap:.2f}, {sizes[a] / 1e3:.0f}k + {sizes[b] / 1e3:.0f}k voxels, {merge}")
-    count = {"input": len(np.unique(segmentation)) - 1, "merged": len(np.unique(merged)) - 1,
-             "cleaned": len(np.unique(cleaned)) - 1}
-    print(f"{name} {key}: {count['input']} objects, {count['merged']} after merging {len(groups)} groups, "
-          f"{count['cleaned']} after removing the objects below {min_size:.0e} voxels")
+    count = {
+        "input": len(np.unique(segmentation)) - 1, "merged": len(np.unique(merged)) - 1,
+        "cleaned": len(np.unique(cleaned)) - 1
+    }
+    print(
+        f"{name} {key}: {count['input']} objects, {count['merged']} after merging {len(groups)} groups, "
+        f"{count['cleaned']} after removing the objects below {min_size:.0e} voxels"
+    )
 
     # One column per merged group: the xz and yz plane through the group center, before and after the merge.
     rng = np.random.default_rng(0)
@@ -772,8 +776,10 @@ def stitch_full(zarr_path, plot_path):
     merged, _, groups = merge_z_stacked(stitched, MIN_OVERLAP)
     del stitched
     cleaned = remove_small(merged, MIN_SIZE, copy=False)
-    print(f"Merged {len(groups)} groups, {len(np.unique(cleaned)) - 1} objects of at least {MIN_SIZE:.0e} voxels, "
-          f"{time.time() - t0:.0f} s")
+    print(
+        f"Merged {len(groups)} groups, {len(np.unique(cleaned)) - 1} objects of at least {MIN_SIZE:.0e} voxels, "
+        f"{time.time() - t0:.0f} s"
+    )
     add_nuclei_labels(zarr_path, cleaned)
     plot_full(zarr_path, cleaned, "nuclei", plot_path)
 
@@ -947,8 +953,9 @@ def render_section(zarr_path, out_dir, s0_z, height=12):
                 dimensions=(rgb.shape[1], rgb.shape[0], 1), spacing=(step, step, 1.0), origin=(x0, y0, z_plane)
             )
             grid.point_data["rgb"] = (rgb.reshape(-1, 3) * 255).astype("uint8")
-            plotter.add_mesh(grid, scalars="rgb", rgb=True, ambient=1.0, diffuse=0.0, specular=0.0,
-                             show_scalar_bar=False)
+            plotter.add_mesh(
+                grid, scalars="rgb", rgb=True, ambient=1.0, diffuse=0.0, specular=0.0, show_scalar_bar=False
+            )
         return add
 
     # b: the nuclei that cross the plane, cut at the plane, on its raw. The camera is from above, tilted a little

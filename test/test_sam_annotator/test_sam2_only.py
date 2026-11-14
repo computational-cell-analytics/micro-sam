@@ -1,7 +1,7 @@
 """The segmentation and tracking annotators support only SAM2. The classification tools also support SAM1."""
 
-import numpy as np
 import pytest
+import numpy as np
 
 from micro_sam.sam_annotator import _widgets as widgets
 from micro_sam.sam_annotator.annotator import annotator

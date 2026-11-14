@@ -3,14 +3,14 @@ import unittest
 from copy import deepcopy
 
 import pytest
+import numpy as np
 import micro_sam.util as util
 from micro_sam.v1.util import get_sam_model, precompute_image_embeddings
-import numpy as np
 from micro_sam.v1.instance_segmentation import get_predictor_and_decoder
 
-from elf.evaluation.matching import matching
 from skimage.draw import disk
 from skimage.measure import label
+from elf.evaluation.matching import matching
 
 pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
 

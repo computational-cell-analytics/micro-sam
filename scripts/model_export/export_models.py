@@ -8,8 +8,8 @@ import argparse
 from glob import glob
 
 import h5py
-from skimage.measure import label
 import imageio.v3 as imageio
+from skimage.measure import label
 
 import bioimageio.spec.model.v0_5 as spec
 

@@ -5,12 +5,19 @@ encoder pass) and populated with hand-built state, so the tests exercise `get_st
 the serialization helpers and the staleness guards without loading a SAM2 checkpoint.
 """
 
-import numpy as np
-import pytest
 import torch
+import pytest
+import numpy as np
 from bioimage_cpp.utils import Blocking
 from sam2.utils.amg import mask_to_rle_pytorch
 
+from micro_sam.util import _open_embeddings, _create_dataset_with_data
+from micro_sam.v2.instance_segmentation import (
+    UniSAM2InstanceSegmentation,
+    AutomaticMaskGenerationSegmenter,
+    TiledAutomaticMaskGenerationSegmenter,
+    _LazyRLEMask,
+)
 from micro_sam.precompute_state import (
     AUTOSEG_STATE_ATTRIBUTE,
     AUTOSEG_STATE_GROUP,
@@ -26,13 +33,6 @@ from micro_sam.precompute_state import (
     _signature_matches,
     cache_autoseg_state,
     save_ais_state,
-)
-from micro_sam.util import _open_embeddings, _create_dataset_with_data
-from micro_sam.v2.instance_segmentation import (
-    UniSAM2InstanceSegmentation,
-    AutomaticMaskGenerationSegmenter,
-    TiledAutomaticMaskGenerationSegmenter,
-    _LazyRLEMask,
 )
 
 DEFAULT_AMG_PARAMS = {
@@ -169,9 +169,9 @@ def test_ais_serialization_and_staleness_guard(tmp_path):
 
     assert np.array_equal(loaded["prediction"], prediction)
     assert loaded["model_type"] == "hvit_t_cells"
-    assert _ais_state_matches(loaded, "hvit_t_cells")          # same model -> reuse
-    assert not _ais_state_matches(loaded, "hvit_t_other")      # different model -> recompute
-    assert _ais_state_matches(loaded, None)                    # unknown request -> reuse
+    assert _ais_state_matches(loaded, "hvit_t_cells")  # same model -> reuse
+    assert not _ais_state_matches(loaded, "hvit_t_other")  # different model -> recompute
+    assert _ais_state_matches(loaded, None)  # unknown request -> reuse
     assert _ais_state_matches({"prediction": prediction}, "hvit_t_cells")  # legacy (no signature) -> reuse
 
 
@@ -188,9 +188,9 @@ def test_save_existing_ais_state(tmp_path):
 
 def test_signature_matches():
     assert _signature_matches("a", "a")
-    assert not _signature_matches("a", "b")   # both known and different -> stale
-    assert _signature_matches(None, "a")      # cached unknown (legacy) -> reuse
-    assert _signature_matches("a", None)      # requested unknown -> reuse
+    assert not _signature_matches("a", "b")  # both known and different -> stale
+    assert _signature_matches(None, "a")  # cached unknown (legacy) -> reuse
+    assert _signature_matches("a", None)  # requested unknown -> reuse
     assert _signature_matches(None, None)
 
 
