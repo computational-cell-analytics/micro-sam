@@ -8,7 +8,11 @@ tooltips = {
             "GPU; it is refined per GPU when the embeddings are computed, unless you enter a value yourself."
         ),
         "cache_state": "Cache the automatic segmentation state to disk for faster (re)runs.",
-        "custom_weights": "Select custom model weights, for example from a model that you finetuned.",
+        "custom_weights": (
+            "Select custom model weights, for example from a model that you finetuned. For automatic segmentation, "
+            "select a checkpoint with a decoder (e.g. 'best.pt'), or a model file with its decoder file next to it "
+            "(e.g. 'hvit_t_cells.pt' and 'hvit_t_cells_decoder.pt')."
+        ),
         "device": "Select the computational device to use for processing. 'auto' picks the best available device and uses all visible GPUs; selecting a device runs on that one only.",  # noqa
         "embeddings_save_path": "Select path to save or load the computed image embeddings.",
         "halo": "Enter overlap values to compute tiled embeddings. Enter only the x-value for a square size.\n Active only when you use tiling.",  # noqa

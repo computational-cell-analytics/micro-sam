@@ -23,6 +23,7 @@ Both engines share the `initialize` / `generate` / `get_state` / `set_state` int
 
 import shutil
 import contextlib
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -32,12 +33,12 @@ import torch
 from bioimage_cpp.utils import Blocking
 
 from micro_sam.v1.inference import _merge_segmentations
-from micro_sam.util import AutoSegBase, make_temp_embedding_path, mask_data_to_segmentation
 from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
 from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
+from micro_sam.util import AutoSegBase, load_checkpoint, make_temp_embedding_path, mask_data_to_segmentation
 from micro_sam.v2.util import (
     autocast, precompute_image_embeddings, set_precomputed, to_float32, _load_list_datasets,
-    _DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, Devices, UNISAM2_OUTPUT_CHANNELS,
+    DEFAULT_BASE_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, Devices, UNISAM2_OUTPUT_CHANNELS,
 )
 
 DEFAULT_SEGMENTATION_MODE_WITH_DECODER = "ais"
@@ -734,7 +735,39 @@ def _check_decoder_width(model, initial_features):
     )
 
 
-def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, peft_kwargs=None, encoder_model_type=None):
+class NoDecoderError(ValueError):
+    """The checkpoint has no decoder, because the model was trained for interactive segmentation only."""
+
+    def __init__(self, checkpoint_path):
+        super().__init__(
+            f"The checkpoint '{checkpoint_path}' has no decoder for automatic segmentation, because the model was "
+            "trained for interactive segmentation only. Automatic segmentation is not available with it. "
+            "Train the model with 'train_automatic' or with joint training to get a decoder."
+        )
+
+
+def find_decoder_checkpoint(checkpoint_path):
+    """Find the decoder file that belongs to a model file.
+
+    The decoder file is next to the model file and has the name of the model file with '_decoder' added,
+    for example 'hvit_t_cells_decoder.pt' for 'hvit_t_cells.pt' or 'hvit_t_cells_decoder' for 'hvit_t_cells'.
+
+    Args:
+        checkpoint_path: The path of the model file.
+
+    Returns:
+        The path of the decoder file, or None if there is no decoder file.
+    """
+    path = Path(checkpoint_path)
+    candidates = [path.with_name(f"{path.stem}_decoder{path.suffix}"), path.with_name(f"{path.stem}_decoder.pt")]
+    if path.suffix:
+        candidates.append(path.with_name(f"{path.stem}_decoder"))
+    return next((str(candidate) for candidate in candidates if candidate.is_file()), None)
+
+
+def get_unisam2_model(
+    checkpoint_path, device=None, encoder=DEFAULT_BASE_MODEL, peft_kwargs=None, encoder_model_type=None
+):
     """Load a UniSAM2 model for automatic segmentation from a checkpoint.
 
     Args:
@@ -748,6 +781,9 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, peft
 
     Returns:
         The UniSAM2 model in eval mode.
+
+    Raises:
+        NoDecoderError: If the checkpoint has no decoder, because it was trained for interactive segmentation only.
     """
     from micro_sam.v2.models.util import UniSAM2, joint_unetr_state
 
@@ -755,7 +791,7 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, peft
     resolved_model_type = encoder if isinstance(encoder, str) else encoder_model_type
 
     device = "cpu" if device is None else device
-    state = torch.load(checkpoint_path, weights_only=False, map_location=device)
+    state = load_checkpoint(checkpoint_path, map_location=device)
     # A joint checkpoint holds the interactive model and the decoder, see joint_unetr_state.
     if isinstance(state, dict) and ("decoder_state" in state or "unetr_state" in state):
         model_state = joint_unetr_state(state)
@@ -763,6 +799,8 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, peft
         model_state = state.get("model_state", state)
     else:
         model_state = state
+    if not isinstance(model_state, dict) or "out_conv.weight" not in model_state:
+        raise NoDecoderError(checkpoint_path)
 
     if peft_kwargs is None and isinstance(state, dict) and state.get("peft_kwargs") is not None:
         from micro_sam.v2.models.peft_sam2 import PEFT_MODULES
@@ -770,12 +808,16 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, peft
 
         peft_kwargs = deserialize_peft_kwargs(state["peft_kwargs"], PEFT_MODULES)
 
-    is_qlora = False
+    is_qlora = bool(peft_kwargs and peft_kwargs.get("quantize", False))
+    # A prebuilt encoder with the PEFT layers of the checkpoint is reused, so that no base backbone is built.
+    if peft_kwargs and not is_qlora and isinstance(encoder, torch.nn.Module):
+        encoder_keys = {"encoder.inner." + k for k in encoder.state_dict()}
+        if encoder_keys == {k for k in model_state if k.startswith("encoder.inner.")}:
+            peft_kwargs = None
     if peft_kwargs:
         from micro_sam.v2.util import get_sam2_model
         from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
 
-        is_qlora = bool(peft_kwargs.get("quantize", False))
         peft_kwargs = {k: v for k, v in peft_kwargs.items() if k != "quantize"}
         base_model_type = encoder if isinstance(encoder, str) else encoder_model_type
         if base_model_type is None:
@@ -808,11 +850,13 @@ def get_decoder(model_type, checkpoint=None, device=None, encoder=None):
 
     The decoder is provided either by an explicit `checkpoint` or by a finetuned model with a
     registered decoder (e.g. 'hvit_t_cells'). Mirrors the micro-sam v1 `get_decoder`.
+    If `checkpoint` has no decoder, the decoder file next to it is used, see `find_decoder_checkpoint`.
 
     Args:
         model_type: The SAM2 model. A finetuned model with a registered decoder, or a base backbone
             combined with `checkpoint`.
-        checkpoint: Optional path to a decoder checkpoint to build the UniSAM2 decoder from.
+        checkpoint: Optional path to a decoder checkpoint to build the UniSAM2 decoder from. This can also be
+            a joint checkpoint, or a model file with its decoder file next to it.
         device: The device to load the decoder onto.
         encoder: Optional prebuilt SAM2 image-encoder module to build the decoder on, reused instead
             of rebuilding the base backbone (its weights are redefined by the checkpoint's strict
@@ -820,6 +864,9 @@ def get_decoder(model_type, checkpoint=None, device=None, encoder=None):
 
     Returns:
         The UniSAM2 decoder model.
+
+    Raises:
+        NoDecoderError: If `checkpoint` has no decoder and there is no decoder file next to it.
     """
     from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
 
@@ -835,7 +882,17 @@ def get_decoder(model_type, checkpoint=None, device=None, encoder=None):
             f"Automatic segmentation with SAM2 requires a finetuned model with a registered decoder "
             f"or a decoder checkpoint. '{model_type}' provides neither."
         )
-    decoder = get_unisam2_model(decoder_source, device=device, encoder=encoder, encoder_model_type=model_type[:6])
+
+    def _load(source):
+        return get_unisam2_model(source, device=device, encoder=encoder, encoder_model_type=model_type[:6])
+
+    try:
+        decoder = _load(decoder_source)
+    except NoDecoderError:
+        decoder_source = None if checkpoint is None else find_decoder_checkpoint(checkpoint)
+        if decoder_source is None:
+            raise
+        decoder = _load(decoder_source)
     # The defaults are looked up by the family of the full name.
     decoder.model_type = model_type
     return decoder
@@ -1091,7 +1148,7 @@ class UniSAM2InstanceSegmentation(AutoSegBase):
         self._model = model
         # 'model_type' can be unset on a manually assembled module; the postprocessing defaults need
         # a concrete backbone to look up, so fall back to the single-source default rather than None.
-        self._model_type = getattr(model, "model_type", None) or _DEFAULT_MODEL
+        self._model_type = getattr(model, "model_type", None) or DEFAULT_BASE_MODEL
         self._device = device
         self._inference_device = device if inference_device is USE_MODEL_DEVICE else inference_device
         self._prediction = None

@@ -174,7 +174,7 @@ class ImageEmbeddings(dict):
 sys.path.append(str(Path(sam2.__file__).parents[0]))
 
 
-_DEFAULT_MODEL = "hvit_t"
+DEFAULT_BASE_MODEL = "hvit_t"
 
 # Only SAM2.1 is supported.
 CFG_PATHS = {
@@ -534,11 +534,19 @@ def _get_device(device=None):
     return device
 
 
-def _get_checkpoint(model_type=_DEFAULT_MODEL):
+def _get_checkpoint(model_type=DEFAULT_BASE_MODEL):
     return pooch.retrieve(
         url=URLS[model_type], known_hash=HASHES[model_type], fname=model_type, path=get_model_cache_directory(),
         progressbar=True,
     )
+
+
+def _get_registry_checkpoint(model_type):
+    """Download the weights of a model name: finetuned micro-sam weights or a base SAM2 backbone."""
+    if model_type in FINETUNED_MODELS:
+        checkpoint_path, _, _ = _download_finetuned_sam2_model(model_type)
+        return checkpoint_path
+    return _get_checkpoint(model_type=model_type)
 
 
 def _build_sam2_backbone(model_cfg, checkpoint_path, device, input_type):
@@ -550,52 +558,99 @@ def _build_sam2_backbone(model_cfg, checkpoint_path, device, input_type):
     return _build_sam2_video_predictor(config_file=model_cfg, ckpt_path=checkpoint_path, device=device)
 
 
-def _load_peft_finetuned_sam2(model_cfg, model_type, input_type, finetuned_checkpoint, device, peft_kwargs, state=None):
-    """Build a SAM2 model and load weights from PEFT.
+# The (embedding dimension, number of blocks) of the Hiera trunk of each SAM2 backbone.
+BACKBONE_SIGNATURES = {(96, 12): "hvit_t", (96, 16): "hvit_s", (112, 24): "hvit_b", (144, 48): "hvit_l"}
 
-    The function applies the PEFT method before it loads the added parameters.
+
+def _read_sam2_checkpoint(checkpoint_path):
+    """Read a SAM2 checkpoint.
+
+    Args:
+        checkpoint_path: The path to the checkpoint. It holds the weights directly, or under 'model'
+            (the SAM2 and registry format) or 'model_state' (the training format). A UniSAM2 decoder
+            checkpoint holds only the image encoder of the SAM2 model.
+
+    Returns:
+        The full checkpoint, the weights of the SAM2 model, and whether these are only the image encoder.
+
+    Raises:
+        ValueError: If the checkpoint holds no SAM2 image encoder.
+    """
+    from ..util import load_checkpoint
+
+    state = load_checkpoint(checkpoint_path)
+    model_state = state
+    if isinstance(state, dict):
+        for key in ("model", "model_state"):
+            if isinstance(state.get(key), dict):
+                model_state = state[key]
+                break
+    model_state = {(k[len("module."):] if k.startswith("module.") else k): v for k, v in model_state.items()}
+
+    encoder_only = "image_encoder.trunk.patch_embed.proj.weight" not in model_state
+    if encoder_only:
+        # UniSAM2 holds the SAM2 image encoder under 'encoder.inner'.
+        prefix = "encoder.inner."
+        model_state = {"image_encoder." + k[len(prefix):]: v for k, v in model_state.items() if k.startswith(prefix)}
+    if "image_encoder.trunk.patch_embed.proj.weight" not in model_state:
+        raise ValueError(f"'{checkpoint_path}' holds no SAM2 model.")
+    return state, model_state, encoder_only
+
+
+def detect_sam2_backbone(model_state: dict) -> str:
+    """Detect the SAM2 backbone of model weights from the shape of the Hiera trunk.
+
+    Args:
+        model_state: The weights of a SAM2 model, with or without PEFT.
+
+    Returns:
+        The backbone name, for example 'hvit_b'.
+
+    Raises:
+        ValueError: If the trunk matches no known backbone.
+    """
+    embed_dim = int(model_state["image_encoder.trunk.patch_embed.proj.weight"].shape[0])
+    prefix = "image_encoder.trunk.blocks."
+    n_blocks = 1 + max(int(k[len(prefix):].split(".")[0]) for k in model_state if k.startswith(prefix))
+    backbone = BACKBONE_SIGNATURES.get((embed_dim, n_blocks))
+    if backbone is None:
+        raise ValueError(f"No SAM2 backbone has {n_blocks} blocks with embedding dimension {embed_dim}.")
+    return backbone
+
+
+def _load_sam2_from_state(model_cfg, input_type, model_state, device, peft_kwargs=None):
+    """Build a SAM2 model and load all of its weights from a checkpoint, without the base weights.
+
+    The function applies the PEFT method before it loads the weights, so that the added parameters exist.
 
     Args:
         model_cfg: The SAM2 model config path.
-        model_type: The SAM2 model name. The first six characters select the base backbone.
         input_type: The input type, which is images or videos.
-        finetuned_checkpoint: The path to the PEFT checkpoint.
+        model_state: The weights of the SAM2 model.
         device: The pytorch device.
-        peft_kwargs: The arguments for `PEFT_Sam2`.
-        state: The checkpoint data. The function loads `finetuned_checkpoint` if this value is None.
+        peft_kwargs: The arguments for `PEFT_Sam2`, or None for a model without PEFT.
 
     Returns:
-        The PEFT SAM2 model with the finetuned weights loaded.
+        The SAM2 model with the weights loaded.
     """
-    from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
-
-    base_checkpoint = _get_checkpoint(model_type=model_type[:6])
-    model = _build_sam2_backbone(model_cfg, base_checkpoint, device, input_type)
-    model = PEFT_Sam2(model, **peft_kwargs).sam
-
-    if state is None:
-        state = torch.load(finetuned_checkpoint, map_location="cpu", weights_only=False)
-    if isinstance(state, dict) and "model" in state:
-        model_state = state["model"]
-    elif isinstance(state, dict) and "model_state" in state:
-        model_state = state["model_state"]
-    else:
-        model_state = state
-    model_state = {(k[len("module."):] if k.startswith("module.") else k): v for k, v in model_state.items()}
+    # The checkpoint defines every weight, so the base weights are not loaded or downloaded.
+    model = _build_sam2_backbone(model_cfg, None, device, input_type)
+    if peft_kwargs:
+        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
+        model = PEFT_Sam2(model, **peft_kwargs).sam
 
     try:
         model.load_state_dict(model_state)
     except RuntimeError as e:
-        raise RuntimeError(
-            f"The PEFT weights do not match peft_kwargs={peft_kwargs}. Pass the settings that the training used."
-        ) from e
+        hint = f"Pass the PEFT settings of the training, not peft_kwargs={peft_kwargs}." if peft_kwargs else ""
+        raise RuntimeError(f"The checkpoint does not match the SAM2 model. {hint}") from e
     model.to(device)
     model.eval()
     return model
 
 
 def get_sam2_model(
-    model_type: str = _DEFAULT_MODEL,
+    model_type: str = DEFAULT_BASE_MODEL,
     device: Optional[Union[torch.device, str]] = None,
     checkpoint_path: Optional[Union[os.PathLike, str]] = None,
     input_type: Literal["images", "videos"] = "images",
@@ -605,54 +660,53 @@ def get_sam2_model(
 
     Args:
         model_type: The choice of size for the vision transformer, eg. `hvit_t`. The default is `hvit_t` model.
+            With `checkpoint_path`, the backbone of the checkpoint replaces the backbone of this name.
         device: The pytorch device.
-        checkpoint_path: Filepath to the pretrained model weights.
+        checkpoint_path: Filepath to the model weights. The function then does not download the weights of
+            `model_type`.
         input_type: Whether the inputs are images or videos.
         peft_kwargs: The arguments for `PEFT_Sam2`. The function uses the arguments in the checkpoint by default.
 
     Returns:
         The SAM2 model.
     """
-    # The base SAM2 backbone is the first 6 characters of the name, e.g. 'hvit_t_cells' -> 'hvit_t'.
-    # Finetuned micro-sam weights come from the registry rather than the base SAM2 download.
-    is_finetuned = model_type in FINETUNED_MODELS
-    model_cfg = CFG_PATHS[model_type[:6]]
-
     device = _get_device(device)
 
     if input_type not in ("images", "videos"):
         raise ValueError(f"'{input_type}' is not a valid input type.")
 
-    user_provided_checkpoint = checkpoint_path is not None
-
+    model_hash = None
     if checkpoint_path is None:
-        if is_finetuned:
-            checkpoint_path, _, _ = _download_finetuned_sam2_model(model_type)
-        else:
-            checkpoint_path = _get_checkpoint(model_type=model_type)
+        checkpoint_path = _get_registry_checkpoint(model_type)
+    else:
+        # The cached embeddings of other weights with the same model name must not be reused.
+        from micro_sam.util import _compute_hash
+        model_hash = _compute_hash(checkpoint_path)
 
-    saved_state = None
-    if not peft_kwargs and user_provided_checkpoint:
+    state, model_state, encoder_only = _read_sam2_checkpoint(checkpoint_path)
+    backbone = detect_sam2_backbone(model_state)
+    if backbone != model_type[:6]:
+        print(f"The checkpoint holds a '{backbone}' model, so it is used instead of '{model_type[:6]}'.")
+        model_type = backbone + model_type[6:]
+    if encoder_only:
+        # The prompt encoder, mask decoder and memory come from the registry, the image encoder from the checkpoint.
+        base_type = model_type if model_type in FINETUNED_MODELS else backbone
+        _, base_state, _ = _read_sam2_checkpoint(_get_registry_checkpoint(base_type))
+        model_state = {**{k: v for k, v in base_state.items() if not k.startswith("image_encoder.")}, **model_state}
+
+    if not peft_kwargs and isinstance(state, dict) and state.get("peft_kwargs") is not None:
         from micro_sam.v2.models.peft_sam2 import PEFT_MODULES
         from micro_sam.models.peft import deserialize_peft_kwargs
-
-        saved_state = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-        if isinstance(saved_state, dict) and saved_state.get("peft_kwargs") is not None:
-            peft_kwargs = deserialize_peft_kwargs(saved_state["peft_kwargs"], PEFT_MODULES)
-        else:
-            saved_state = None
-
+        peft_kwargs = deserialize_peft_kwargs(state["peft_kwargs"], PEFT_MODULES)
     if peft_kwargs:
         peft_kwargs = {k: v for k, v in peft_kwargs.items() if k != "quantize"}
-        model = _load_peft_finetuned_sam2(
-            model_cfg, model_type, input_type, checkpoint_path, device, peft_kwargs, state=saved_state
-        )
-    else:
-        model = _build_sam2_backbone(model_cfg, checkpoint_path, device, input_type)
+
+    model = _load_sam2_from_state(CFG_PATHS[backbone], input_type, model_state, device, peft_kwargs)
 
     # Both predictor wrappers and direct model use need this metadata for embedding signatures.
     model.model_type = model_type
     model.model_name = model_type  # TODO: What is this exactly?
+    model._hash = model_hash
 
     return model
 
@@ -675,7 +729,9 @@ def export_custom_qlora_sam2_model(
     """
     sam = get_sam2_model(model_type=model_type, checkpoint_path=checkpoint_path, device="cpu")
 
-    ft_state = torch.load(finetuned_path, map_location="cpu", weights_only=False)
+    from ..util import load_checkpoint
+
+    ft_state = load_checkpoint(finetuned_path)
     if isinstance(ft_state, dict) and "model_state" in ft_state:
         ft_model_state = ft_state["model_state"]
     elif isinstance(ft_state, dict) and "model" in ft_state:
@@ -745,8 +801,16 @@ def configure_image_predictor(predictor):
 
 
 def get_sam2_image_predictor(model, **kwargs):
-    """Build a SAM2 image predictor with resize-longest preprocessing and the device precision."""
-    return configure_image_predictor(_PrecisionImagePredictor(model, **kwargs))
+    """Build a SAM2 image predictor with resize-longest preprocessing and the device precision.
+
+    The predictor takes the 'model_type', 'model_name' and '_hash' of a model from `get_sam2_model`,
+    which the embedding cache writes to its signature and checks.
+    """
+    predictor = configure_image_predictor(_PrecisionImagePredictor(model, **kwargs))
+    for name in ("model_type", "model_name", "_hash"):
+        if hasattr(model, name):
+            setattr(predictor, name, getattr(model, name))
+    return predictor
 
 
 def _predictor_device(predictor) -> torch.device:

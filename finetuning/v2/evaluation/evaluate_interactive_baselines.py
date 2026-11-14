@@ -31,8 +31,8 @@ from functools import lru_cache, partial
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 
 import torch
 from bioimage_cpp.segmentation import label as relabel_components
@@ -42,7 +42,8 @@ from micro_sam.v1.evaluation.inference import _get_batched_prompts
 
 from common import (
     CLICK_PROTOCOLS, DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_EM,
-    check_data_download, interactive_result_name, interactive_run_tag, interactive_sample_ids_3d, load_data, n_samples,
+    check_data_download, check_experiment_variables, interactive_result_name, interactive_run_tag,
+    interactive_sample_ids_3d, load_data, n_samples,
     run_dataset_evaluation,
 )
 
@@ -787,6 +788,7 @@ def main():
         help="Score the predictions of finished shards, and fail rather than predict if one is missing.",
     )
     args = parser.parse_args()
+    check_experiment_variables(args.experiment_folder)
 
     if (args.shard_index is None) != (args.n_shards is None):
         raise ValueError("--shard_index and --n_shards must be given together.")

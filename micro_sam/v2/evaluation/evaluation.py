@@ -3,8 +3,8 @@ from typing import Union, List
 
 import numpy as np
 import pandas as pd
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 
 from elf.evaluation import mean_segmentation_accuracy
 
@@ -23,10 +23,18 @@ def run_evaluation_for_iterative_prompting(
 ):
     """Run evaluation for predictions using iterative prompting for interactive segmentation.
 
+    The function computes the mean segmentation accuracy (mSA) and the segmentation accuracy at IoU 0.5 and 0.75
+    (SA50, SA75) for each iteration, averaged over all images. It saves the results as a csv file in
+    '<experiment_folder>/results/iterative_prompting_<with|without>_mask/start_with_<box|point>.csv'.
+    If this file exists, the function does nothing.
+
     Args:
-        labels:
-        prediction_fnames:
-        prediction_dir: The filepath where the predictions are stored.
+        labels: The ground-truth instance segmentations, one per image.
+        prediction_fnames: The file names of the predictions without the '.tif' extension, in the same order
+            as `labels`.
+        prediction_dir: The folder of the predictions. It holds one subfolder per iteration: 'iteration00',
+            'iteration01' and so on, as `run_interactive_segmentation_2d` writes them.
+        experiment_folder: The folder where the results are saved.
         start_with_box_prompt: Whether to start with box prompt for iterative prompting.
         n_iterations: The number of iterations for iterative prompting.
         min_size: The minimum pixel count to consider object for evaluation.
@@ -46,7 +54,7 @@ def run_evaluation_for_iterative_prompting(
     results = []
     for i in tqdm(range(n_iterations)):
         prediction_paths = [
-            os.path.join(prediction_dir, f"iteration{i}", f"{fname}.tif") for fname in prediction_fnames
+            os.path.join(prediction_dir, f"iteration{i:02}", f"{fname}.tif") for fname in prediction_fnames
         ]
         res_per_iteration = []
         for prediction_path, _label in zip(prediction_paths, labels):

@@ -2,8 +2,8 @@ import os
 import sys
 import platform
 import unittest
-from subprocess import run
 from shutil import rmtree
+from subprocess import run
 
 import z5py
 import pytest
@@ -41,7 +41,7 @@ class TestCLI(unittest.TestCase):
             ["annotator", "pixel-classification"], ["annotator", "object-classification"],
             ["inference", "segmentation"], ["inference", "tracking"],
             ["inference", "pixel-classification"], ["inference", "object-classification"],
-            ["precompute-embeddings"], ["train"], ["info"],
+            ["precompute-embeddings"], ["train"], ["train-generalist"], ["info"],
         ]:
             self._test_help(*cmd)
 
@@ -96,14 +96,18 @@ class TestCLI(unittest.TestCase):
         out_path = "output.tif"
 
         # Test AMG with default model in default mode.
-        _cli("v1", "automatic_segmentation", "-i", im_path, "-o", out_path,
-             "-m", self.default_model_type, "--points_per_side", "4")
+        _cli(
+            "v1", "automatic_segmentation", "-i", im_path, "-o", out_path,
+            "-m", self.default_model_type, "--points_per_side", "4"
+        )
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
         # Test AMG with default model exclusively in AMG mode.
-        _cli("v1", "automatic_segmentation", "-i", im_path, "-o", out_path,
-             "-m", self.default_model_type, "--mode", "amg", "--points_per_side", "4")
+        _cli(
+            "v1", "automatic_segmentation", "-i", im_path, "-o", out_path,
+            "-m", self.default_model_type, "--mode", "amg", "--points_per_side", "4"
+        )
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
@@ -113,8 +117,10 @@ class TestCLI(unittest.TestCase):
         os.remove(out_path)
 
         # Test AIS with 'micro-sam' model exclusively in AMG mode.
-        _cli("v1", "automatic_segmentation", "-i", im_path, "-o", out_path,
-             "-m", self.model_type, "--mode", "amg", "--points_per_side", "4")
+        _cli(
+            "v1", "automatic_segmentation", "-i", im_path, "-o", out_path,
+            "-m", self.model_type, "--mode", "amg", "--points_per_side", "4"
+        )
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
@@ -144,21 +150,27 @@ class TestCLI(unittest.TestCase):
         out_path = os.path.join(self.tmp_folder, "seg.tif")
 
         # Test 'sparse' (flow) mode with a pass-through postproc param in '--key=value' form.
-        _cli("inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
-             "-n", "2", "--mode", "sparse", "--foreground_threshold=0.5")
+        _cli(
+            "inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+            "-n", "2", "--mode", "sparse", "--foreground_threshold=0.5"
+        )
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
         # Test 'dense' (multicut) mode with a pass-through postproc param in '--key value' form.
-        _cli("inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
-             "-n", "2", "--mode", "dense", "--beta", "0.6")
+        _cli(
+            "inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+            "-n", "2", "--mode", "dense", "--beta", "0.6"
+        )
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
         # Test the embedding-reuse path (only the decoder is run on cached embeddings).
         emb_path = os.path.join(self.tmp_folder, "seg-embeddings.zarr")
-        _cli("inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
-             "-n", "2", "--mode", "sparse", "-e", emb_path)
+        _cli(
+            "inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+            "-n", "2", "--mode", "sparse", "-e", emb_path
+        )
         self.assertTrue(os.path.exists(out_path))
         self.assertTrue(os.path.exists(emb_path))
         os.remove(out_path)

@@ -5,8 +5,8 @@ from typing import Union, Optional, List, Literal
 
 import numpy as np
 import pandas as pd
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 from natsort import natsorted
 
 import torch
@@ -744,7 +744,7 @@ def _clear_cached_items(retain, path, output_folder):
 def run_benchmark_evaluations(
     input_folder: Union[os.PathLike, str],
     dataset_choice: str,
-    model_type: str = util._DEFAULT_MODEL,
+    model_type: str = util.DEFAULT_SAM1_MODEL,
     output_folder: Optional[Union[str, os.PathLike]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     segmentation_mode: Optional[Literal["amg", "ais", "apg"]] = None,
@@ -842,9 +842,9 @@ def main(argv=None):
         help="The path to a directory where the microscopy datasets are and/or will be stored."
     )
     parser.add_argument(
-        "-m", "--model_type", type=str, default=util._DEFAULT_MODEL,
+        "-m", "--model_type", type=str, default=util.DEFAULT_SAM1_MODEL,
         help=f"The segment anything model that will be used, one of '{available_models}'. By default, "
-        f"it uses'{util._DEFAULT_MODEL}'."
+        f"it uses'{util.DEFAULT_SAM1_MODEL}'."
     )
     parser.add_argument(
         "-c", "--checkpoint_path", type=str, default=None,

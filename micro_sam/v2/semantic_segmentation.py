@@ -14,7 +14,7 @@ import torch
 
 from torch_em.util.prediction import predict_with_halo
 
-from micro_sam.util import get_device
+from micro_sam.util import get_device, load_checkpoint
 from micro_sam.v2.models.util import SemanticSAM2
 from micro_sam.v2.normalization import normalize_raw
 from micro_sam.v2.util import autocast_dtype, DEFAULT_TILE_SHAPE, DEFAULT_HALO, DEFAULT_TILE_Z, DEFAULT_HALO_Z
@@ -46,7 +46,7 @@ def get_semantic_model(
         encoder=model_type, num_classes=num_classes, initial_features=initial_features, device=device
     )
     if checkpoint_path is not None:
-        state = torch.load(checkpoint_path, map_location=device, weights_only=False)
+        state = load_checkpoint(checkpoint_path, map_location=device)
         model.load_state_dict(state["model_state"])
     model.eval()
     return model
