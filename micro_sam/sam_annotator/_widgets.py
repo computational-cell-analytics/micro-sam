@@ -160,8 +160,10 @@ class _WidgetBase(QtWidgets.QWidget):
         return checkbox
 
     def _update_batched_visibility(self):
-        """Hide the 'Batched' checkbox while embeddings are tiled (batched prompting is unsupported
-        with tiling). No-op for widgets without a batched checkbox."""
+        """Hide the 'Batched' checkbox while the embeddings are tiled.
+
+        Batched prompting is unsupported for tiled volumes. No-op for widgets without a batched checkbox.
+        """
         checkbox = getattr(self, "batched_checkbox", None)
         if checkbox is None:
             return
@@ -1488,12 +1490,26 @@ def _embeddings_are_tiled(state):
     return state.image_embeddings is not None and state.image_embeddings.get("input_size") is None
 
 
+def _refresh_batched_controls():
+    """Update the 'Batched' controls of all widgets for the current embeddings.
+
+    Call this after the embeddings change, because batched prompting is unsupported for tiled volumes.
+    """
+    for widget in AnnotatorState().widgets.values():
+        update_batched = getattr(widget, "_update_batched_visibility", None)
+        if callable(update_batched):
+            update_batched()
+
+
 def _batched_disabled_when_tiled(state, batched):
-    """Batched (multi-object) prompting is not supported with tiling: each tile is segmented
-    independently, so object ids would collide across tiles. Force single-object and warn."""
+    """Return False, with a warning, if batched prompting is requested for tiled embeddings.
+
+    The volume segmentation uses this guard, because batched prompting is unsupported for tiled volumes.
+    Tiled 2d images support batched prompting (see `tiled_promptable_segmentation_2d`).
+    """
     if batched and _embeddings_are_tiled(state):
         show_info(
-            "Batched (multi-object) prompting is not supported with tiling. "
+            "Batched (multi-object) prompting is not supported for tiled volumes. "
             "It runs single-object segmentation instead."
         )
         return False
@@ -1671,7 +1687,6 @@ def _segment_object_2d(viewer, batched=False):
     state = AnnotatorState()
     predictor = state.predictor
     image_embeddings = state.image_embeddings
-    batched = _batched_disabled_when_tiled(state, batched)
     if have_scribbles and batched:
         show_info(
             "Batched segmentation is not supported with scribble prompts. "
@@ -1899,12 +1914,7 @@ class EmbeddingWidget(_WidgetBase):
             else:
                 state.autoseg_state = None
 
-        # Now that the (possibly tiled) embeddings are known, refresh the 'Batched' control on the
-        # segment/track widgets: batched prompting is unsupported with tiling, so it is hidden then.
-        for widget in state.widgets.values():
-            update_batched = getattr(widget, "_update_batched_visibility", None)
-            if callable(update_batched):
-                update_batched()
+        _refresh_batched_controls()
 
     def _create_settings_widget(self):
         setting_values = QtWidgets.QWidget()
@@ -3542,12 +3552,17 @@ class InteractiveSegmentationWidget(_WidgetBase):
         # removed from the shared prompt layer.
         self._viewer.layers["prompts"].events.data.connect(self._update_batched_visibility)
 
-        # Hide the batched control if the (already loaded) embeddings are tiled.
+        # Hide the batched control if the (already loaded) embeddings are a tiled volume.
         self._update_batched_visibility()
 
     def _update_batched_visibility(self, event=None):
-        """Disable batched segmentation while one or more scribble prompts are present."""
-        super()._update_batched_visibility()
+        """Update the 'Batched' checkbox for the tiling and the scribble prompts.
+
+        For a volume, hide the checkbox while the embeddings are tiled. Disable batched segmentation while
+        one or more scribble prompts are present.
+        """
+        if self._ndim != 2:
+            super()._update_batched_visibility()
 
         prompt_layer = self._viewer.layers["prompts"]
         have_scribbles = any(

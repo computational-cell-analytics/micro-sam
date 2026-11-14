@@ -455,10 +455,9 @@ class TestAnnotatorClass:
         assert ew.batch_size_param.value() == recommended
 
     @pytest.mark.parametrize("ndim", [2, 3])
-    def test_batched_checkbox_hidden_when_tiled(self, make_napari_viewer_proxy, ndim):
-        # Regression for 3c: batched (multi-object) prompting is unsupported with tiling, so the
-        # 'Batched' checkbox must be hidden while the embeddings are tiled (and shown otherwise).
-        # This holds for both the 2d and 3d segmentation annotator.
+    def test_batched_checkbox_with_tiled_embeddings(self, make_napari_viewer_proxy, ndim):
+        # Batched (multi-object) prompting supports tiled 2d images, but not tiled volumes. So the
+        # 'Batched' checkbox stays for tiled 2d embeddings and is hidden for tiled 3d embeddings.
         from micro_sam.sam_annotator._state import AnnotatorState
 
         image = binary_blobs(256) if ndim == 2 else np.stack(4 * [binary_blobs(256)])
@@ -476,12 +475,16 @@ class TestAnnotatorClass:
         interactive._update_batched_visibility()
         assert not interactive.batched_checkbox.isHidden()
 
-        # Tiled embeddings (top-level input_size is None) -> hidden and reset to single-object.
+        # Tiled embeddings (top-level input_size is None): 2d keeps batched mode, 3d resets it.
         interactive.batched_checkbox.setChecked(True)
         state.image_embeddings = {"input_size": None, "original_size": shape, "features": None}
         interactive._update_batched_visibility()
-        assert interactive.batched_checkbox.isHidden()
-        assert not interactive.batched
+        if ndim == 2:
+            assert not interactive.batched_checkbox.isHidden()
+            assert interactive.batched
+        else:
+            assert interactive.batched_checkbox.isHidden()
+            assert not interactive.batched
 
         # Back to non-tiled -> shown again.
         state.image_embeddings = {"input_size": (256, 256), "original_size": shape, "features": None}

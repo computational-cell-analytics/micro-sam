@@ -147,13 +147,13 @@ def _crop_to_original_shape(mask, shape):
     return mask[:shape[0], :shape[1]]
 
 
-def _tile_index_for(tiling, halo, y, x):
-    """Return the id of the tile whose inner (halo-free) block contains the point (y, x)."""
-    for tile_id in range(tiling.number_of_blocks):
-        inner = tiling.get_block_with_halo(tile_id, list(halo)).inner_block
-        if inner.begin[0] <= y < inner.end[0] and inner.begin[1] <= x < inner.end[1]:
-            return tile_id
-    return 0
+def _tile_index_for(tiling, y, x):
+    """Return the id of the tile whose inner (halo-free) block contains the point (y, x).
+
+    A point outside the image goes to the nearest tile.
+    """
+    end = tiling.roi_end
+    return tiling.coordinates_to_block_id([min(max(y, 0), end[0] - 1), min(max(x, 0), end[1] - 1)])
 
 
 def _inner_block_slices(tiling, halo, tile_id):
@@ -342,6 +342,9 @@ def _batched_promptable_segmentation_2d(predictor, points, labels, boxes, masks=
     Negative points are shared as negative prompts for every object. A box that comes from a
     polygon/ellipse (its entry in 'masks' is not None) also carries a soft mask-logit cue. This
     matches the batched convention of the SAM v1 annotator and the 3D unified segment widget.
+
+    The object ids follow the prompt order: one id per positive point, then one per box.
+    `tiled_promptable_segmentation_2d` relies on this order to map the tile ids to global ids.
     """
     shape = predictor._orig_hw[0]
 
@@ -410,6 +413,63 @@ def _batched_promptable_segmentation_2d(predictor, points, labels, boxes, masks=
     return seg
 
 
+def _box_to_single_tile(tiling, halo, box):
+    """Return the tile at the box center if its outer block holds the whole box, else None."""
+    y0, x0, y1, x1 = box
+    tile_id = _tile_index_for(tiling, int((y0 + y1) // 2), int((x0 + x1) // 2))
+    outer = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
+    if outer.begin[0] <= y0 and outer.begin[1] <= x0 and y1 <= outer.end[0] and x1 <= outer.end[1]:
+        return tile_id
+    return None
+
+
+def _points_in_block(points, block):
+    """Return a boolean array that selects the (y, x) points inside the block, after rounding to pixels."""
+    rounded = np.round(points).astype(int)
+    return (
+        (rounded[:, 0] >= block.begin[0]) & (rounded[:, 0] < block.end[0])
+        & (rounded[:, 1] >= block.begin[1]) & (rounded[:, 1] < block.end[1])
+    )
+
+
+def _stitch_tiles(shape, tiling, halo, tile_segs, tile_object_ids):
+    """Stitch the per-tile label maps into the full image.
+
+    The same id in two tiles counts as the same object.
+
+    Each tile writes its inner block first. The halos then complete the objects that cross into a
+    neighbouring tile, but only for object ids that the neighbouring tile has no prompt for. A halo
+    never overwrites an inner-block result, because the tile that owns a pixel sees it with more
+    context.
+    """
+    out = np.zeros(shape, dtype="uint32")
+    for tile_id, seg in tile_segs.items():
+        local, glob = _inner_block_slices(tiling, halo, tile_id)
+        region, target = seg[local], out[glob]
+        foreground = region > 0
+        target[foreground] = region[foreground]
+
+    for tile_id, seg in tile_segs.items():
+        outer = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
+        outer_begin, outer_end = np.asarray(outer.begin), np.asarray(outer.end)
+        for other_id in tiling.get_block_ids_overlapping_bounding_box(list(outer.begin), list(outer.end)):
+            if other_id == tile_id:
+                continue
+            inner = tiling.get_block_with_halo(other_id, list(halo)).inner_block
+            begin = np.maximum(outer_begin, np.asarray(inner.begin))
+            end = np.minimum(outer_end, np.asarray(inner.end))
+            if np.any(begin >= end):
+                continue
+            glob = tuple(slice(b, e) for b, e in zip(begin, end))
+            local = tuple(slice(b - o, e - o) for b, e, o in zip(begin, end, outer_begin))
+            region, target = seg[local], out[glob]
+            fill = (region > 0) & (target == 0)
+            if other_id in tile_object_ids:
+                fill &= ~np.isin(region, tile_object_ids[other_id])
+            target[fill] = region[fill]
+    return out
+
+
 def tiled_promptable_segmentation_2d(
     predictor,
     image_embeddings: dict,
@@ -422,10 +482,24 @@ def tiled_promptable_segmentation_2d(
 ):
     """Tiled 2d promptable segmentation for the SAM2 image predictor.
 
-    Routes the prompts to the tile-column they fall in, sets that tile's precomputed embeddings on
-    the predictor (via `set_precomputed`), runs `promptable_segmentation_2d` on the tile, and
-    stitches the per-tile mask into the full image. Points are in (y, x) order, as passed by the
-    annotator. Same return convention as `promptable_segmentation_2d`.
+    Each tile with a prompt runs `promptable_segmentation_2d` on its precomputed embeddings (set via
+    `set_precomputed`). The function stitches the tile results into the full image. Points are in
+    (y, x) order, as passed by the annotator. Same return convention as `promptable_segmentation_2d`.
+
+    Prompt routing:
+    - A positive point goes to the tile whose inner block contains it.
+    - A negative point goes to every tile whose outer block contains it, if that tile also has a
+      positive point or a box.
+    - In batched mode, a box goes to the tile at its center if the outer block of that tile holds the
+      whole box.
+    - Other boxes go to every tile whose inner block they overlap, clipped to the outer block of that
+      tile.
+
+    In batched mode, each positive point and each box is one object with its own id. The ids follow
+    the same order as in the untiled batched mode.
+
+    An object that extends more than the halo beyond the tile of its prompt is cut at the outer edge of
+    the halo.
 
     Independent active tiles run concurrently on persistent predictor replicas. By default all
     visible CUDA devices are used; pass `devices` to select or restrict them.
@@ -439,44 +513,53 @@ def tiled_promptable_segmentation_2d(
     halo = tuple(int(s) for s in feats.attrs["halo"])
     tiling = Blocking([0, 0], list(shape), list(tile_shape))
 
-    have_points = points is not None and len(points) > 0
-    have_boxes = boxes is not None and len(boxes) > 0
-    if not have_points and not have_boxes:
+    points = np.zeros((0, 2)) if points is None else np.asarray(points).reshape(-1, 2)
+    labels = np.zeros((0,), dtype=int) if labels is None else np.asarray(labels)
+    boxes = [] if boxes is None else [np.asarray(box) for box in boxes]
+    masks = [None] * len(boxes) if masks is None else list(masks)
+    if len(points) == 0 and len(boxes) == 0:
         return None
 
-    # Grouped by tile, so an object is segmented in every tile that holds one of its prompts.
-    # Points are (y, x), boxes (y0, x0, y1, x1), and a mask is cropped to the tile's outer block.
-    tile_points, tile_labels, tile_boxes, tile_masks = {}, {}, {}, {}
-    if have_points:
-        for point, label in zip(np.asarray(points), np.asarray(labels)):
-            tid = _tile_index_for(tiling, halo, int(round(point[0])), int(round(point[1])))
-            tile_points.setdefault(tid, []).append(point)
-            tile_labels.setdefault(tid, []).append(label)
-    if have_boxes:
-        for bidx, box in enumerate(boxes):
-            box_mask = masks[bidx] if masks is not None else None
-            # A box can span several tiles. Segment its clipped portion in each (boxes are y0,x0,y1,x1).
-            for tid, clipped in _box_to_tiles(tiling, halo, np.asarray(box)).items():
-                tile_boxes.setdefault(tid, []).append(clipped)
-                tile_masks.setdefault(tid, []).append(
-                    None if box_mask is None else _crop_mask_to_tile(tiling, halo, tid, box_mask)
-                )
+    is_positive = labels == 1
+    positive_points = points[is_positive]
+    negative_points, negative_labels = points[~is_positive], labels[~is_positive]
 
-    tile_jobs = {}
-    for tile_id in sorted(set(tile_points) | set(tile_boxes)):
-        tpoints = np.asarray(tile_points.get(tile_id, [])).reshape(-1, 2)
-        tlabels = np.asarray(tile_labels.get(tile_id, []), dtype=int)
-        tboxes = tile_boxes.get(tile_id, [])
-        # A tile with only negative points has nothing to segment.
-        if not ((tlabels == 1).any() or len(tboxes) > 0):
-            continue
+    jobs = {}
 
+    def _job(tile_id):
+        return jobs.setdefault(tile_id, {"points": [], "point_ids": [], "boxes": [], "masks": [], "box_ids": []})
+
+    for index, point in enumerate(positive_points):
+        tile_id = _tile_index_for(tiling, int(round(point[0])), int(round(point[1])))
+        _job(tile_id)["points"].append(point)
+        _job(tile_id)["point_ids"].append(index + 1)
+
+    for index, (box, box_mask) in enumerate(zip(boxes, masks)):
+        single_tile = _box_to_single_tile(tiling, halo, box) if batched else None
+        targets = {single_tile: box} if single_tile is not None else _box_to_tiles(tiling, halo, box)
+        for tile_id, tile_box in targets.items():
+            job = _job(tile_id)
+            job["boxes"].append(tile_box)
+            job["masks"].append(None if box_mask is None else _crop_mask_to_tile(tiling, halo, tile_id, box_mask))
+            job["box_ids"].append(len(positive_points) + index + 1)
+
+    tile_jobs, tile_object_ids = {}, {}
+    for tile_id, job in jobs.items():
         outer = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
-        y0, x0 = int(outer.begin[0]), int(outer.begin[1])
-        local_points = (tpoints - np.array([y0, x0])) if len(tpoints) else tpoints
-        local_boxes = [b - np.array([y0, x0, y0, x0]) for b in tboxes] if tboxes else None
-        local_masks = tile_masks.get(tile_id) if tboxes else None
-        tile_jobs[tile_id] = local_points, tlabels, local_boxes, local_masks
+        origin = np.array([outer.begin[0], outer.begin[1]])
+        in_tile = _points_in_block(negative_points, outer)
+        local_points = np.concatenate([np.asarray(job["points"]).reshape(-1, 2), negative_points[in_tile]]) - origin
+        local_labels = np.concatenate([np.ones(len(job["points"]), dtype=labels.dtype), negative_labels[in_tile]])
+        local_boxes = [box - np.concatenate([origin, origin]) for box in job["boxes"]] or None
+        local_masks = job["masks"] if job["boxes"] else None
+        tile_jobs[tile_id] = local_points, local_labels, local_boxes, local_masks
+        # The global id for each local id of the tile result. A batched tile result numbers its objects in
+        # prompt order: positive points, then boxes. Otherwise, the tile segments one object, or one per box
+        # for a tile with boxes only, and keeps its local ids.
+        if batched:
+            tile_object_ids[tile_id] = np.array(job["point_ids"] + job["box_ids"], dtype="uint32")
+        else:
+            tile_object_ids[tile_id] = np.arange(1, max(1, len(job["boxes"])) + 1, dtype="uint32")
 
     predictor_devices = _get_image_predictor_devices(predictor, devices)
     # Spread the active tiles round-robin. Their ids are sparse, so mapping by 'tile_id % n_devices'
@@ -508,21 +591,18 @@ def tiled_promptable_segmentation_2d(
             for task in tasks:
                 results.extend(task.result())
 
-    out = np.zeros(shape, dtype="uint32")
-    found = False
-    for tile_id, tile_seg in sorted(results):
+    # Sorted, so that the halo fill in '_stitch_tiles' does not depend on the worker order.
+    tile_segs = {}
+    for tile_id, tile_seg in sorted(results, key=lambda result: result[0]):
         if tile_seg is None:
             continue
+        object_ids = tile_object_ids[tile_id]
+        lookup = np.concatenate([np.zeros(1, dtype="uint32"), object_ids])
+        tile_segs[tile_id] = lookup[np.asarray(tile_seg).astype("int64")]
 
-        local, glob = _inner_block_slices(tiling, halo, tile_id)
-        region = tile_seg[local]
-        # Unioned by id, so an object spanning tiles is merged across the boundary.
-        sub = out[glob]
-        positive = region > 0
-        sub[positive] = region[positive]
-        found = True
-
-    return out if found else None
+    if not tile_segs:
+        return None
+    return _stitch_tiles(shape, tiling, halo, tile_segs, tile_object_ids)
 
 
 class PromptableSegmentation3D:

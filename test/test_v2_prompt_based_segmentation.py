@@ -12,6 +12,7 @@ from micro_sam.v2.prompt_based_segmentation import (
     ReplicatedPromptableSegmentation3D,
     TiledPromptableSegmentation3D,
     promptable_segmentation_2d,
+    tiled_promptable_segmentation_2d,
 )
 
 
@@ -162,6 +163,155 @@ def test_points_with_multiple_boxes_are_rejected():
 
     assert seg is None
     assert predictor.calls == []
+
+
+class DiskTilePredictor:
+    """A stand-in SAM2 image predictor for tiled 2d prompts.
+
+    It segments:
+    - a single object from points: the union of disks around its positive points;
+    - batched objects from points: a disk around the first point of each object;
+    - a box: the box region.
+
+    It records the tile and the prompts of every call.
+    """
+
+    def __init__(self, radius):
+        self.radius = radius
+        self.tile_id = None
+        self.origin = None
+        self.calls = []
+
+    def set_tile(self, tiling, halo, tile_id):
+        outer = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
+        self.tile_id = tile_id
+        self.origin = np.array(outer.begin)
+        self._orig_hw = [tuple(e - b for b, e in zip(outer.begin, outer.end))]
+
+    def _disk(self, centers_xy):
+        yy, xx = np.mgrid[:self._orig_hw[0][0], :self._orig_hw[0][1]]
+        mask = np.zeros(self._orig_hw[0], dtype=bool)
+        for x, y in centers_xy:
+            mask |= (yy - y) ** 2 + (xx - x) ** 2 <= self.radius ** 2
+        return mask
+
+    def predict(self, point_coords=None, point_labels=None, box=None, mask_input=None, multimask_output=False):
+        self.calls.append({
+            "tile_id": self.tile_id, "origin": self.origin,
+            "point_coords": None if point_coords is None else np.asarray(point_coords),
+            "point_labels": None if point_labels is None else np.asarray(point_labels),
+            "box": None if box is None else np.asarray(box),
+        })
+        if box is not None:
+            objects = []
+            for x0, y0, x1, y1 in np.asarray(box).astype(int):
+                mask = np.zeros(self._orig_hw[0], dtype=bool)
+                mask[y0:y1, x0:x1] = True
+                objects.append(mask)
+        else:
+            coords, labels = np.asarray(point_coords), np.asarray(point_labels)
+            if coords.ndim == 2:
+                objects = [self._disk(coords[labels == 1])]
+            else:  # Batched: one object per row, its first point is the positive one.
+                objects = [self._disk(row[:1]) for row in coords]
+        masks = np.stack(objects)[:, None].astype("float32")
+        if len(objects) == 1:  # SAM2 squeezes the batch axis, so one object comes back as (C, H, W).
+            masks = masks[0]
+        return masks, np.ones(len(objects)), None
+
+
+def run_tiled_2d(monkeypatch, radius=6, shape=(64, 64), tile_shape=(32, 32), halo=(8, 8), **prompts):
+    """Run 'tiled_promptable_segmentation_2d' with the disk predictor.
+
+    The default shapes give a 2 x 2 tiling.
+    """
+    tiling = Blocking([0, 0], list(shape), list(tile_shape))
+    predictor = DiskTilePredictor(radius)
+    monkeypatch.setattr("micro_sam.v2.util.configure_image_predictor", lambda predictor: predictor)
+    monkeypatch.setattr(
+        "micro_sam.v2.util.set_precomputed",
+        lambda predictor, embeddings, tile_id: predictor.set_tile(tiling, halo, tile_id),
+    )
+    monkeypatch.setattr(
+        "micro_sam.v2.prompt_based_segmentation._get_image_predictor_devices",
+        lambda predictor, devices: [(predictor, "cpu")],
+    )
+    features = SimpleNamespace(attrs={"shape": list(shape), "tile_shape": list(tile_shape), "halo": list(halo)})
+    seg = tiled_promptable_segmentation_2d(predictor, {"features": features}, **prompts)
+    return seg, predictor
+
+
+def disk(center, radius, shape=(64, 64)):
+    yy, xx = np.mgrid[:shape[0], :shape[1]]
+    return (yy - center[0]) ** 2 + (xx - center[1]) ** 2 <= radius ** 2
+
+
+def test_tiled_batched_2d_gives_unique_ids_across_tiles(monkeypatch):
+    points = np.array([[10, 10], [10, 50], [50, 10], [50, 50]])
+    seg, _ = run_tiled_2d(monkeypatch, points=points, labels=np.ones(4, dtype=int), batched=True)
+
+    for object_id, point in enumerate(points, start=1):
+        assert np.array_equal(seg == object_id, disk(point, 6))
+    assert set(np.unique(seg)) == {0, 1, 2, 3, 4}
+
+
+@pytest.mark.parametrize("batched", (True, False))
+def test_tiled_2d_completes_an_object_across_the_tile_border(monkeypatch, batched):
+    # The point is 3 px left of the border at x = 32, so the disk reaches x = 35 in the next tile.
+    seg, predictor = run_tiled_2d(
+        monkeypatch, points=np.array([[16, 29]]), labels=np.array([1]), batched=batched,
+    )
+
+    assert np.array_equal(seg == 1, disk((16, 29), 6))
+    assert {call["tile_id"] for call in predictor.calls} == {0}
+
+
+def test_tiled_batched_2d_inner_block_wins_over_a_neighbour_halo(monkeypatch):
+    # The two disks overlap across the border at x = 32: object 1 from tile 0, object 2 from tile 1.
+    seg, _ = run_tiled_2d(
+        monkeypatch, points=np.array([[16, 29], [24, 36]]), labels=np.array([1, 1]), batched=True,
+    )
+
+    # In the overlap, each tile decides its own inner block.
+    assert seg[20, 31] == 1 and seg[20, 33] == 2
+    # Outside the overlap, each halo completes its object in the other tile.
+    assert seg[12, 33] == 1 and seg[22, 31] == 2
+
+
+def test_tiled_single_object_2d_tile_with_prompts_decides_its_inner_block(monkeypatch):
+    # Both tiles segment the object, so tile 0's halo does not fill tile 1's inner block.
+    seg, _ = run_tiled_2d(
+        monkeypatch, points=np.array([[16, 29], [16, 50]]), labels=np.array([1, 1]), batched=False,
+    )
+
+    assert seg[16, 31] == 1 and seg[16, 50] == 1
+    assert seg[16, 34] == 0
+
+
+def test_tiled_2d_negative_points_reach_every_tile_that_sees_them(monkeypatch):
+    # The negative point lies in tile 1, but inside the halo of tile 0.
+    _, predictor = run_tiled_2d(monkeypatch, points=np.array([[16, 29], [16, 36]]), labels=np.array([1, 0]))
+
+    (call,) = predictor.calls
+    assert call["tile_id"] == 0
+    assert call["point_labels"].tolist() == [1, 0]
+    # (x, y) in tile-local coordinates.
+    assert call["point_coords"].tolist() == [[29, 16], [36, 16]]
+
+
+def test_tiled_batched_2d_box_ids_follow_the_points(monkeypatch):
+    small_box = np.array([12, 26, 20, 36])  # Crosses x = 32 and fits into the outer block of tile 0.
+    large_box = np.array([44, 10, 52, 54])  # Wider than the outer block of any tile.
+    seg, predictor = run_tiled_2d(
+        monkeypatch, points=np.array([[5, 5], [5, 58]]), labels=np.array([1, 1]),
+        boxes=[small_box, large_box], masks=[None, None], batched=True,
+    )
+
+    assert np.all(seg[12:20, 26:36] == 3)
+    assert np.all(seg[44:52, 10:54] == 4)
+    assert set(np.unique(seg)) == {0, 1, 2, 3, 4}
+    box_tiles = sorted(call["tile_id"] for call in predictor.calls if call["box"] is not None)
+    assert box_tiles == [0, 2, 3]  # The small box goes to one tile, and the large box is split into two.
 
 
 def make_tiled_segmenter():

@@ -140,6 +140,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         viewer.layers["image"].data = image
         tile_shape, halo = self._init_predictor(viewer, image, embedding_path)
         _sync_tiling_widget(AnnotatorState().widgets["embeddings"], tile_shape, halo)
+        widgets._refresh_batched_controls()
         annotator._update_image(segmentation_result=segmentation_result)
 
     def has_unsaved_content(self, viewer):
