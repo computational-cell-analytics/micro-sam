@@ -17,7 +17,7 @@ pip install micro_sam
 
 Note: when using pip you have to manage your python environments yourself. For example, you could create a conda environment and install `micro_sam` via pip in there, or use `venv` for this.
 
-To use the `vit_t` (MobileSAM) model, you have to additionally install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` was installed via pip. It is not available on PyPI, so it has to be installed from GitHub:
+To use the SAM1 `vit_t` (MobileSAM) model of the previous version (`micro_sam.v1`), you have to additionally install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` was installed via pip. It is not available on PyPI, so it has to be installed from GitHub:
 ```bash
 pip install git+https://github.com/ChaoningZhang/MobileSAM.git
 ```

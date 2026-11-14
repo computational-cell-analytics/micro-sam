@@ -1,12 +1,10 @@
 import os
 
-import imageio.v3 as imageio
 import numpy as np
+import imageio.v3 as imageio
 
 from micro_sam.util import get_cache_directory
 from micro_sam.sample_data import fetch_livecell_example_data, fetch_wholeslide_example_data, fetch_3d_example_data
-
-from elf.io import open_file
 
 
 DATA_CACHE = os.path.join(get_cache_directory(), "sample_data")
@@ -20,10 +18,10 @@ def livecell_annotator():
     example_data = fetch_livecell_example_data(DATA_CACHE)
     image = imageio.imread(example_data)
 
-    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-vit_b_lm.zarr")
-    model_type = "vit_b_lm"
+    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-hvit_t_cells.zarr")
+    model_type = "hvit_t_cells"
 
-    # This is the vit-b-lm segmentation
+    # A segmentation of the image
     segmentation = imageio.imread("./clf-test-data/livecell-test-seg.tif")
 
     object_classifier(image, segmentation, embedding_path=embedding_path, model_type=model_type)
@@ -35,8 +33,8 @@ def wholeslide_annotator():
     example_data = fetch_wholeslide_example_data(DATA_CACHE)
     image = imageio.imread(example_data)
 
-    embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings-vit_b_lm.zarr")
-    model_type = "vit_b_lm"
+    embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings-hvit_t_cells.zarr")
+    model_type = "hvit_t_cells"
 
     segmentation = imageio.imread("./clf-test-data/whole-slide-seg.tif")
     object_classifier(
@@ -48,13 +46,11 @@ def wholeslide_annotator():
 def lucchi_annotator():
     from micro_sam.sam_annotator.object_classifier import object_classifier
 
-    example_data = fetch_3d_example_data(DATA_CACHE)
-    with open_file(example_data) as f:
-        raw = f["*.png"][:]
+    raw = imageio.imread(fetch_3d_example_data(DATA_CACHE))
 
-    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi-vit_b_em_organelles.zarr")
+    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi-hvit_s_em_mito.zarr")
 
-    model_type = "vit_b_lm"
+    model_type = "hvit_t_cells"
     segmentation = imageio.imread("./clf-test-data/lucchi-test-segmentation.tif")
 
     object_classifier(raw, segmentation, embedding_path=embedding_path, model_type=model_type)
@@ -65,9 +61,9 @@ def tiled_3d_annotator():
     from skimage.data import cells3d
 
     data = cells3d()[30:34, 1]
-    embed_path = "./clf-test-data/emebds-3d-tiled.zarr"
+    embed_path = "./clf-test-data/embeddings-3d-tiled-hvit_t_cells.zarr"
 
-    model_type = "vit_b_lm"
+    model_type = "hvit_t_cells"
     segmentation = imageio.imread("./clf-test-data/tiled-3d-segmentation.tif")
 
     object_classifier(
@@ -80,13 +76,13 @@ def _get_livecell_data():
     example_data = fetch_livecell_example_data(DATA_CACHE)
     image = imageio.imread(example_data)
 
-    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-vit_b_lm.zarr")
+    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-livecell-hvit_t_cells.zarr")
 
-    # This is the vit-b-lm segmentation and a test annotation.
+    # A segmentation of the image and a test annotation.
     segmentation = imageio.imread("./clf-test-data/livecell-test-seg.tif")
     annotations = imageio.imread("./clf-test-data/livecell-test-annotations.tif")
 
-    model_type = "vit_b_lm"
+    model_type = "hvit_t_cells"
 
     return image, segmentation, annotations, model_type, embedding_path, None, None
 
@@ -95,28 +91,26 @@ def _get_wholeslide_data():
     example_data = fetch_wholeslide_example_data(DATA_CACHE)
     image = imageio.imread(example_data)
 
-    embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings-vit_b_lm.zarr")
+    embedding_path = os.path.join(EMBEDDING_CACHE, "whole-slide-embeddings-hvit_t_cells.zarr")
 
-    # This is the vit-b-lm segmentation and a test annotation.
+    # A segmentation of the image and a test annotation.
     segmentation = imageio.imread("./clf-test-data/whole-slide-seg.tif")
     annotations = imageio.imread("./clf-test-data/wholeslide-annotations.tif")
 
-    model_type = "vit_b_lm"
+    model_type = "hvit_t_cells"
 
     return image, segmentation, annotations, model_type, embedding_path, (1024, 1024), (256, 256)
 
 
 def _get_lucchi_data():
-    example_data = fetch_3d_example_data(DATA_CACHE)
-    with open_file(example_data) as f:
-        raw = f["*.png"][:]
+    raw = imageio.imread(fetch_3d_example_data(DATA_CACHE))
 
-    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi-vit_b_em_organelles.zarr")
+    embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi-hvit_s_em_mito.zarr")
 
     segmentation = imageio.imread("./clf-test-data/lucchi-test-segmentation.tif")
     annotations = imageio.imread("./clf-test-data/lucchi-annotations.tif")
 
-    model_type = "vit_b_em_organelles"
+    model_type = "hvit_s_em_mito"
 
     return raw, segmentation, annotations, model_type, embedding_path, None, None
 
@@ -125,27 +119,28 @@ def _get_3d_tiled_data():
     from skimage.data import cells3d
 
     data = cells3d()[30:34, 1]
-    embed_path = "./clf-test-data/emebds-3d-tiled.zarr"
-    model_type = "vit_b_lm"
+    embed_path = "./clf-test-data/embeddings-3d-tiled-hvit_t_cells.zarr"
+    model_type = "hvit_t_cells"
 
     segmentation = imageio.imread("./clf-test-data/tiled-3d-segmentation.tif")
     annotations = imageio.imread("./clf-test-data/tiled-3d-annotations.tif")
 
-    return data, segmentation, annotations, model_type, embed_path, (128, 128), (32, 32)
+    # A volume is tiled with a (z, y, x) tile shape and halo.
+    return data, segmentation, annotations, model_type, embed_path, (4, 128, 128), (0, 32, 32)
 
 
 def annotator_devel():
     from micro_sam import object_classification as core_clf
     from micro_sam.sam_annotator import object_classifier as clf
-    from micro_sam.util import precompute_image_embeddings, get_sam_model
+    from micro_sam.v2.util import get_sam2_image_predictor, get_sam2_model, precompute_image_embeddings
 
     # image, segmentation, annotations, model_type, embedding_path, tile_shape, halo = _get_livecell_data()
     # image, segmentation, annotations, model_type, embedding_path, tile_shape, halo = _get_wholeslide_data()
     # image, segmentation, annotations, model_type, embedding_path, tile_shape, halo = _get_lucchi_data()
     image, segmentation, annotations, model_type, embedding_path, tile_shape, halo = _get_3d_tiled_data()
 
-    # 1. Get the SAM model
-    predictor = get_sam_model(model_type)
+    # 1. Get the micro-sam2 model.
+    predictor = get_sam2_image_predictor(get_sam2_model(model_type))
     # 2. Precompute the image embeddings.
     image_embeddings = precompute_image_embeddings(
         predictor, image, save_path=embedding_path, tile_shape=tile_shape, halo=halo
@@ -153,8 +148,8 @@ def annotator_devel():
     # 3. Get the segmentation ids and the extracted features for the segmentations.
     seg_ids, features = core_clf.compute_object_features(image_embeddings, segmentation)
     # 4. Points to the objects we would like to select for training RF.
-    labels = clf._accumulate_labels(segmentation, annotations)
-    # 5. Traint the RF model.
+    labels = clf._accumulate_labels(segmentation, annotations, seg_ids)
+    # 5. Train the RF model.
     rf = clf._train_rf(features, labels, n_estimators=200, max_depth=10)
     # 6. Run the trained RF prediction on new images.
     object_prediction = rf.predict(features)
@@ -171,14 +166,14 @@ def annotator_devel():
 
 def create_3d_data_with_tiling():
     from skimage.data import cells3d
-    from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+    from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
-    predictor, segmenter = get_predictor_and_segmenter(model_type="vit_b_lm", is_tiled=True)
+    predictor, segmenter = get_predictor_and_segmenter(model_type="hvit_t_cells", is_tiled=True, ndim=3)
     data = cells3d()[30:34, 1]
 
-    embed_path = "./clf-test-data/emebds-3d-tiled.zarr"
+    embed_path = "./clf-test-data/embeddings-3d-tiled-hvit_t_cells.zarr"
     seg = automatic_instance_segmentation(
-        predictor, segmenter, data, embedding_path=embed_path, ndim=3, tile_shape=(128, 128), halo=(32, 32)
+        predictor, segmenter, data, embedding_path=embed_path, ndim=3, tile_shape=(4, 128, 128), halo=(0, 32, 32)
     )
 
     import napari
@@ -193,9 +188,9 @@ def create_3d_data_with_tiling():
 def histopathology_annotator():
     from torch_em.data.datasets.histopathology.lynsec import get_lynsec_paths
     from micro_sam.sam_annotator import object_classifier as clf
-    from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+    from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
-    predictor, segmenter = get_predictor_and_segmenter(model_type="vit_b_histopathology")
+    predictor, segmenter = get_predictor_and_segmenter(model_type="hvit_t_cells")
 
     image_paths, _ = get_lynsec_paths(path="./clf-test-data/nuclick", choice="ihc", download=True)
     image_paths = image_paths[:10]
@@ -205,7 +200,7 @@ def histopathology_annotator():
 
     for i, image_path in enumerate(image_paths):
         image = imageio.imread(image_path)
-        embedding_path = f"./clf-test-data/embeddings_nuclick_{i}.zarr"
+        embedding_path = f"./clf-test-data/embeddings_nuclick_{i}-hvit_t_cells.zarr"
         seg_path = f"./clf-test-data/seg-nuclick_{i}.tif"
 
         if os.path.exists(seg_path):
@@ -222,18 +217,18 @@ def histopathology_annotator():
 
     clf.batch_object_classifier(
         images, segmentations, output_folder="./clf-test-data/histo-results",
-        embedding_paths=embedding_paths, model_type="vit_b_histopathology", ndim=2,
+        embedding_paths=embedding_paths, model_type="hvit_t_cells", ndim=2,
     )
 
 
 def batch_prediction():
     import napari
     from torch_em.data.datasets.histopathology.lynsec import get_lynsec_paths
-    from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+    from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
     from micro_sam.object_classification import run_prediction_with_object_classifier
     from tqdm import tqdm
 
-    predictor, segmenter = get_predictor_and_segmenter(model_type="vit_b_histopathology")
+    predictor, segmenter = get_predictor_and_segmenter(model_type="hvit_t_cells")
 
     image_paths, _ = get_lynsec_paths(path="./clf-test-data/nuclick", choice="ihc", download=True)
     # Test the batch prediction on the next 5 images.
@@ -249,7 +244,9 @@ def batch_prediction():
 
     rf_path = "clf-test-data/histo-results/rf.joblib"
     print("Start object clf")
-    predictions = run_prediction_with_object_classifier(images, segmentations, predictor, rf_path, ndim=2)
+    predictions = run_prediction_with_object_classifier(
+        images, segmentations, predictor, rf_path, ndim=2, model_type="hvit_t_cells",
+    )
 
     for im, seg, pred in zip(images, segmentations, predictions):
         v = napari.Viewer()
