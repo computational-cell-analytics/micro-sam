@@ -19,7 +19,7 @@ Note: when using pip you have to manage your python environments yourself. For e
 
 To use the `vit_t` (MobileSAM) model, you have to additionally install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` was installed via pip. It is not available on PyPI, so it has to be installed from GitHub:
 ```bash
-pip install git+https://github.com/ChaoningZhang/MobileSAM.git
+pip install git+https://github.com/ChaoningZhang/MobileSAM.git@f706ad9c4eb7f219c00d9050e46328518ffb65d2
 ```
 
 ## From conda

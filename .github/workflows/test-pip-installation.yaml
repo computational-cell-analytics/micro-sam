@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - dev
+      - v1.x
     tags:
       - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
   pull_request:  # run CI on commits to any open PR
@@ -18,7 +19,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: Checkout
@@ -40,7 +41,7 @@ jobs:
 
       # MobileSAM (vit_t backend) is not on PyPI; install it from GitHub to keep vit_t coverage.
       - name: Install MobileSAM
-        run: python -m pip install git+https://github.com/ChaoningZhang/MobileSAM.git
+        run: python -m pip install git+https://github.com/ChaoningZhang/MobileSAM.git@f706ad9c4eb7f219c00d9050e46328518ffb65d2
 
       # A standalone mask prompt is build-dependent with the PyPI torch wheels used here;
       # MICRO_SAM_SKIP_STANDALONE_MASK_PROMPT skips that single assertion (see the test).
