@@ -43,14 +43,31 @@ def _write_container(path, raw, labels):
         group.create_array("labels", data=labels)
 
 
-def _write_ome_zarr(path, raw, labels):
-    import zarr
-    from ome_zarr.writer import write_image, write_labels
+def _write_ome_zarr(path, raw, labels, version):
+    """Write an image with a label image in the ome-zarr layout, with zarr only.
 
-    axes = "zyx" if raw.ndim == 3 else "yx"
-    group = zarr.open_group(path, mode="w")
-    write_image(raw, group, axes=axes, scale_factors=[])
-    write_labels(labels, group, name="cells", axes=axes, scale_factors=[])
+    Version 0.5 uses zarr v3 and keeps the metadata under 'ome', version 0.4 uses zarr v2 and keeps it at the top.
+    """
+    import zarr
+
+    zarr_format, scale_name = (3, "s0") if version == "0.5" else (2, "0")
+    axes = [{"name": name, "type": "space"} for name in ("zyx" if raw.ndim == 3 else "yx")]
+    multiscales = [{
+        "version": version, "axes": axes,
+        "datasets": [{"path": scale_name, "coordinateTransformations": [{"type": "scale", "scale": [1.0] * raw.ndim}]}],
+    }]
+
+    def _attrs(attrs):
+        return {"ome": {"version": version, **attrs}} if version == "0.5" else attrs
+
+    root = zarr.open_group(path, mode="w", zarr_format=zarr_format)
+    root.attrs.update(_attrs({"multiscales": multiscales}))
+    root.create_array(scale_name, data=raw)
+    label_root = root.create_group("labels")
+    label_root.attrs.update(_attrs({"labels": ["cells"]}))
+    cells = label_root.create_group("cells")
+    cells.attrs.update(_attrs({"multiscales": multiscales, "image-label": {"version": version}}))
+    cells.create_array(scale_name, data=labels)
 
 
 @pytest.fixture(scope="module")
@@ -70,9 +87,9 @@ def data_folder(tmp_path_factory):
     imageio.imwrite(folder / "volume_labels.tif", labels)
     for name in ("data.h5", "data.zarr", "data.n5"):
         _write_container(str(folder / name), raw, labels)
-    _write_ome_zarr(str(folder / "data.ome.zarr"), raw, labels)
+    _write_ome_zarr(str(folder / "data.ome.zarr"), raw, labels, version="0.5")
     raw_2d, labels_2d = _data(SHAPE_2D, seed=11)
-    _write_ome_zarr(str(folder / "image.ome.zarr"), raw_2d, labels_2d)
+    _write_ome_zarr(str(folder / "image.ome.zarr"), raw_2d, labels_2d, version="0.4")
     return folder
 
 
@@ -119,7 +136,8 @@ def test_containers(data_folder, name, patch_shape):
 
 @pytest.mark.parametrize("patch_shape", [PATCH_2D, (4,) + PATCH_2D])
 def test_ome_zarr(data_folder, patch_shape):
-    # The groups select their full resolution scale, whose array name depends on the ome-zarr version.
+    # The groups select their full resolution scale, whose array name depends on the ome-zarr version:
+    # 's0' for version 0.5 (data.ome.zarr) and '0' for version 0.4 (image.ome.zarr).
     path = str(data_folder / "data.ome.zarr")
     dataset = default_sam2_dataset(path, None, path, "labels/cells", patch_shape, "automatic")
     _check_sample(dataset, "automatic", depth=1 if len(patch_shape) == 2 else 4)
