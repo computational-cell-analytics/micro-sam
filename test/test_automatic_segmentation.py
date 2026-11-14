@@ -1,10 +1,10 @@
 import unittest
 
+import torch
 import pytest
 import numpy as np
-import torch
-from scipy.ndimage import shift
 from skimage.draw import disk
+from scipy.ndimage import shift
 from skimage.measure import label as connected_components
 
 import micro_sam.util as util

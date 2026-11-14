@@ -1,7 +1,7 @@
 import platform
 
-import numpy as np
 import pytest
+import numpy as np
 from qtpy import QtWidgets
 
 from micro_sam.sam_annotator._state import AnnotatorState

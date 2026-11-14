@@ -2,8 +2,8 @@
 
 from types import SimpleNamespace
 
-import numpy as np
 import torch
+import numpy as np
 from napari.layers import Points, Shapes
 
 
@@ -299,8 +299,9 @@ class RecordingPredictor:
         self.calls = []
         self.reset_count = 0
 
-    def add_new_points_or_box(self, inference_state, frame_idx, obj_id, clear_old_points=False,
-                              points=None, labels=None, box=None):
+    def add_new_points_or_box(
+        self, inference_state, frame_idx, obj_id, clear_old_points=False, points=None, labels=None, box=None
+    ):
         self.calls.append({
             "frame_idx": frame_idx, "obj_id": obj_id,
             "points": None if points is None else np.asarray(points).tolist(),

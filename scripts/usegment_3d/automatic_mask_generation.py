@@ -5,15 +5,15 @@ Runs the grid-based automatic mask generation of SAM2 via
 segmented individually and stitched across z with the multi-dimensional segmentation stitching.
 """
 
-import argparse
 import os
+import argparse
 
 import imageio.v3 as imageio
 
-from micro_sam.util import get_cache_directory
-from micro_sam.sample_data import fetch_nucleus_3d_example_data, fetch_hela_2d_example_data
 from micro_sam.v2.util import get_sam2_model
+from micro_sam.util import get_cache_directory
 from micro_sam.v2.instance_segmentation import get_amg_segmenter, amg_3d_segmentation
+from micro_sam.sample_data import fetch_nucleus_3d_example_data, fetch_hela_2d_example_data
 
 
 DATA_CACHE = os.path.join(get_cache_directory(), "sample_data")

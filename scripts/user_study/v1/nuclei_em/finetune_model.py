@@ -1,11 +1,11 @@
 import os
 
-import numpy as np
 import torch_em
+import numpy as np
 
-from torch_em.transform.label import PerObjectDistanceTransform
-from micro_sam.v1.training import train_sam, identity
 from micro_sam.util import export_custom_sam_model
+from micro_sam.v1.training import train_sam, identity
+from torch_em.transform.label import PerObjectDistanceTransform
 
 
 def get_loader(split):

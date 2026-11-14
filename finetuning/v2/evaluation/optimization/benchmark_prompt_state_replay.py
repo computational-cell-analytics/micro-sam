@@ -22,26 +22,26 @@ Example:
 
 from __future__ import annotations
 
-import argparse
-import contextlib
-import hashlib
-import json
-import platform
-import subprocess
 import sys
+import json
 import time
+import hashlib
+import argparse
+import platform
+import contextlib
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
-import numpy as np
 import torch
 import xxhash
-from elf.evaluation import mean_segmentation_accuracy
+import numpy as np
 from scipy.ndimage import distance_transform_edt
+from elf.evaluation import mean_segmentation_accuracy
 
 from micro_sam.v1.prompt_based_segmentation import _process_box
-from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
 from micro_sam.v2.util import get_sam2_model, precompute_image_embeddings
+from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D, _crop_to_original_shape
 
 EVALUATION_ROOT = Path(__file__).resolve().parent.parent
 REPOSITORY_ROOT = EVALUATION_ROOT.parents[2]
@@ -194,8 +194,10 @@ def _apply_public(segmenter: PromptableSegmentation3D, specs: Dict[int, Dict[str
                 )
 
 
-def _apply_direct(predictor, inference_state: Dict[str, Any], object_id: int, frame_id: int,
-                  operation: Dict[str, Any], shape: Tuple[int, int]) -> None:
+def _apply_direct(
+    predictor, inference_state: Dict[str, Any], object_id: int, frame_id: int,
+    operation: Dict[str, Any], shape: Tuple[int, int]
+) -> None:
     kwargs: Dict[str, Any] = {}
     points = operation["points"]
     if points is not None and len(points):
@@ -236,8 +238,9 @@ def _new_segmenter(predictor, raw: np.ndarray, embeddings, device: str) -> Promp
     )
 
 
-def _extract_masks(video_segments: Dict[int, Dict[int, np.ndarray]], object_ids: Iterable[int],
-                   shape: Tuple[int, int, int]) -> Dict[int, np.ndarray]:
+def _extract_masks(
+    video_segments: Dict[int, Dict[int, np.ndarray]], object_ids: Iterable[int], shape: Tuple[int, int, int]
+) -> Dict[int, np.ndarray]:
     masks = {object_id: np.zeros(shape, dtype=bool) for object_id in object_ids}
     for frame, per_object in video_segments.items():
         for object_id, mask in per_object.items():
@@ -246,8 +249,10 @@ def _extract_masks(video_segments: Dict[int, Dict[int, np.ndarray]], object_ids:
     return masks
 
 
-def _time_replay(predictor, raw: np.ndarray, embeddings, device: str,
-                 specs: Dict[int, Dict[str, Any]], protocol: str, repetitions: int) -> Dict[str, Any]:
+def _time_replay(
+    predictor, raw: np.ndarray, embeddings, device: str,
+    specs: Dict[int, Dict[str, Any]], protocol: str, repetitions: int
+) -> Dict[str, Any]:
     timings, calls = [], []
     for repetition in range(repetitions + 1):
         segmenter = _new_segmenter(predictor, raw, embeddings, device)
@@ -275,8 +280,9 @@ def _time_replay(predictor, raw: np.ndarray, embeddings, device: str,
     }
 
 
-def _run_production(predictor, raw: np.ndarray, embeddings, device: str,
-                    specs: Dict[int, Dict[str, Any]], protocol: str) -> Tuple[Dict[int, np.ndarray], Dict[str, Any]]:
+def _run_production(
+    predictor, raw: np.ndarray, embeddings, device: str, specs: Dict[int, Dict[str, Any]], protocol: str
+) -> Tuple[Dict[int, np.ndarray], Dict[str, Any]]:
     segmenter = _new_segmenter(predictor, raw, embeddings, device)
     with _CallCounter(predictor) as counter:
         _synchronize(device)
@@ -298,8 +304,9 @@ def _run_production(predictor, raw: np.ndarray, embeddings, device: str,
     }
 
 
-def _run_oracle(predictor, raw: np.ndarray, embeddings, device: str,
-                specs: Dict[int, Dict[str, Any]], protocol: str) -> Tuple[Dict[int, np.ndarray], Dict[str, Any]]:
+def _run_oracle(
+    predictor, raw: np.ndarray, embeddings, device: str, specs: Dict[int, Dict[str, Any]], protocol: str
+) -> Tuple[Dict[int, np.ndarray], Dict[str, Any]]:
     masks: Dict[int, np.ndarray] = {}
     calls, prompt_seconds, propagation_seconds = 0, 0.0, 0.0
     with _CallCounter(predictor) as counter:

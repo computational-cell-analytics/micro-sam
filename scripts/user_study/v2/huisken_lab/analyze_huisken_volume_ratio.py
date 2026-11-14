@@ -135,8 +135,7 @@ def draw_counts(ax, counts):
     series = [("n_nuclei", "tracked nuclei", "#2a78d6"), ("n_cells", "cells in the ratio", "#eb6834")]
     for column, label, color in series:
         ax.plot(counts["hpf"], counts[column], color=color, linewidth=2, label=label)
-        ax.text(counts["hpf"].iloc[-1], counts[column].iloc[-1], f" {label}", va="center", fontsize=8,
-                color="#52514e")
+        ax.text(counts["hpf"].iloc[-1], counts[column].iloc[-1], f" {label}", va="center", fontsize=8, color="#52514e")
     ax.axhline(MIN_CELLS, color="#bdbcb6", linewidth=1, linestyle=":")
     ax.set_xlabel("Time (hpf)")
     ax.set_ylabel("Number of cells")

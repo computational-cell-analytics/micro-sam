@@ -1,5 +1,5 @@
-import napari
 import h5py
+import napari
 
 data_path = "./data/wsi.h5"
 

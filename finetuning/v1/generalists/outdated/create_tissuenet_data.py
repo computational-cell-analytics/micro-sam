@@ -1,8 +1,8 @@
 
 import os
+import numpy as np
 from tqdm import tqdm
 import imageio.v2 as imageio
-import numpy as np
 
 from torch_em.data import MinInstanceSampler
 from torch_em.transform.label import label_consecutive
@@ -21,12 +21,16 @@ def get_tissuenet_loaders(input_path):
     sampler = MinInstanceSampler()
     label_transform = label_consecutive
     raw_transform = rgb_to_gray_transform
-    val_loader = get_tissuenet_loader(path=input_path, split="val", raw_channel="rgb", label_channel="cell",
-                                      batch_size=1, patch_shape=(256, 256), num_workers=0,
-                                      sampler=sampler, label_transform=label_transform, raw_transform=raw_transform)
-    test_loader = get_tissuenet_loader(path=input_path, split="test", raw_channel="rgb", label_channel="cell",
-                                       batch_size=1, patch_shape=(256, 256), num_workers=0,
-                                       sampler=sampler, label_transform=label_transform, raw_transform=raw_transform)
+    val_loader = get_tissuenet_loader(
+        path=input_path, split="val", raw_channel="rgb", label_channel="cell",
+        batch_size=1, patch_shape=(256, 256), num_workers=0,
+        sampler=sampler, label_transform=label_transform, raw_transform=raw_transform
+    )
+    test_loader = get_tissuenet_loader(
+        path=input_path, split="test", raw_channel="rgb", label_channel="cell",
+        batch_size=1, patch_shape=(256, 256), num_workers=0,
+        sampler=sampler, label_transform=label_transform, raw_transform=raw_transform
+    )
     return val_loader, test_loader
 
 

@@ -13,8 +13,8 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import sys
+import argparse
 from pathlib import Path
 from typing import Dict, Optional, Sequence
 
@@ -81,8 +81,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     print(f"{args.subset}: crops per run {per_run}; {len(common)} crops in all four runs")
 
-    joined = pd.concat({name: frames[name][["msa", "merged", "gt_objects", "genuine_misses", "extra_predictions"]]
-                        for name in names}, axis=1)
+    joined = pd.concat({
+        name: frames[name][["msa", "merged", "gt_objects", "genuine_misses", "extra_predictions"]] for name in names
+    }, axis=1)
     print("\nPer source (mSA | matched objects | ground truth | genuine misses | extra predictions):")
     for name in names:
         block = frames[name]

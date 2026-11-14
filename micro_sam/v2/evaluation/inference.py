@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Union, Optional, List, Tuple
 
 import numpy as np
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
 import torch
@@ -18,14 +18,14 @@ from torch_em.util.segmentation import size_filter
 from bioimage_cpp.segmentation import label as connected_components
 
 from micro_sam.v2.normalization import to_image
-from micro_sam.prompt_generators import CenterIterativePromptGenerator, IterativePromptGenerator
 from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
+from micro_sam.prompt_generators import CenterIterativePromptGenerator, IterativePromptGenerator
+from micro_sam.v1.evaluation.inference import (
+    _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
+)
 from micro_sam.v2.util import (
     _get_device, configure_image_predictor, encode_image, get_sam2_image_predictor, get_sam2_model,
     precompute_image_embeddings,
-)
-from micro_sam.v1.evaluation.inference import (
-    _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
 )
 
 
@@ -60,7 +60,24 @@ def run_amg(
     min_object_size: int = 0,
     ensure_8bit: bool = True,
 ):
-    """Functionality for automatic mask generation (AMG) for 2d images.
+    """Run automatic mask generation (AMG) of SAM2 on 2d images and save the segmentations.
+
+    The function saves one tif file per image in '<experiment_folder>/amg/inference'. It skips images
+    that are already segmented.
+
+    Args:
+        image_paths: The paths of the images.
+        image_key: The key of the image data in container files, e.g. hdf5 or zarr. None for image files, e.g. tif.
+        experiment_folder: The folder where the segmentations are saved.
+        model_type: The SAM2 model, e.g. 'hvit_t_cells'.
+        checkpoint_path: Optional path of the model weights. By default the weights of `model_type` are used.
+        device: The torch device. By default the best available device is used.
+        min_object_size: The minimum size of objects in pixels. Smaller objects are removed.
+        ensure_8bit: Whether to normalize the images to 8 bit, as in training. Otherwise only grayscale
+            images are converted to RGB.
+
+    Returns:
+        The folder of the segmentations.
     """
     # where the predictions are saved
     prediction_dir = os.path.join(experiment_folder, "amg", "inference")
@@ -250,7 +267,16 @@ def _run_interactive_segmentation_2d_per_image(
 def get_prediction_dir_2d(
     prediction_dir: Union[os.PathLike, str], start_with_box_prompt: bool, use_masks: bool
 ) -> str:
-    """Return the folder that `run_interactive_segmentation_2d` writes its 'iterationNN' folders to."""
+    """Return the folder that `run_interactive_segmentation_2d` writes its 'iterationNN' folders to.
+
+    Args:
+        prediction_dir: The root folder of the predictions.
+        start_with_box_prompt: Whether the iterative prompting starts with a box prompt.
+        use_masks: Whether the iterative prompting uses the mask logits of the previous iteration.
+
+    Returns:
+        The folder of the predictions.
+    """
     box_or_pt = "start_with_box" if start_with_box_prompt else "start_with_point"
     return os.path.join(prediction_dir, box_or_pt, "with_masks" if use_masks else "without_masks")
 
@@ -283,6 +309,31 @@ def run_interactive_segmentation_2d(
     `click_protocol` chooses the correction clicks: 'random' samples them at random positions in the
     error regions and picks the best of 3 masks for a first point prompt. 'center' places them at the
     centers of the largest error regions and predicts a single mask for a first point prompt.
+
+    Args:
+        image_paths: The paths of the images.
+        gt_paths: The paths of the ground-truth instance segmentations, in the same order as `image_paths`.
+        image_key: The key of the image data in container files, e.g. hdf5 or zarr. None for image files, e.g. tif.
+        gt_key: The key of the ground-truth data in container files. None for image files.
+        prediction_dir: The root folder of the predictions, see `get_prediction_dir_2d`.
+        model_type: The SAM2 model, e.g. 'hvit_t_cells'.
+        checkpoint_path: Optional path of the model weights. By default the weights of `model_type` are used.
+        start_with_box_prompt: Whether the iterative prompting starts with a box prompt. Otherwise it starts
+            with a point prompt.
+        device: The torch device. By default the best available device is used.
+        n_iterations: The number of iterations for iterative prompting.
+        dilation: The dilation factor for the radius around the ground-truth object around which
+            points will not be sampled.
+        batch_size: The number of objects that are segmented together.
+        use_masks: Whether to use the mask logits of the previous iteration as a prompt.
+        ensure_8bit: Whether to normalize the images to 8 bit, as in training. Otherwise only grayscale
+            images are converted to RGB.
+        mask_threshold: The threshold for the mask logits.
+        seed: The seed of the prompt sampling of every image.
+        click_protocol: The correction clicks, 'random' or 'center', see above.
+
+    Returns:
+        The folder of the predictions. It holds one subfolder per iteration: 'iteration00', 'iteration01' and so on.
     """
     if len(image_paths) != len(gt_paths):
         raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
@@ -377,7 +428,17 @@ def _convert_volumes_to_frames(raw, frames_dir):
 def get_prediction_paths_3d(
     prediction_dir: Union[os.PathLike, str], prediction_fname: str, start_with_box_prompt: bool, n_iterations: int,
 ) -> Tuple[str, List[str]]:
-    """Return the folder and the per-iteration files that `run_interactive_segmentation_3d` writes."""
+    """Return the folder and the per-iteration files that `run_interactive_segmentation_3d` writes.
+
+    Args:
+        prediction_dir: The root folder of the predictions.
+        prediction_fname: The name of the segmentation file.
+        start_with_box_prompt: Whether the iterative prompting starts with a box prompt.
+        n_iterations: The number of iterations for iterative prompting.
+
+    Returns:
+        The folder of the predictions and the path of the segmentation for each iteration.
+    """
     box_or_pt = "start_with_box" if start_with_box_prompt else "start_with_point"
     prediction_dir = os.path.join(prediction_dir, "interactive_segmentation_3d", box_or_pt, "without_masks")
     fname = Path(prediction_fname).with_suffix(".tif")

@@ -17,15 +17,15 @@ https://jiffyclub.github.io/snakeviz/
 2. Generate profile file: `python -m cProfile -o program.prof benchmark.py --model_type vit_h --device cpu`
 3. Visualize profile file: `snakeviz program.prof`
 """
-import argparse
 import time
+import argparse
 
-import imageio.v3 as imageio
-import micro_sam.v1.instance_segmentation as instance_seg
-import micro_sam.v1.prompt_based_segmentation as seg
-import micro_sam.util as util
 import numpy as np
 import pandas as pd
+import imageio.v3 as imageio
+import micro_sam.util as util
+import micro_sam.v1.prompt_based_segmentation as seg
+import micro_sam.v1.instance_segmentation as instance_seg
 
 from micro_sam.sample_data import fetch_livecell_example_data
 
@@ -162,20 +162,23 @@ def benchmark_amg(image, predictor, n):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--device", "-d",
-                        choices=['cpu', 'cuda', 'mps'],
-                        help="Which PyTorch backend device to use (REQUIRED)")
-    parser.add_argument("--model_type", "-m", default="vit_h",
-                        choices=list(util._MODEL_URLS),
-                        help="Which deep learning model to use")
-    parser.add_argument("--benchmark_embeddings", "-e", action="store_false",
-                        help="Skip embedding benchmark test, do not run")
-    parser.add_argument("--benchmark_prompts", "-p", action="store_false",
-                        help="Skip prompt benchmark test, do not run")
-    parser.add_argument("--benchmark_amg", "-a", action="store_false",
-                        help="Skip automatic mask generation (amg) benchmark test, do not run")
-    parser.add_argument("-n", "--n", type=int, default=None,
-                        help="Number of times to repeat benchmark tests")
+    parser.add_argument(
+        "--device", "-d", choices=['cpu', 'cuda', 'mps'], help="Which PyTorch backend device to use (REQUIRED)"
+    )
+    parser.add_argument(
+        "--model_type", "-m", default="vit_h", choices=list(util._MODEL_URLS), help="Which deep learning model to use"
+    )
+    parser.add_argument(
+        "--benchmark_embeddings", "-e", action="store_false", help="Skip embedding benchmark test, do not run"
+    )
+    parser.add_argument(
+        "--benchmark_prompts", "-p", action="store_false", help="Skip prompt benchmark test, do not run"
+    )
+    parser.add_argument(
+        "--benchmark_amg", "-a", action="store_false",
+        help="Skip automatic mask generation (amg) benchmark test, do not run"
+    )
+    parser.add_argument("-n", "--n", type=int, default=None, help="Number of times to repeat benchmark tests")
 
     args = parser.parse_args()
 

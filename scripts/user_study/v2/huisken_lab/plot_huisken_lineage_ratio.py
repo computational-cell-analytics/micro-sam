@@ -144,23 +144,30 @@ def plot_tree(table, lineage, version, path):
     ax.add_collection(ratios)
 
     for root in roots:
-        ax.text(to_hpf(lineage.at[root, "t_start"]) - STEP_HPF, y_pos[root], str(root),
-                ha="right", va="center", fontsize=5, color=TEXT_COLOR)
+        ax.text(
+            to_hpf(lineage.at[root, "t_start"]) - STEP_HPF, y_pos[root], str(root),
+            ha="right", va="center", fontsize=5, color=TEXT_COLOR
+        )
     label_x = to_hpf(lineage["t_end"].max()) + 2 * STEP_HPF
-    ax.text(label_x, -0.5, "lineages from the first time point", rotation=-90, ha="left", va="top",
-            fontsize=8, color=TEXT_COLOR)
+    ax.text(
+        label_x, -0.5, "lineages from the first time point", rotation=-90, ha="left", va="top",
+        fontsize=8, color=TEXT_COLOR
+    )
     if separator is not None:
         ax.axhline(separator, color=NO_VALUE_COLOR, linewidth=0.8, linestyle="--")
-        ax.text(label_x, separator + 0.5, "broken lineages", rotation=-90, ha="left", va="top",
-                fontsize=8, color=TEXT_COLOR)
+        ax.text(
+            label_x, separator + 0.5, "broken lineages", rotation=-90, ha="left", va="top", fontsize=8, color=TEXT_COLOR
+        )
 
     ax.set_xlim(START_HPF - 6 * STEP_HPF, label_x + 2 * STEP_HPF)
     ax.set_ylim(n_rows, -1)
     ax.set_yticks([])
     ax.spines[["top", "right", "left"]].set_visible(False)
     ax.set_xlabel("Time (hpf)")
-    ax.set_title(f"Cell / nucleus volume on the lineage ({version.replace('_', ' ')}); "
-                 "gray: no ratio, shaded: first division round", fontsize=9, color=TEXT_COLOR)
+    ax.set_title(
+        f"Cell / nucleus volume on the lineage ({version.replace('_', ' ')}); "
+        "gray: no ratio, shaded: first division round", fontsize=9, color=TEXT_COLOR
+    )
     colorbar = fig.colorbar(ratios, ax=ax, extend="both", fraction=0.03, pad=0.06)
     colorbar.set_label("Cell / nucleus volume")
     fig.tight_layout()
@@ -174,9 +181,11 @@ def get_cycles(table, lineage, min_cycle_length):
     complete = lineage[(lineage["parent_id"] > 0) & has_daughters]
     length = complete["t_end"] - complete["t_start"] + 1
     cycles = complete[(length >= min_cycle_length) & complete["from_start"]]
-    print(f"{len(complete)} complete cycles, {(length < min_cycle_length).sum()} shorter than {min_cycle_length}, "
-          f"{(~complete['from_start'] & (length >= min_cycle_length)).sum()} in broken lineages, "
-          f"{len(cycles)} used")
+    print(
+        f"{len(complete)} complete cycles, {(length < min_cycle_length).sum()} shorter than {min_cycle_length}, "
+        f"{(~complete['from_start'] & (length >= min_cycle_length)).sum()} in broken lineages, "
+        f"{len(cycles)} used"
+    )
     if len(cycles) == 0:
         raise ValueError("There are no complete cycles to plot, try a smaller --min_cycle_length.")
 
@@ -233,8 +242,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", default="old_defaults", choices=VERSIONS, help="The results to plot.")
     parser.add_argument("--cycles", action="store_true", help="Plot the cell cycles instead of the lineage tree.")
-    parser.add_argument("--min_cycle_length", type=int, default=10,
-                        help="The minimal number of time points of a cell cycle (for --cycles).")
+    parser.add_argument(
+        "--min_cycle_length", type=int, default=10,
+        help="The minimal number of time points of a cell cycle (for --cycles)."
+    )
     args = parser.parse_args()
     table, lineage = load_data(args.version)
     folder = os.path.join(RESULT_DIR, args.version)

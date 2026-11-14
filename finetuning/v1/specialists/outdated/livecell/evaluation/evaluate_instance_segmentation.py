@@ -1,8 +1,8 @@
 import os
 
 from micro_sam.v1.evaluation.evaluation import run_evaluation
-from micro_sam.v1.evaluation.livecell import run_livecell_instance_segmentation_with_decoder
 from util import DATA_ROOT, VANILLA_MODELS, get_pred_and_gt_paths, get_default_arguments
+from micro_sam.v1.evaluation.livecell import run_livecell_instance_segmentation_with_decoder
 
 
 def run_instance_segmentation_with_decoder(model_type, checkpoint, experiment_folder):

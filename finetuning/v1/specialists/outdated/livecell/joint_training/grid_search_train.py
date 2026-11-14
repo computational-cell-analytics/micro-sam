@@ -11,8 +11,10 @@ def run_grid_search(dry_run):
             name = f"vit_b-lr{lr}"
             if use_adamw:
                 name += "-adamw"
-            cmd = ["sbatch", "submit_training.sh", "-i", DATA_ROOT, "-s", SAVE_ROOT,
-                   "--iterations", "25000", "--name", name, "--lr", str(lr)]
+            cmd = [
+                "sbatch", "submit_training.sh", "-i", DATA_ROOT, "-s", SAVE_ROOT,
+                "--iterations", "25000", "--name", name, "--lr", str(lr)
+            ]
             if use_adamw:
                 cmd.append("--use_adamw")
             if dry_run:

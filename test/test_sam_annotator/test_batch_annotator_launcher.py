@@ -3,9 +3,9 @@ import platform
 import tempfile
 import importlib
 
-import imageio.v3 as imageio
-import numpy as np
 import pytest
+import numpy as np
+import imageio.v3 as imageio
 from skimage.data import binary_blobs
 
 from micro_sam.sam_annotator.batch_annotator import BatchAnnotator, TASKS

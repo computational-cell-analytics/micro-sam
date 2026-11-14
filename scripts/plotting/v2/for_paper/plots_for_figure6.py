@@ -169,8 +169,9 @@ def plot_automatic(region=None, compact=False):
     """
     results = {}
     for name, (table, _, structure, _) in PANELS.items():
-        rows = pool(fig2.load_modes("EM", structure, path=os.path.join(FIGURES, table), methods=METHODS),
-                    crop_counts(name))
+        rows = pool(
+            fig2.load_modes("EM", structure, path=os.path.join(FIGURES, table), methods=METHODS), crop_counts(name)
+        )
         results[name] = fig2.one_mode(fig2.select_datasets(rows, panel_datasets(name)), fig2.FIGURE_MODES)
     panels = {name: (title, SCORE_LABEL, PANEL_METHODS[name]) for name, (_, _, _, title) in PANELS.items()}
     return fig2.plot_automatic(

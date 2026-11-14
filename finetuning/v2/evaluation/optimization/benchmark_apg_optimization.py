@@ -33,24 +33,24 @@ The optional JSON configuration has this shape:
 
 from __future__ import annotations
 
-import argparse
-import json
 import os
+import sys
+import json
+import time
+import argparse
 import platform
 import subprocess
-import sys
-import time
-from collections import defaultdict
 from pathlib import Path
+from collections import defaultdict
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-import numpy as np
-import pandas as pd
 import torch
 import xxhash
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
 from elf.io import open_file
 from skimage.measure import label as connected_components
-from tqdm import tqdm
 
 from micro_sam.v2.normalization import normalize_raw
 
@@ -1274,8 +1274,10 @@ def main() -> None:
             declared = _crop_shape_3d(sample["dataset"], args.crops_3d)[0]
             realized = _realized_depth_3d(sample, data_root)
             flag = "" if realized == declared else f"  <- trimmed from the declared depth {declared}"
-            print(f"  {sample['dataset']:16s} roi {sample['roi']} depth {realized} "
-                  f"objects {sample['object_count']}{flag}")
+            print(
+                f"  {sample['dataset']:16s} roi {sample['roi']} depth {realized} "
+                f"objects {sample['object_count']}{flag}"
+            )
     if args.prepare_only:
         return
 

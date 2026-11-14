@@ -12,8 +12,8 @@ from glob import glob
 from functools import partial
 
 import h5py
-import numpy as np
 import tifffile
+import numpy as np
 
 import torch
 
@@ -27,9 +27,9 @@ from micro_sam.v2.transforms.raw import _normalize_percentile
 from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Loss
 from micro_sam.v2.transforms.labels import _JointGeodesicLabelTransform
 from micro_sam.v2.loss.directed_distance_based import DirectedDistanceLoss
-from micro_sam.v2.training import get_sam2_train_model, ConvertToSam2VideoBatch, JointSam2Trainer, JointSam2Logger
 from micro_sam.v2.training.training import _init_sam2_decoder, _configure_joint_speed, _check_compile
 from micro_sam.v2.datasets.generalist_loader import _configure_training_normalization, _prepare_data_loader
+from micro_sam.v2.training import get_sam2_train_model, ConvertToSam2VideoBatch, JointSam2Trainer, JointSam2Logger
 
 
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data/gruen_lab_data"

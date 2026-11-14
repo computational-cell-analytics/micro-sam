@@ -1,11 +1,11 @@
 import unittest
 
+import torch
 import pytest
 import numpy as np
-import torch
 
-from skimage.data import binary_blobs
 from skimage.measure import label
+from skimage.data import binary_blobs
 from skimage.transform import AffineTransform, warp
 
 from micro_sam.util import segmentation_to_one_hot

@@ -4,7 +4,7 @@ The unit tests pin the tiled refinement against a fake predictor. This script cl
 actual checkpoint, in two steps:
 
 1. Single-tile agreement. A tiling whose one tile covers the whole image collapses every tiled step
-   — the merge runs once, the id offset is zero, nothing is pruned and the prompt origin is (0, 0) —
+   (the merge runs once, the id offset is zero, nothing is pruned and the prompt origin is (0, 0)),
    so the tiled result has to reproduce the non-tiled one. It is not asserted bit-for-bit, because
    the two paths reach their embeddings differently ('set_image' versus a tiled zarr and
    'set_precomputed'), and those last bits can differ.
@@ -18,8 +18,8 @@ Example:
     python development/check_apg_tiled_refinement.py --image crop.tif --labels crop_labels.tif
 """
 
-import argparse
 import sys
+import argparse
 from pathlib import Path
 
 import numpy as np

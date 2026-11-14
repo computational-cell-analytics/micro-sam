@@ -1,7 +1,7 @@
 import xml.etree.ElementTree as ET
 
-import numpy as np
 import pytest
+import numpy as np
 
 from micro_sam.v1.multi_dimensional_segmentation import (
     export_tracking_result_to_ctc,

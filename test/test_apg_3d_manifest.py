@@ -1,10 +1,10 @@
-import json
 import sys
+import json
 from pathlib import Path
 
 import h5py
-import numpy as np
 import pytest
+import numpy as np
 
 
 OPTIMIZATION_ROOT = Path(__file__).parents[1] / "finetuning/v2/evaluation/optimization"
@@ -80,8 +80,10 @@ def test_invalid_labels_are_masked_before_counting(data_root):
         spec, str(data_root / "vol_invalid.h5"), str(data_root / "vol_invalid.h5"), data_root,
     )
     assert candidates and all(c["mask_invalid_labels"] for c in candidates)
-    lower_right = [c for c in candidates if manifest_module._roi_from_json(c["roi"])[1].start == 16
-                   and manifest_module._roi_from_json(c["roi"])[2].start == 16]
+    lower_right = [
+        c for c in candidates if manifest_module._roi_from_json(c["roi"])[1].start == 16
+        and manifest_module._roi_from_json(c["roi"])[2].start == 16
+    ]
     # The -1 block is not an object.
     assert all(c["object_count"] == 0 for c in lower_right) or not lower_right
 

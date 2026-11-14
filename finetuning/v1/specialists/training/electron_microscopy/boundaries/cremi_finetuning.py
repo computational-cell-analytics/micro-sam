@@ -6,10 +6,10 @@ import numpy as np
 import torch
 
 from torch_em.model import UNETR
+from torch_em.data import MinInstanceSampler
 from torch_em.loss import DiceBasedDistanceLoss
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.data.datasets import get_cremi_dataset, get_cremi_loader
-from torch_em.data import MinInstanceSampler
 
 import micro_sam.v1.training as sam_training
 from micro_sam.util import export_custom_sam_model

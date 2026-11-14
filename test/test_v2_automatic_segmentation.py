@@ -1,22 +1,22 @@
-from contextlib import nullcontext
-from pathlib import Path
 import types
 import inspect
 import warnings
+from pathlib import Path
+from contextlib import nullcontext
 
-import numpy as np
 import torch
 import pytest
+import numpy as np
 
+from micro_sam._model_settings import DEFAULT_POSTPROCESSING
+from micro_sam.v2.postprocessing import default_postprocessing, run_multicut
+from micro_sam.v2.util import DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, ImageEmbeddings
 from micro_sam.v2.instance_segmentation import (
     _block_shape_and_halo, _set_image_predictor_from_backbone, _decode_3d_feature_batch,
     UniSAM2InstanceSegmentation, TiledUniSAM2InstanceSegmentation,
     TiledAutomaticMaskGenerationSegmenter, amg_3d_segmentation,
     get_instance_segmentation_generator, get_decoder, retile_instance_segmentation_generator,
 )
-from micro_sam._model_settings import DEFAULT_POSTPROCESSING
-from micro_sam.v2.postprocessing import default_postprocessing, run_multicut
-from micro_sam.v2.util import DEFAULT_MODEL, DEFAULT_TILE_Z, DEFAULT_HALO_Z, ImageEmbeddings
 
 
 def _run_decoder_3d(model, image_embeddings, device="cpu"):
@@ -259,9 +259,9 @@ class _FakeUNETR:
 
     def __init__(self, img_size=8, output_dtype=torch.float32):
         self.encoder = types.SimpleNamespace(img_size=img_size)
-        self.seen = []       # features the stub returned on the most recent call
+        self.seen = []  # features the stub returned on the most recent call
         self.output_dtype = output_dtype
-        self.call_z = []     # z size of each decoder call (one per z block)
+        self.call_z = []  # z size of each decoder call (one per z block)
         self.call_hw = []
 
     def __call__(self, x):  # x: (1, 3, Z, H, W) dummy

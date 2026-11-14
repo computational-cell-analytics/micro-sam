@@ -5,8 +5,8 @@ from typing import Union, Tuple, Optional, List, Dict, Literal
 
 import numpy as np
 import pandas as pd
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 
 import torch
 
@@ -19,10 +19,10 @@ from ..inference import batched_inference
 from ...prompt_generators import PointAndBoxPromptGenerator
 from ..util import get_sam_model, precompute_image_embeddings
 from ..multi_dimensional_segmentation import segment_mask_in_volume
+from ..evaluation.instance_segmentation import _get_range_of_search_values, evaluate_instance_segmentation_grid_search
 from ..prompt_based_segmentation import (
     segment_from_box, segment_from_box_and_points, segment_from_mask, segment_from_points
 )
-from ..evaluation.instance_segmentation import _get_range_of_search_values, evaluate_instance_segmentation_grid_search
 
 
 def default_grid_search_values_multi_dimensional_segmentation(

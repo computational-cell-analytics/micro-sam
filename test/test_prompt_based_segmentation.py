@@ -2,9 +2,9 @@ import os
 import unittest
 
 import pytest
+import numpy as np
 import micro_sam.util as util
 from micro_sam.v1.util import get_sam_model, precompute_image_embeddings, set_precomputed
-import numpy as np
 
 from skimage.draw import disk
 

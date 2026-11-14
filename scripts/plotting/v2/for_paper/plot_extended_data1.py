@@ -25,8 +25,8 @@ import os
 import argparse
 
 import pandas as pd
-import matplotlib.colors as colors
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 
 import plots_for_figure2 as fig2
 import plots_for_figure3 as fig3
@@ -152,14 +152,18 @@ def plot_interactive(dimension, region=None, compact=False):
     """Plot the interactive results of one dimension, with SAM2 and micro-sam2 in all sizes."""
     if dimension == "2d":
         modalities = [name for row in fig2.AUTOMATIC_ROWS for name in row]
-        specs = {name: (category, structure, "msa", fig2.SCORE_LABEL)
-                 for name, (category, structure, _) in fig2.PANELS.items()}
+        specs = {
+            name: (category, structure, "msa", fig2.SCORE_LABEL)
+            for name, (category, structure, _) in fig2.PANELS.items()
+        }
         titles = {name: title for name, (_, _, title) in fig2.PANELS.items()}
         datasets, path, grid, single = fig2.PANEL_DATASETS, fig2.INTERACTIVE_CSV, fig2.COMBINED_GRID, {}
     else:
         modalities = [name for row in fig3.AUTOMATIC_ROWS for name in row]
-        specs = {name: (category, structure, metric, score_label)
-                 for name, (category, structure, _, metric, score_label) in fig3.PANELS.items()}
+        specs = {
+            name: (category, structure, metric, score_label)
+            for name, (category, structure, _, metric, score_label) in fig3.PANELS.items()
+        }
         titles = {name: title for name, (_, _, title, _, _) in fig3.PANELS.items()}
         datasets, path, grid = fig3.PANEL_DATASETS, fig3.INTERACTIVE_CSV, fig3.COMBINED_GRID
         single = INTERACTIVE_SINGLE_3D

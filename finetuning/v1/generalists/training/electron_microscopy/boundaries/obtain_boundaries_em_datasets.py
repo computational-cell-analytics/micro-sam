@@ -74,11 +74,15 @@ def get_concat_boundaries_datasets(input_path, patch_shape):
     platy_cell_label_key = "volumes/labels/segmentation/s1"
 
     platy_cell_train_samples = [1, 2, 3, 4, 5, 6]
-    platy_cell_train_rois = compute_platy_rois(platy_root, platy_cell_train_samples, ignore_label=0,
-                                               file_template=platy_cell_template, label_key=platy_cell_label_key)
+    platy_cell_train_rois = compute_platy_rois(
+        platy_root, platy_cell_train_samples, ignore_label=0,
+        file_template=platy_cell_template, label_key=platy_cell_label_key
+    )
     platy_cell_val_samples = [7, 8]
-    platy_cell_val_rois = compute_platy_rois(platy_root, platy_cell_val_samples, ignore_label=0,
-                                             file_template=platy_cell_template, label_key=platy_cell_label_key)
+    platy_cell_val_rois = compute_platy_rois(
+        platy_root, platy_cell_val_samples, ignore_label=0,
+        file_template=platy_cell_template, label_key=platy_cell_label_key
+    )
 
     def cremi_dataset(rois, n_samples):
         return datasets.get_cremi_dataset(

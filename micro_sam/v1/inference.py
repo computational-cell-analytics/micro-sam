@@ -4,8 +4,8 @@ from typing import Any, Dict, List, Optional, Union, Tuple
 
 import numpy as np
 
-import segment_anything.utils.amg as amg_utils
 from segment_anything import SamPredictor
+import segment_anything.utils.amg as amg_utils
 from segment_anything.utils.transforms import ResizeLongestSide
 
 import torch

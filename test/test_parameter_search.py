@@ -1,8 +1,8 @@
 import sys
 from pathlib import Path
 
-import pandas as pd
 import pytest
+import pandas as pd
 
 
 EVALUATION_ROOT = Path(__file__).parents[1] / "finetuning/v2/evaluation"

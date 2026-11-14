@@ -5,12 +5,13 @@ import unittest
 import threading
 from unittest import mock
 
-import numpy as np
 import torch
+import numpy as np
 import torch.nn.functional as F
 from bioimage_cpp.utils import Blocking
 
 import micro_sam.v2.batched_inference as batched_inference
+from micro_sam.v2.prompt_based_segmentation import TiledPromptableSegmentation3D
 from micro_sam.v2.batched_inference import (
     _compute_auto_batch_sizes,
     _decode_tiled_3d_embeddings,
@@ -20,7 +21,6 @@ from micro_sam.v2.batched_inference import (
     _run_decoder_jobs,
     _select_throughput_batch_size,
 )
-from micro_sam.v2.prompt_based_segmentation import TiledPromptableSegmentation3D
 
 
 class ArrayWithAttrs:
