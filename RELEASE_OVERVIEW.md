@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 1.9.0**
+
+This is the final release of `micro_sam` 1.x. Development continues in `micro_sam` 2.0. Support napari 0.10, and cap all dependencies that can break `micro_sam` at their tested versions, so that new installations of 1.9 keep working. Pin MobileSAM to a fixed commit.
+
 **New in version 1.8.14**
 
 Fix prompt clearing with napari 0.9.1 to prevent crashes when toggling labels after commit. Preserve point labels and track IDs when clearing individual slices.

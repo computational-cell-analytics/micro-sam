@@ -2,11 +2,11 @@ name: sam
 channels:
     - conda-forge
 dependencies:
-    - bioimage-cpp >=0.3
-    - bioimageio.core >=0.11
+    - bioimage-cpp >=0.3,<0.11
+    - bioimageio.core >=0.11,<0.12
     - imagecodecs
     - magicgui
-    - napari >=0.7.1,<0.10
+    - napari >=0.7.1,<0.11
     - natsort
     - pip
     - pooch
@@ -14,7 +14,7 @@ dependencies:
     - pydantic <2.14
     - pyqt6
     - python-xxhash
-    - python-elf >=0.9
+    - python-elf >=0.9,<0.10
     # Note: installing the pytorch package from conda-forge will generally
     # give you the most optmized version for your system, if you have a modern
     # enough OS and CUDA version (CUDA >= 12). For older versions, you can
@@ -23,14 +23,14 @@ dependencies:
     # - libtorch=*=cuda11*
     # or, to enforce a CPU installation, change to
     # - "pytorch=*=cpu*"
-    - pytorch >=2.5
+    - pytorch >=2.5,<3
     - segment-anything >=1.0.1
     - torchvision
-    - torch_em >=0.9
+    - torch_em >=0.9,<0.11
     - tqdm
     - timm
-    - trackastra >=0.5.3
+    - trackastra >=0.5.3,<0.6
     - xarray
-    - zarr
+    - zarr <4
     - pip:
-        - git+https://github.com/ChaoningZhang/MobileSAM.git
+        - git+https://github.com/ChaoningZhang/MobileSAM.git@f706ad9c4eb7f219c00d9050e46328518ffb65d2

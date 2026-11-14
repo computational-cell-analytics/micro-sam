@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - dev
+      - v1.x
     tags:
       - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
   pull_request:  # run CI on commits to any open PR
@@ -19,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.12"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: Checkout
