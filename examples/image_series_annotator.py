@@ -1,44 +1,35 @@
 import os
 
+from micro_sam.v2.util import DEFAULT_MODEL
+from micro_sam.util import get_cache_directory
 from micro_sam.sam_annotator import image_folder_annotator
 from micro_sam.sample_data import fetch_image_series_example_data
-from micro_sam.util import get_cache_directory
 
 DATA_CACHE = os.path.join(get_cache_directory(), "sample_data")
 EMBEDDING_CACHE = os.path.join(get_cache_directory(), "embeddings")
 os.makedirs(EMBEDDING_CACHE, exist_ok=True)
 
 
-def series_annotation(use_finetuned_model):
-    """Annotate a series of images. Example runs for three different images.
-    """
-
-    if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "series-embeddings-vit_b_lm")
-        model_type = "vit_b_lm"
-    else:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "series-embeddings")
-        model_type = "vit_b"
-
+def series_annotation(model_type):
+    """Annotate a series of images, one after the other. The example data has three images."""
     example_data = fetch_image_series_example_data(DATA_CACHE)
     image_folder_annotator(
         example_data,
         output_folder="./series-segmentation-result",
         pattern="*.tif",
-        embedding_path=embedding_path,
+        embedding_path=os.path.join(EMBEDDING_CACHE, f"series-embeddings-{model_type}"),
         model_type=model_type,
-        precompute_autoseg_state=False,
+        precompute_autoseg_state=True,
     )
 
 
 def main():
-    # Whether to use the fine-tuned SAM model.
-    use_finetuned_model = False
-    series_annotation(use_finetuned_model)
+    series_annotation(DEFAULT_MODEL)
 
 
-# The corresponding CLI call for track_ctc_data:
-# (replace with cache directory on your machine)
-# $ micro_sam.image_series_annotator -i /home/pape/.cache/micro_sam/sample_data/image-series.zip.unzip/series/ -e /home/pape/.cache/micro_sam/embeddings/series-embeddings/ -o segmentation_results  # noqa
+# The corresponding CLI call for series_annotation:
+# (replace <cache> with the cache directory on your machine)
+# $ micro_sam annotator batch -i <cache>/sample_data/image-series.zip.unzip/series/ -p "*.tif" \
+#   -e <cache>/embeddings/series-embeddings-hvit_t_cells/ -o series-segmentation-result
 if __name__ == "__main__":
     main()

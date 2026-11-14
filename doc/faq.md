@@ -56,7 +56,7 @@ Having a GPU will significantly speed up the annotation tools and especially the
 
 
 ### 4. What is the recommended PyTorch version?
-`micro_sam` has been tested mostly with CUDA 12.1 and PyTorch [2.1.1, 2.2.0]. However, the tool and the library is not constrained to a specific PyTorch or CUDA version. So it should work fine with the standard PyTorch installation for your system.
+`micro_sam` needs PyTorch 2.5 or newer. Apart from that, the tool and the library are not constrained to a specific PyTorch or CUDA version, so they should work fine with the standard PyTorch installation for your system.
 
 
 ### 5. I am missing a few packages (eg. `ModuleNotFoundError: No module named 'elf.io`). What should I do?
@@ -74,21 +74,17 @@ It's possible that you have an older version of `torch-em` installed. Similar er
 
 
 ### 8. My system does not have a internet connection. Where should I put the model checkpoints for the `micro-sam` models?
-We recommend transferring the model checkpoints to the `micro-sam` model cache directory (you can find yours by running the following in terminal: `python -c "from micro_sam import util; print(util.get_model_cache_directory())"`). Once you have identified the model cache directory, you need to create it (if not present already) and move the model checkpoints there. At last, you **must** rename the transferred checkpoints as per the respective [key values](https://github.com/computational-cell-analytics/micro-sam/blob/main/micro_sam/util.py#L87) in the url dictionaries located in the `micro_sam.util.models` function (below mentioned is an example for Linux users).
+The simplest way is to download the models on a computer with internet connection with `micro_sam info --download <MODEL>`, for example `micro_sam info --download hvit_t_cells`, and to copy the model cache directory to the computer without internet connection.
+You can find the model cache directory by running `python -c "from micro_sam import util; print(util.get_model_cache_directory())"`.
 
+You can also download the checkpoints by hand and move them to the model cache directory. The files must be named like the keys of `FINETUNED_URLS` in `micro_sam/v2/util.py`. A `micro-sam2` model has two files, for example `hvit_t_cells` and `hvit_t_cells_decoder`.
 ```bash
-# Download and transfer the model checkpoints for 'vit_b_lm' and `vit_b_lm_decoder`.
-# Next, verify the model cache directory.
-> python -c "from micro_sam import util; print(util.get_model_cache_directory())"
-/home/anwai/.cache/micro_sam/models
-
-# Create the model cache directory
-> mkdir -p /home/anwai/.cache/micro_sam/models
-
-# Move the checkpoints to the models directory and rename them
-# The following steps transfer and rename the checkpoints to the desired filenames.
-> mv vit_b.pt /home/anwai/.cache/micro_sam/models/vit_b_lm
-> mv vit_b_decoder.pt /home/anwai/.cache/micro_sam/models/vit_b_lm_decoder
+# Find the model cache directory.
+python -c "from micro_sam import util; print(util.get_model_cache_directory())"
+# Create it, if it does not exist, and move the checkpoints there with the expected names.
+mkdir -p <MODEL_CACHE_DIRECTORY>
+mv <DOWNLOADED_MODEL> <MODEL_CACHE_DIRECTORY>/hvit_t_cells
+mv <DOWNLOADED_DECODER> <MODEL_CACHE_DIRECTORY>/hvit_t_cells_decoder
 ```
 
 
@@ -140,30 +136,29 @@ Yes, you can use the annotator tool for:
 
 
 ### 2. Which model should I use for my data?
-We currently provide three different kind of models: the default models `vit_h`, `vit_l`, `vit_b` and `vit_t`; the models for light microscopy `vit_l_lm`, `vit_b_lm` and `vit_t_lm`; the models for electron microscopy `vit_l_em_organelles`, `vit_b_em_organelles` and `vit_t_em_organelles`.
-You should first try the model that best fits the segmentation task your interested in, the `lm` model for cell or nucleus segmentation in light microscopy or the `em_organelles` model for segmenting nuclei, mitochondria or other roundish organelles in electron microscopy.
-If your segmentation problem does not meet these descriptions, or if these models don't work well, you should try one of the default models instead.
-The letter after `vit` denotes the size of the image encoder in SAM, `h` (huge) being the largest and `t` (tiny) the smallest. The smaller models are faster but may yield worse results. We recommend to either use a `vit_l` or `vit_b` model, they offer the best trade-off between speed and segmentation quality.
+We provide the original SAM2 models (`hvit_t`, `hvit_s`, `hvit_b` and `hvit_l`) and the `micro-sam2` models: `hvit_t_cells`, `hvit_s_cells`, `hvit_b_cells` and `hvit_l_cells` for cells and nuclei in light microscopy and neurites in electron microscopy (2D and 3D), `hvit_s_em_mito` for mitochondria and `hvit_s_em_nuclei` for nuclei in electron microscopy.
+You should first try the `micro-sam2` model that best fits your segmentation task. If your segmentation problem does not meet these descriptions, or if these models don't work well, you can try one of the original SAM2 models for interactive segmentation, or finetune a model on your data.
+The letter after `hvit` denotes the size of the image encoder: `t` (tiny), `s` (small), `b` (base) and `l` (large). The smaller models are faster, the larger models are more accurate, especially for automatic segmentation.
 You can find more information on model choice [here](#choosing-a-model).
 
 
 ### 3. I have high-resolution microscopy images, `micro_sam` does not seem to work.
-The Segment Anything model expects inputs of shape 1024 x 1024 pixels. Inputs that do not match this size will be internally resized to match it. Hence, applying Segment Anything to a much larger image will often lead to inferior results, or sometimes not work at all. To address this, `micro_sam` implements tiling: cutting up the input image into tiles of a fixed size (with a fixed overlap) and running Segment Anything for the individual tiles. You can activate tiling with the `tile_shape` parameter, which determines the size of the inner tile and `halo`, which determines the size of the additional overlap.
-- If you are using the `micro_sam` annotation tools, you can specify the values for the `tile_shape` and `halo` via the `tile_x`, `tile_y`, `halo_x` and `halo_y` parameters in the `Embedding Settings` drop-down menu.
-- If you are using the `micro_sam` library in a python script, you can pass them as tuples, e.g. `tile_shape=(1024, 1024), halo=(256, 256)`. See also the [wholeslide annotator example](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_2d.py#L47-L63).
-- If you are using the command line functionality, you can pass them via the options `--tile_shape 1024 1024 --halo 256 256`.
+The model resizes every input to 1024 x 1024 pixels. Applying it to a much larger image shrinks the objects and leads to inferior results. To address this, `micro_sam` implements tiling: it cuts the input image into tiles of a fixed size (with a fixed overlap) and runs the model on the individual tiles.
+Tiling is turned on by default for images that are larger than 768 pixels, with a tile shape of 512 x 512 and an overlap (halo) of 128 pixels. You can change the tiling with the `tile_shape` and `halo` parameters:
+- In the annotation tools, set `tile_x`, `tile_y`, `halo_x` and `halo_y` in the `Embedding Settings`.
+- In a python script, pass them as tuples, e.g. `tile_shape=(1024, 1024), halo=(256, 256)`. See also the [wholeslide annotator example](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/annotator_2d.py).
+- In the command line, pass them with `--tile_shape` and `--overlap`, e.g. `--tile_shape 1024 1024 --overlap 256 256` for `micro_sam annotator` and `--tile_shape 1024,1024 --overlap 256,256` for `micro_sam inference`.
 > NOTE: It's recommended to choose the `halo` so that it is larger than half of the maximal radius of the objects you want to segment.
 
 
 ### 4. The computation of image embeddings takes very long in napari.
-`micro_sam` pre-computes the image embeddings produced by the vision transformer backbone in Segment Anything, and (optionally) stores them on disc. I fyou are using a CPU, this step can take a while for 3d data or time-series (you will see a progress bar in the command-line interface / on the bottom right of napari). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them over to your laptop / local machine to speed this up.
-- You can use the command `micro_sam.precompute_embeddings` for this (it is installed with the rest of the software). You can specify the location of the pre-computed embeddings via the `embedding_path` argument.
+`micro_sam` pre-computes the image embeddings produced by the image encoder, and (optionally) stores them on disc. If you are using a CPU, this step can take a while for 3d data or time-series (you will see a progress bar on the bottom right of napari). If you have access to a GPU without graphical interface (e.g. via a local computer cluster or a cloud provider), you can also pre-compute the embeddings there and then copy them over to your laptop / local machine to speed this up.
+- You can use the command `micro_sam precompute-embeddings` for this (it is installed with the rest of the software). You can specify the location of the pre-computed embeddings via the `-e` / `--embedding_path` argument.
 - You can cache the computed embedding in the napari tool (to avoid recomputing the embeddings again) by passing the path to store the embeddings in the `embeddings_save_path` option in the `Embedding Settings` drop-down. You can later load the pre-computed image embeddings by entering the path to the stored embeddings there as well.
 
 
 ### 5. Can I use `micro_sam` on a CPU?
-Most other processing steps are very fast even on a CPU, the automatic segmentation step for the default Segment Anything models (typically called as the "Segment Anything" feature or AMG - Automatic Mask Generation) however takes several minutes without a GPU (depending on the image size). For large volumes and time-series, segmenting an object interactively in 3d / tracking across time can take a couple of seconds with a CPU (it is very fast with a GPU).
-> HINT: All the tutorial videos have been created on CPU resources.
+Yes. Interactive segmentation of a 2d image is fast on a CPU. Computing the embeddings, automatic segmentation, and segmenting or tracking objects in volumes and time-series take longer without a GPU. Automatic prompt generation (APG) for volumes and time-series needs a GPU.
 
 
 ### 6. I generated some segmentations from another tool, can I use it as a starting point in `micro_sam`?
@@ -186,12 +181,12 @@ We want to remove these errors, so we would be very grateful if you can [open an
 
 
 ### 10. The objects are not segmented in my 3d data using the interactive annotation tool.
-The first thing to check is: a) make sure you are using the latest version of `micro_sam` (pull the latest commit from main if your installation is from source, or update the installation from conda using `conda update micro_sam`), and b) try out the steps from the [3d annotation tutorial video](https://youtu.be/nqpyNQSyu74) to verify if this shows the same behaviour (or the same errors) as you faced. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
-c) try using a different model and change the projection mode for 3d segmentation. This is also explained in the video.
+The first thing to check is: a) make sure you are using the latest version of `micro_sam` (pull the latest commit from main if your installation is from source, or update the installation from conda using `conda update micro_sam`), and b) make sure the tool treats your data as a 3d volume: you can check and change this in the embedding menu. For 3d images, it's important to pass the inputs in the python axis convention, ZYX.
+c) try using a different model, and add prompts in more slices of the object before you segment it in the volume with `Apply to Volume`.
 
 
 ### 11. I have very small or fine-grained structures in my high-resolution microscopic images. Can I use `micro_sam` to annotate them?
-Segment Anything does not work well for very small or fine-grained objects (e.g. filaments). In these cases, you could try to use tiling to improve results (see [Point 3](#3-i-have-high-resolution-large-tomograms-micro-sam-does-not-seem-to-work) above for details).
+The models do not work well for very small or fine-grained objects (e.g. filaments). In these cases, you could try to use tiling to improve results (see question 3 above for details).
 
 
 ### 12. napari seems to be very slow for large images.
@@ -203,25 +198,28 @@ This can happen for long running computations. You just need to wait a bit longe
 
 
 ### 14. I have 3D RGB microscopy volumes. How does `micro_sam` handle these images?
-`micro_sam` performs automatic segmentation in 3D volumes by first segmenting slices individually in 2D and merging the segmentations across 3D based on overlap of objects between slices. The expected shape of your 3D RGB volume should be `(Z * Y * X * 3)` (reason: Segment Anything is devised to consider 3-channel inputs, so while the user provides micro-sam with 1-channel inputs, we handle this by triplicating this to fit the requirement, or with 3-channel inputs, we use them in the expected RGB array structures as it is).
+The expected shape of a 3D volume with channels is `(Z, Y, X, C)`, with the channels in the last axis. A volume with 2 or 4 channels is mapped to 3 channels: 2 channels are padded with an empty channel, and of 4 channels the first 3 are used. A volume with a single channel is replicated to 3 channels, because the model expects 3-channel inputs.
 
 
 ### 15. I want to use a model stored in a different directory than the `micro_sam` cache. How can I do this?
-The `micro-sam` CLIs for precomputation of image embeddings and annotators (Annotator 2d, Annotator 3d, Annotator Tracking, Image Series Annotator) accept the argument `-c` / `--checkpoint` to pass model checkpoints. If you start a `micro-sam` annotator from the `napari` plugin menu, you can provide the path to model checkpoints in the annotator widget (on right) under `Embedding Settings` drop-down in the `custom weights path` option.
+The `micro_sam` command line tools (`micro_sam annotator`, `micro_sam inference` and `micro_sam precompute-embeddings`) accept the argument `-c` / `--checkpoint` to pass a model checkpoint. If you start a `micro_sam` annotator from the `napari` plugin menu, you can provide the path to the model checkpoint under the `Embedding Settings` drop-down in the `custom weights path` option. In python, pass it as `checkpoint_path`.
 
-NOTE: It is important to choose the correct model type when you opt for the above recommendation, using the `-m / --model_type` argument or selecting it from the `Model` dropdown in `Embedding Settings` respectively. Otherwise you will face parameter mismatch issues.
+The model size is read from the checkpoint, so you do not have to match it with the model type.
+
+For automatic segmentation, the model also needs its decoder. Give a checkpoint that holds the decoder, such as the `best.pt` of joint or automatic training, or a model file with its decoder file next to it: for example `hvit_t_cells.pt` with `hvit_t_cells_decoder.pt`. The decoder file is found by its name. In python and in the command line of the annotators, you can also give the decoder file with `decoder_path` (`--decoder_path`).
 
 
-### 16. Some parameters in the annotator / finetuning widget are unclear to me.
+### 16. Some parameters in the annotation tools are unclear to me.
 `micro-sam` has tooltips for menu options across all widgets (i.e. an information window will appear if you hover over name of the menu), which briefly describe the utility of the specific menu option.
 
 
 ### 17. I want to use an older version of the pretrained models.
-The older model versions are still available on zenodo. You can find the download links for all of them [here](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#other-models).
-You can then use those models with the custom checkpoint option, see answer 15 for details.
+The SAM1 models of the previous version are available in the `micro_sam.v1` subpackage and the `micro_sam v1` command line tools. Older versions of these models are still available on zenodo. You can find the download links for all of them [here](#older-sam1-models).
+
 
 ### 18. I would like to evaluate the instance segmentation quantitatively. Can you suggest how to do that?
-`micro-sam` supports a `micro_sam.evaluate` CLI, which computes the mean segmentation accuracy (introduced in the Pascal VOC challenge) of the predicted instance segmentation with the corresponding ground-truth annotations. Please see our paper (`Methods` -> `Inference and Evaluation` for more details about it) and `$ micro_sam.evaluate -h` for more details about the evaluation CLI.
+`micro_sam v1 evaluate` computes the mean segmentation accuracy (introduced in the Pascal VOC challenge) of predicted instance segmentations with the corresponding ground-truth annotations. It works for segmentations from any method. Please see our paper (`Methods` -> `Inference and Evaluation` for more details about it) and `micro_sam v1 evaluate --help` for more details.
+
 
 ### 19. I get `RuntimeError: GET was unable to find an engine to execute this computation` on a V100 GPU (*"or any older GPU"*).
 This is a known issue for a combination of older generation GPUs (eg. V100s) and pytorch compiled with the latest CUDA Toolkit (eg. CUDA 12.9 and PyTorch 2.8 has been tested to throw this error on V100s).
@@ -230,29 +228,27 @@ Here's what you can do to solve this issue:
 - Run on CPU (slower, but works).
 
 ### 20. The automatic instance segmentation does a very poor job for my microscopy images.
-
 This can have multiple reasons that you can address by choosing the best settings for your image:
 - First, choose the most suitable model for your image type and segmentation task:
-    - `vit_b_lm` for any cell or nucleus segmentation task in light microscopy or related tasks such as segmentation of organoids or similar structures.
-    - `vit_b_em_organelles` for segmenting mitochondria or nuclei in electron microscopy. Note: this model does not yet support other organelles.
-    - `vit_b_histopathology` for segmenting nuclei in H&E stained images or other typical image data from histopathology.
+    - `hvit_t_cells` (or a larger `hvit_*_cells` model) for any cell or nucleus segmentation task in light microscopy or related tasks such as segmentation of organoids or similar structures.
+    - `hvit_s_em_mito` for segmenting mitochondria and `hvit_s_em_nuclei` for segmenting nuclei in electron microscopy.
+- Try the other automatic segmentation methods: APG is often more accurate than AIS, see [APG](#apg).
 - If you have multi-channel images then you have to pass those in a format and channel order compatible with `micro_sam`:
     - If your image has 2 or 3 channels you can use it as is. The channels must be given in the last axis.
         - If you have images with a fluorescent marker staining the cytosol or membrane and another marker staining the nucleus, then pass the cytosol/membrane maker as first channel and the nucleus marker as second channel.
     - If you have more than 3 channels then you have to reduce the number of channels to 3, either by selecting the most relevant channels (see previous item) or by averaging or otherwise combining channels in a suitable fashion.
-- If you have large images (>~ 700 x 700 pixels) you should activate tiling by passing the `tile_shape` and `halo` parameters (if you use CLI or python) or by setting `tile_x` / `tile_y`, `halo_x` / `halo_y` in the `Advanced Settings` of the `Embedding Widget` (if you use the napari tool).
-    - The recommended values for tile shape and halo are `(384, 384)` and `(64, 64)`, respectively.
-- If your image contains very small objects that you want to segment then decrease the minimum object size by passing a low value (e.g. 10) for `min_size` to the CLI / python function you are using or by setting it in the `Automatic Segmentation Settings` of the instance segmentation widget. 
+- Large images are tiled by default (see question 3 above). If the objects are very large or very small compared to the tiles, change the tile shape and the halo.
+- If your image contains very small objects that you want to segment then decrease the minimum object size by passing a low value (e.g. 10) for `min_size` to the CLI / python function you are using.
 
-If none of these steps help then the available `micro_sam` models are likely not well suited for your data. Note that you can still use `micro_sam` for your segmentation problem, but you will have to fine-tune your own model (see the next section). 
+If none of these steps help then the available `micro_sam` models are likely not well suited for your data. Note that you can still use `micro_sam` for your segmentation problem, but you will have to fine-tune your own model (see the next section).
+
 
 ## Fine-tuning questions
 
 ### 1. I have a microscopy dataset I would like to fine-tune Segment Anything for. Is it possible using `micro_sam`?
-Yes, you can fine-tune Segment Anything on your own dataset. Here's how you can do it:
-- Check out the [tutorial notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) on how to fine-tune Segment Anything with our `micro_sam.v1.training` library.
-- Or check the [examples](https://github.com/computational-cell-analytics/micro-sam/tree/main/examples/finetuning) for additional scripts that demonstrate finetuning.
-- If you are not familiar with coding in python at all then you can also use the [graphical interface for finetuning](finetuning-ui). But we recommend using a script for more flexibility and reproducibility.
+Yes, you can finetune the `micro-sam2` and SAM2 models on your own dataset. Here's how you can do it:
+- Use `micro_sam train` in the command line, or the `micro_sam.v2.training` library, see [training your own model](#training-your-own-model).
+- Check out the [tutorial notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) and the [examples](https://github.com/computational-cell-analytics/micro-sam/tree/main/examples/finetuning) for scripts that demonstrate finetuning.
 
 
 ### 2. I would like to fine-tune Segment Anything on open-source cloud services (e.g. Kaggle Notebooks), is it possible?
@@ -263,46 +259,45 @@ Yes, you can fine-tune Segment Anything on your custom datasets on Kaggle (and [
 TODO: we should improve this explanation and add a small image that visualizes the labels.
 -->
 ### 3. What kind of annotations do I need to finetune Segment Anything?
-Annotations are referred to the instance segmentation labels, i.e. each object of interests in your microscopy images have an individual id to uniquely identify all the segmented objects. You can obtain them by `micro_sam`'s annotation tools. In `micro_sam`, it's expected to provide dense segmentations (i.e. all objects per image are annotated) for finetuning Segment Anything with the additional decoder, however it's okay to use sparse segmentations (i.e. few objects per image are annotated) for just finetuning Segment Anything (without the additional decoder).
+You need instance segmentation labels, i.e. each object of interest in your microscopy images has an individual id to uniquely identify it. You can obtain them with `micro_sam`'s annotation tools. For training the decoder for automatic segmentation (the `automatic` and `joint` training modes), the segmentations must be dense (i.e. all objects per image are annotated). For training interactive segmentation only (the `interactive` mode), sparse segmentations (i.e. few objects per image are annotated) are fine. For semantic segmentation (the `semantic` mode), you need class labels.
 
 
 ### 4. I have finetuned Segment Anything on my microscopy data. How can I use it for annotating new images?
-You can load your finetuned model by entering the path to its checkpoint in the `custom_weights_path` field in the `Embedding Settings` drop-down menu.
-If you are using the python library or CLI you can specify this path with the `checkpoint_path` parameter.
+You can load your finetuned model by entering the path to its checkpoint in the `custom weights path` field in the `Embedding Settings` drop-down menu.
+If you are using the python library you can specify this path with the `checkpoint_path` parameter, and in the command line with `-c` / `--checkpoint`.
+A model that you trained in the `interactive` mode has no decoder, so you can use it for interactive segmentation, but not for automatic segmentation.
 
 
 ### 5. What is the background of the AIS (Automatic Instance Segmentation) feature in `micro_sam`?
-`micro_sam` introduces a new segmentation decoder to the Segment Anything backbone, for enabling faster and accurate automatic instance segmentation, by predicting the [distances to the object center and boundary](https://github.com/constantinpape/torch-em/blob/main/torch_em/transform/label.py#L284) as well as predicting foreground, and performing [seeded watershed-based postprocessing](https://github.com/constantinpape/torch-em/blob/main/torch_em/util/segmentation.py#L122) to obtain the instances.
+`micro_sam` adds a segmentation decoder to the image encoder, for enabling faster and accurate automatic instance segmentation. The decoder predicts the foreground, the directed distances to the object center and boundary, and the object boundaries. The post-processing derives the instances from these predictions, see [APG](#apg).
+
 
 ### 6. What is the background of the new APG (Automatic Prompt Generation) feature in `micro_sam`?
+APG (automatic prompt generation) is an automatic instance segmentation method. It derives point prompts from the predictions of the segmentation decoder, and segments each object with these prompts with the interactive part of the model. You can use it with `micro_sam inference segmentation --engine apg`, with `segmentation_mode="apg"` in python, and in the annotation tools. See [APG](#apg) for details.
 
-With the latest version 1.7.0 onwards, `micro_sam` introduces a new automatic instance segmentation method, called APG (automatic prompt generation). It builds on `micro_sam` by extracting prompts from the boundary and center distances predicted by the pretrained segmentation decoder. Once the prompts have been derived, it provides them to the prompt encoder and mask decoder (and additional postprocessing to the outputs) to obtain the instances. The method is compatible with the `micro_sam.automatic_segmentation` CLI (by selecting the `segmentation_mode="apg"`) and the python interface. See [APG](#apg) for details.
 
 ### 7. I want to finetune only the Segment Anything model without the additional instance decoder.
-The instance segmentation decoder is optional. So you can only finetune SAM or SAM and the additional decoder. Finetuning with the decoder will increase training times, but will enable you to use AIS and APG. See [this example](https://github.com/computational-cell-analytics/micro-sam/tree/main/examples/finetuning#example-for-model-finetuning) for finetuning with both the objectives.
-
-> NOTE: To try out the other way round (i.e. the automatic instance segmentation framework without the interactive capability, i.e. a UNETR: a vision transformer encoder and a convolutional decoder), you can take inspiration from this [example on LIVECell](https://github.com/constantinpape/torch-em/blob/main/experiments/vision-transformer/unetr/for_vimunet_benchmarking/run_livecell.py).
+The decoder for automatic segmentation is optional. Train with the `interactive` mode to finetune only for interactive segmentation, with the `automatic` mode to finetune only the decoder and the image encoder, or with the `joint` mode for both. Training with the decoder will increase training times, but will enable you to use AIS and APG. See [training your own model](#training-your-own-model) for details.
 
 
 ### 8. I have a NVIDIA RTX 4090Ti GPU with 24GB VRAM. Can I finetune Segment Anything?
-Finetuning Segment Anything is possible in most consumer-grade GPU and CPU resources (but training being a lot slower on the CPU). For the mentioned resource, it should be possible to finetune a ViT Base (also abbreviated as `vit_b`) by reducing the number of objects per image to 15.
-This parameter has the biggest impact on the VRAM consumption and quality of the finetuned model.
-You can find an overview of the resources we have tested for finetuning [here](#training-your-own-model).
-We also provide a the convenience function `micro_sam.v1.training.train_sam_for_configuration` that selects the best training settings for these configuration. This function is also used by the finetuning UI.
+Yes, finetuning is possible on most consumer-grade GPUs. The number of objects per image (`max_num_objects`, `--max_num_objects` in the command line) has the biggest impact on the GPU memory consumption and the quality of the finetuned model. The batch size, the patch shape and the model size also matter. If the training runs out of memory, reduce them, for example the number of objects per image.
 
-             
+
 ### 9. I want to create a dataloader for my data, to finetune Segment Anything.
-Thanks to `torch-em`, a) Creating PyTorch datasets and dataloaders using the python library is convenient and supported for various data formats and data structures.
-See the [tutorial notebook](https://github.com/constantinpape/torch-em/blob/main/notebooks/tutorial_create_dataloaders.ipynb) on how to create dataloaders using `torch-em` and the [documentation](https://github.com/constantinpape/torch-em/blob/main/doc/datasets_and_dataloaders.md) for details on creating your own datasets and dataloaders; and b) finetuning using the `napari` tool eases the aforementioned process, by allowing you to add the input parameters (path to the directory for inputs and labels etc.) directly in the tool.
-> NOTE: If you have images with large input shapes with a sparse density of instance segmentations, we recommend using [`sampler`](https://github.com/constantinpape/torch-em/blob/main/torch_em/data/sampler.py) for choosing the patches with valid segmentation for the finetuning purpose (see the [example](https://github.com/computational-cell-analytics/micro-sam/blob/main/finetuning/specialists/training/light_microscopy/plantseg_root_finetuning.py#L29) for PlantSeg (Root) specialist model in `micro_sam`).
+`micro_sam.v2.training.default_sam2_loader` creates the data loaders for image files (e.g. tif or png) and for container files (e.g. hdf5, zarr, n5, OME-Zarr), for all training modes, see [training your own model](#training-your-own-model).
+It is based on `torch-em`. See the [tutorial notebook](https://github.com/constantinpape/torch-em/blob/main/notebooks/tutorial_create_dataloaders.ipynb) on how to create dataloaders using `torch-em` and the [documentation](https://github.com/constantinpape/torch-em/blob/main/doc/datasets_and_dataloaders.md) for details on creating your own datasets and dataloaders.
+> NOTE: If you have images with large input shapes with a sparse density of instance segmentations, we recommend using a [`sampler`](https://github.com/constantinpape/torch-em/blob/main/torch_em/data/sampler.py) for choosing the patches with valid segmentation. You can pass it to `default_sam2_loader` with the `sampler` argument.
 
 
 ### 10. How can I evaluate a model I have finetuned?
-To validate a Segment Anything model for your data, you have different options, depending on the task you want to solve and whether you have segmentation annotations for your data.
+To validate a model for your data, you have different options, depending on the task you want to solve and whether you have segmentation annotations for your data.
 
 - If you don't have any annotations you will have to validate the model visually. We suggest doing this with the `micro_sam` GUI tools. You can learn how to use them in the `micro_sam` documentation.
 - If you have segmentation annotations you can use the `micro_sam` python library to evaluate the segmentation quality of different models. We provide functionality to evaluate the models for interactive and for automatic segmentation:
-    - You can use `micro_sam.v1.evaluation.evaluation.run_evaluation_for_iterative_prompting` to evaluate models for interactive segmentation.
-    - You can use `micro_sam.v1.evaluation.instance_segmentation.run_instance_segmentation_grid_search_and_inference` to evaluate models for automatic segmentation.
+    - You can use `micro_sam.v2.evaluation.inference.run_interactive_segmentation_2d` and `micro_sam.v2.evaluation.evaluation.run_evaluation_for_iterative_prompting` to evaluate models for interactive segmentation.
+    - You can segment your images with `micro_sam inference segmentation` and evaluate the results with `micro_sam v1 evaluate` to evaluate models for automatic segmentation.
 
 We provide an [example notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/inference_and_evaluation.ipynb) that shows how to use this evaluation functionality.
+
+

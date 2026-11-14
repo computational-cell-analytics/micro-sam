@@ -2,41 +2,31 @@ import os
 
 from elf.io import open_file
 
+from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.util import get_cache_directory
 from micro_sam.sample_data import fetch_tracking_example_data
-from micro_sam.v1.automatic_segmentation import automatic_tracking, get_predictor_and_segmenter
+from micro_sam.v2.automatic_segmentation import automatic_tracking, get_predictor_and_segmenter
 
 
 DATA_CACHE = os.path.join(get_cache_directory(), "sample_data")
-EMBEDDING_CACHE = os.path.join(get_cache_directory(), "embeddings")
-os.makedirs(EMBEDDING_CACHE, exist_ok=True)
 
 
-def example_automatic_tracking(use_finetuned_model):
+def example_automatic_tracking(model_type):
     """Run automatic tracking for data from the cell tracking challenge.
+
+    Each frame is segmented with the decoder of the micro-sam2 model (AIS), and the objects are linked
+    across frames with Trackastra.
     """
-    # Download the example tracking data.
+    # Download the example tracking data and load the sequence of tif files as a timeseries.
     example_data = fetch_tracking_example_data(DATA_CACHE)
-
-    # Load the example data (load the sequence of tif files as timeseries)
     with open_file(example_data, mode="r") as f:
-        timeseries = f["*.tif"]
-
-    if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc-vit_b_lm.zarr")
-        model_type = "vit_b_lm"
-    else:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-ctc.zarr")
-        model_type = "vit_h"
+        timeseries = f["*.tif"][:]
 
     predictor, segmenter = get_predictor_and_segmenter(model_type=model_type, segmentation_mode="ais")
 
+    # The tracking result is saved in the Cell Tracking Challenge format in 'output_path'.
     masks_tracked, _ = automatic_tracking(
-        predictor=predictor,
-        segmenter=segmenter,
-        input_path=timeseries[:],
-        output_path="./hela_ctc",
-        embedding_path=embedding_path,
+        predictor=predictor, segmenter=segmenter, input_path=timeseries, output_path="./hela_ctc",
     )
 
     import napari
@@ -47,10 +37,12 @@ def example_automatic_tracking(use_finetuned_model):
 
 
 def main():
-    # Whether to use the fine-tuned SAM model.
-    use_finetuned_model = True
-    example_automatic_tracking(use_finetuned_model)
+    example_automatic_tracking(DEFAULT_MODEL)
 
 
+# The corresponding CLI call for example_automatic_tracking:
+# (replace <cache> with the cache directory on your machine)
+# $ micro_sam inference tracking -i <cache>/sample_data/DIC-C2DH-HeLa.zip.unzip/DIC-C2DH-HeLa/01 -k "*.tif" \
+#   -o hela_ctc -m hvit_t_cells
 if __name__ == "__main__":
     main()
