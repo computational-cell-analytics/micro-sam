@@ -282,6 +282,9 @@ def run_multicut(
         # higher value here would oversubscribe instead of adding throughput.
         density = _compute_flow_density(dists, fg_mask, n_iter=n_iter, dt=dt, sigma=sigma, n_threads=1)
         seeds = label(density > density_threshold)
+        # A slice without seeds becomes one region, else the z offset turns its zeros into the previous slice's last id.
+        if seeds.max() == 0:
+            seeds = np.ones(bd.shape, dtype=seeds.dtype)
         # watershed requires a float heightmap. Boundary maps are usually float already.
         bd = bd if np.issubdtype(bd.dtype, np.floating) else bd.astype("float32")
         wsz = watershed(bd, markers=seeds)

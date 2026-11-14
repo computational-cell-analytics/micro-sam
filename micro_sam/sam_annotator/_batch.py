@@ -8,6 +8,7 @@ task-agnostic; everything task-specific lives in the concrete adapter.
 
 import os
 
+import numpy as np
 import imageio.v3 as imageio
 
 import napari
@@ -19,6 +20,25 @@ from qtpy.QtCore import QEvent, QObject, Qt, QTimer
 from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._titles import get_dock_title
+from ..util import prepare_annotation_image
+
+
+def load_batch_image(entry, ndim=None):
+    """Load one batch image and prepare it in the same way as the annotator does.
+
+    Singleton axes are squeezed and a channel axis is mapped to a trailing RGB axis, with
+    `micro_sam.util.prepare_annotation_image`, so all batch tools treat an image in the same way.
+
+    Args:
+        entry: The image as an array, or the path to its file.
+        ndim: The spatial dimensionality (2 or 3), or None to derive it from the image.
+
+    Returns:
+        The prepared image and its spatial dimensionality.
+    """
+    image = entry if isinstance(entry, np.ndarray) else imageio.imread(entry)
+    image, ndim, _ = prepare_annotation_image(image, ndim=ndim)
+    return image, ndim
 
 
 def _hide_embedding_widget(annotator):
@@ -126,6 +146,9 @@ class BatchAnnotatorTask:
     #: Whether the task supports going back to the previous item.
     supports_previous = False
 
+    #: The spatial dimensionality (2 or 3) that every item is loaded with.
+    ndim = None
+
     def result_filename(self, entry, index: int) -> str:
         """Return the filename (relative to `output_folder`) of this item's saved result.
 
@@ -214,8 +237,7 @@ def run_batch(
         return os.path.exists(path)
 
     def _load_pixels(index):
-        entry = images[index]
-        return entry if have_inputs_as_arrays else imageio.imread(entry)
+        return load_batch_image(images[index], ndim=task.ndim)[0]
 
     # Prepare the shared model and per-item embeddings (task-specific).
     embedding_paths = task.precompute(images)

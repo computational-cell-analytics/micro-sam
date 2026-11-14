@@ -8,6 +8,7 @@ import os
 import json
 import uuid
 import pooch
+import types
 import atexit
 import pickle
 import shutil
@@ -31,8 +32,8 @@ from skimage.segmentation import find_boundaries
 import torch
 from torchvision.ops.boxes import batched_nms
 
-import elf.parallel as parallel_impl
 from elf.io import open_file
+import elf.parallel as parallel_impl
 
 from bioimage_cpp.distance import distance_transform
 from bioimage_cpp.segmentation import label, relabel_sequential
@@ -57,11 +58,11 @@ except ImportError:
 
 # This is the default model used in micro_sam
 # Currently it is set to vit_b_lm
-_DEFAULT_MODEL = "vit_b_lm"
+DEFAULT_SAM1_MODEL = "vit_b_lm"
 
 # The valid model types. Each type corresponds to the architecture of the
 # vision transformer used within SAM.
-_MODEL_TYPES = ("vit_l", "vit_b", "vit_h", "vit_t")
+SAM1_MODEL_TYPES = ("vit_l", "vit_b", "vit_h", "vit_t")
 
 
 ImageEmbeddings = Dict[str, Any]
@@ -296,12 +297,12 @@ def get_embedding_function(model_type: str) -> callable:
     if isinstance(model_type, str) and model_type[:6] in sam2_backbones:
         from .v2.util import precompute_image_embeddings
         return precompute_image_embeddings
-    if isinstance(model_type, str) and model_type[:5] in _MODEL_TYPES:
+    if isinstance(model_type, str) and model_type[:5] in SAM1_MODEL_TYPES:
         from .v1.util import precompute_image_embeddings
         return precompute_image_embeddings
 
     raise ValueError(
-        f"Invalid model_type: '{model_type}'. Expected a SAM1 model (backbone one of {list(_MODEL_TYPES)}), "
+        f"Invalid model_type: '{model_type}'. Expected a SAM1 model (backbone one of {list(SAM1_MODEL_TYPES)}), "
         f"a SAM2 model (backbone one of {sam2_backbones}) or a VFM encoder (one of {list(get_vfm_model_names())}). "
         "Finetuned models keep their backbone prefix, e.g. 'vit_b_lm' or 'hvit_t_cells'. "
         "Run 'micro_sam info' to list all available models."
@@ -329,15 +330,15 @@ def _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_
         # 'device=None' lets 'get_sam2_model' auto-detect the best device (cuda > mps > cpu);
         # an explicit device (e.g. from the '--device' CLI argument) is forwarded and honored.
         if ndim == 2:  # Get the SAM2 model and prepare the image predictor.
-            model = get_sam2_model(model_type=model_type, input_type="images", device=device)
-            # Use the shared resize-longest predictor.
+            model = get_sam2_model(
+                model_type=model_type, input_type="images", device=device, checkpoint_path=checkpoint_path
+            )
+            # Use the shared resize-longest predictor, which takes the model type, name and hash of the model.
             predictor = get_sam2_image_predictor(model)
-            # 'get_sam2_model' sets these on the video predictor. Set them here on the image
-            # predictor too, so the tool can write the embedding signature when it caches embeddings.
-            predictor.model_type = model_type
-            predictor.model_name = model_type
         elif ndim == 3:  # Get SAM2 video predictor
-            predictor = get_sam2_model(model_type=model_type, input_type="videos", device=device)
+            predictor = get_sam2_model(
+                model_type=model_type, input_type="videos", device=device, checkpoint_path=checkpoint_path
+            )
         else:
             raise ValueError
         state = {}
@@ -382,13 +383,26 @@ def _available_devices():
 # throwing an AttributeError or ModueNotFoundError.
 # NOTE: since we just want to unpickle the model to load its weights these errors don't matter.
 # See also https://stackoverflow.com/questions/27732354/unable-to-load-files-using-pickle-and-multiple-modules
+class _MissingObject:
+    """A placeholder for an object whose class cannot be imported. It takes any arguments and state."""
+
+    def __new__(cls, *args, **kwargs):
+        return super().__new__(cls)
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def __setstate__(self, state):
+        pass
+
+
 class _CustomUnpickler(pickle.Unpickler):
     def find_class(self, module, name):
         try:
             return super().find_class(module, name)
         except (AttributeError, ModuleNotFoundError) as e:
             warnings.warn(f"Did not find {module}:{name} and will skip it, due to error {e}")
-            return None
+            return type(name, (_MissingObject,), {"__module__": module})
 
 
 def _compute_hash(path, chunk_size=8192):
@@ -402,16 +416,32 @@ def _compute_hash(path, chunk_size=8192):
     return f"xxh128:{hash_val}"
 
 
+def load_checkpoint(checkpoint_path: Union[str, os.PathLike], map_location: Any = "cpu") -> Any:
+    """Load a checkpoint, and skip the objects whose class cannot be imported.
+
+    A torch_em training checkpoint also holds the settings of the data loaders, for example the
+    transforms. A transform that the training script defined itself cannot be imported elsewhere.
+    The weights do not need these objects, so they are skipped with a warning.
+
+    Args:
+        checkpoint_path: The path to the checkpoint.
+        map_location: Where to map the tensors to. By default the CPU.
+
+    Returns:
+        The content of the checkpoint.
+    """
+    # A copy of the pickle module with the tolerant unpickler, so the pickle module itself stays unchanged.
+    skip_missing_pickle = types.ModuleType("skip_missing_pickle")
+    skip_missing_pickle.__dict__.update(pickle.__dict__)
+    skip_missing_pickle.Unpickler = _CustomUnpickler
+    return torch.load(checkpoint_path, map_location=map_location, pickle_module=skip_missing_pickle, weights_only=False)
+
+
 # Load the state from a checkpoint.
 # The checkpoint can either contain a sam encoder state
 # or it can be a checkpoint for model finetuning.
 def _load_checkpoint(checkpoint_path):
-    # Over-ride the unpickler with our custom one.
-    # This enables imports from torch_em checkpoints even if it cannot be fully unpickled.
-    custom_pickle = pickle
-    custom_pickle.Unpickler = _CustomUnpickler
-
-    state = torch.load(checkpoint_path, map_location="cpu", pickle_module=custom_pickle)
+    state = load_checkpoint(checkpoint_path)
     if "model_state" in state:
         # Copy the model weights from torch_em's training format.
         model_state = state["model_state"]
@@ -591,6 +621,31 @@ def _channels_to_rgb(image: np.ndarray) -> np.ndarray:
         return np.concatenate([image, zero_channel], axis=-1)
     warnings.warn(f"You provided an input with {n_channels} channels. Only the first three will be used.")
     return image[..., :3]
+
+
+def match_image_shape(labels: np.ndarray, image_shape: Tuple[int, ...]) -> np.ndarray:
+    """Bring a label image, such as a segmentation or annotations, to the shape of a prepared image.
+
+    `prepare_annotation_image` squeezes singleton axes from the image, so the labels lose the same
+    singleton axes. Any other difference in shape is an error.
+
+    Args:
+        labels: The label image.
+        image_shape: The spatial shape of the prepared image.
+
+    Returns:
+        The label image in the shape of the image.
+
+    Raises:
+        ValueError: If the shapes differ in more than singleton axes.
+    """
+    labels = np.asarray(labels)
+    image_shape = tuple(image_shape)
+    if labels.shape == image_shape:
+        return labels
+    if np.squeeze(labels).shape != tuple(size for size in image_shape if size != 1):
+        raise ValueError(f"The labels of shape {labels.shape} do not match the image of shape {image_shape}.")
+    return labels.reshape(image_shape)
 
 
 def prepare_annotation_image(image: np.ndarray, ndim: Optional[int] = None) -> Tuple[np.ndarray, int, bool]:

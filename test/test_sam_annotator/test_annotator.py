@@ -1,13 +1,13 @@
 import platform
 
-import numpy as np
-import pytest
 import torch
+import pytest
+import numpy as np
 from skimage.data import binary_blobs
 
-from micro_sam.v2.util import DEFAULT_MODEL, DEFAULT_TILE_SHAPE, DEFAULT_HALO
-from micro_sam.sam_annotator.annotator import annotator, detect_ndim, detect_ndim_from_viewer, Annotator
 from micro_sam._test_util import check_layer_initialization
+from micro_sam.v2.util import DEFAULT_MODEL, DEFAULT_TILE_SHAPE, DEFAULT_HALO
+from micro_sam.sam_annotator.annotator import annotator, detect_ndim_from_viewer, Annotator
 
 
 @pytest.mark.gui
@@ -181,52 +181,40 @@ def test_progress_bar_initial_description(monkeypatch):
     assert captured["kwargs"] == {"desc": "Preparing image embeddings"}
 
 
-class TestDetectNdim:
-    """Test the detect_ndim helper function."""
+class TestLoadBatchImage:
+    """Every batch tool loads its images with 'load_batch_image', which prepares them like the annotator."""
 
-    def test_2d_grayscale(self):
-        """Test 2D grayscale image detection."""
-        image = np.zeros((512, 512), dtype=np.uint8)
-        assert detect_ndim(image) == 2
+    @pytest.mark.parametrize("shape, ndim, expected_shape, expected_ndim", [
+        ((64, 64), None, (64, 64), 2),
+        ((64, 64, 3), None, (64, 64, 3), 2),
+        ((64, 64, 2), None, (64, 64, 3), 2),
+        ((1, 64, 64), None, (64, 64), 2),
+        ((5, 64, 64), None, (5, 64, 64), 3),
+        ((5, 64, 64, 3), None, (5, 64, 64, 3), 3),
+        ((3, 64, 64), 2, (64, 64, 3), 2),
+        ((1, 64, 64), 3, (1, 64, 64), 3),
+    ])
+    def test_shapes(self, shape, ndim, expected_shape, expected_ndim):
+        from micro_sam.sam_annotator._batch import load_batch_image
+        image, detected_ndim = load_batch_image(np.zeros(shape, dtype="uint8"), ndim=ndim)
+        assert image.shape == expected_shape
+        assert detected_ndim == expected_ndim
 
-    def test_2d_rgb(self):
-        """Test 2D RGB image detection."""
-        image = np.zeros((512, 512, 3), dtype=np.uint8)
-        assert detect_ndim(image) == 2
+    def test_file_matches_array(self, tmp_path):
+        import imageio.v3 as imageio
+        from micro_sam.sam_annotator._batch import load_batch_image
+        data = np.random.randint(0, 255, size=(1, 32, 32), dtype="uint8")
+        path = str(tmp_path / "image.tif")
+        imageio.imwrite(path, data)
+        from_file, ndim_file = load_batch_image(path)
+        from_array, ndim_array = load_batch_image(data)
+        assert ndim_file == ndim_array == 2
+        np.testing.assert_array_equal(from_file, from_array)
 
-    def test_3d_grayscale(self):
-        """Test 3D grayscale volume detection."""
-        image = np.zeros((10, 512, 512), dtype=np.uint8)
-        assert detect_ndim(image) == 3
-
-    def test_3d_rgb(self):
-        """Test 3D RGB volume detection."""
-        image = np.zeros((10, 512, 512, 3), dtype=np.uint8)
-        assert detect_ndim(image) == 3
-
-    def test_ambiguous_shape_assumes_3d(self):
-        """Test that shape (3, 512, 512) is interpreted as 3D grayscale."""
-        image = np.zeros((3, 512, 512), dtype=np.uint8)
-        # By default, assumes 3D grayscale rather than RGB 2D
-        assert detect_ndim(image) == 3
-
-    def test_invalid_1d_shape(self):
-        """Test that 1D arrays raise ValueError."""
-        image = np.zeros(512, dtype=np.uint8)
-        with pytest.raises(ValueError, match="Invalid image shape"):
-            detect_ndim(image)
-
-    def test_invalid_4d_non_rgb(self):
-        """Test that 4D arrays without RGB channel raise ValueError."""
-        image = np.zeros((10, 10, 512, 512), dtype=np.uint8)
-        with pytest.raises(ValueError, match="Invalid 4D shape"):
-            detect_ndim(image)
-
-    def test_invalid_5d_shape(self):
-        """Test that 5D arrays raise ValueError."""
-        image = np.zeros((2, 3, 10, 512, 512), dtype=np.uint8)
-        with pytest.raises(ValueError, match="Invalid image shape"):
-            detect_ndim(image)
+    def test_unsupported_shape(self):
+        from micro_sam.sam_annotator._batch import load_batch_image
+        with pytest.raises(ValueError):
+            load_batch_image(np.zeros((4, 5, 64, 64), dtype="uint8"))
 
 
 class TestAnnotatorApiNdimOverride:
@@ -734,7 +722,10 @@ class TestAutoSegVolumeDispatch:
         volume = np.zeros((5, 16, 16), dtype="float32")
         auto_layer = SimpleNamespace(data=np.zeros((5, 16, 16), dtype="uint32"), refresh=lambda: None)
         viewer = SimpleNamespace(
-            layers={"image": SimpleNamespace(data=volume), "auto_segmentation": auto_layer},
+            layers={
+                "image": SimpleNamespace(data=volume, world_to_data=lambda point: point),
+                "auto_segmentation": auto_layer,
+            },
             dims=SimpleNamespace(point=(current_slice, 0, 0)),
         )
 

@@ -18,7 +18,7 @@ from bioimage_cpp.utils import Blocking
 from . import models as custom_models  # noqa
 from ..util import (  # noqa
     ImageEmbeddings, SamPredictor, sam_model_registry, VIT_T_SUPPORT,
-    _DEFAULT_MODEL, _MODEL_TYPES,
+    DEFAULT_SAM1_MODEL, SAM1_MODEL_TYPES,
     get_device, _available_devices, _to_image, _load_checkpoint, _compute_hash,
     _CustomUnpickler, get_cache_directory, get_model_cache_directory,
     _create_dataset_with_data, _create_dataset_without_data, _open_embeddings,
@@ -148,7 +148,7 @@ def _download_sam_model(model_type, progress_bar_factory=None):
 
 
 def get_sam_model(
-    model_type: str = _DEFAULT_MODEL,
+    model_type: str = DEFAULT_SAM1_MODEL,
     device: Optional[Union[str, torch.device]] = None,
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     return_sam: bool = False,
@@ -233,8 +233,8 @@ def get_sam_model(
     # Our fine-tuned model types have a suffix "_...". This suffix needs to be stripped
     # before calling sam_model_registry.
     abbreviated_model_type = model_type[:5]
-    if abbreviated_model_type not in _MODEL_TYPES:
-        raise ValueError(f"Invalid model_type: {abbreviated_model_type}. Expect one of {_MODEL_TYPES}")
+    if abbreviated_model_type not in SAM1_MODEL_TYPES:
+        raise ValueError(f"Invalid model_type: {abbreviated_model_type}. Expect one of {SAM1_MODEL_TYPES}")
     if abbreviated_model_type == "vit_t" and not VIT_T_SUPPORT:
         raise RuntimeError(
             "'mobile_sam' is required for the vit-tiny. "

@@ -23,7 +23,7 @@ contributions:
       title: Load 2D Hela sample data from micro_sam plugin
     - id: micro_sam.sample_data_3d
       python_name: micro_sam.sample_data:sample_data_3d
-      title: Load Lucchi++ 3D sample data from micro_sam plugin
+      title: Load Lucchi 3D sample data from micro_sam plugin
     - id: micro_sam.sample_data_tracking
       python_name: micro_sam.sample_data:sample_data_tracking
       title: Load tracking sample data from micro_sam plugin
@@ -65,7 +65,7 @@ contributions:
       display_name: HeLa 2d example data
       key: micro_sam-hela2d
     - command: micro_sam.sample_data_3d
-      display_name: Lucchi++ 3d dataset
+      display_name: Lucchi 3d dataset
       key: micro_sam-lucchi
     - command: micro_sam.sample_data_tracking
       display_name: Tracking sample dataset

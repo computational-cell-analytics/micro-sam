@@ -628,24 +628,20 @@ def _cache_ais_state_v2(
 def _resolve_unisam2_decoder(model_type, checkpoint_path, device):
     """Return a UniSAM2 decoder for the SAM2 model if one is available, else None (fall back to AMG).
 
-    Mirrors `micro_sam.v2.instance_segmentation.get_decoder`: a decoder from a custom
-    `checkpoint_path`, or the registered decoder of a finetuned model (e.g. 'hvit_t_cells'). Any
-    failure (e.g. an interactive-only checkpoint without a decoder) returns None.
+    Uses `micro_sam.v2.instance_segmentation.get_decoder`: a decoder from a custom `checkpoint_path`
+    (a joint checkpoint, or a model file with its '<name>_decoder' file next to it), or the registered
+    decoder of a finetuned model (e.g. 'hvit_t_cells'). Any failure (e.g. an interactive-only
+    checkpoint without a decoder) returns None.
     """
-    from .v2.util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
-    from .v2.instance_segmentation import get_unisam2_model
+    from .v2.util import FINETUNED_MODELS, has_registered_decoder
+    from .v2.instance_segmentation import get_decoder
 
-    encoder = model_type[:6]
-    if checkpoint_path is not None:
-        decoder_source = checkpoint_path
-    elif model_type in FINETUNED_MODELS and has_registered_decoder(model_type):
-        _, _, decoder_source = _download_finetuned_sam2_model(model_type)
-    else:
+    if checkpoint_path is None and not (model_type in FINETUNED_MODELS and has_registered_decoder(model_type)):
         return None
     try:
-        return get_unisam2_model(decoder_source, device=util.get_device(device), encoder=encoder)
+        return get_decoder(model_type, checkpoint=checkpoint_path, device=util.get_device(device))
     except Exception as e:
-        print(f"Could not load a UniSAM2 decoder from '{decoder_source}': {e}")
+        print(f"Could not load a UniSAM2 decoder for '{model_type}': {e}")
         return None
 
 
