@@ -562,6 +562,25 @@ def _build_sam2_backbone(model_cfg, checkpoint_path, device, input_type):
 BACKBONE_SIGNATURES = {(96, 12): "hvit_t", (96, 16): "hvit_s", (112, 24): "hvit_b", (144, 48): "hvit_l"}
 
 
+def strip_wrapper_prefixes(state: dict) -> dict:
+    """Remove the key prefixes that DDP ('module.') and torch.compile ('_orig_mod.') add to model weights.
+
+    Args:
+        state: The model weights.
+
+    Returns:
+        The model weights without these prefixes.
+    """
+    prefixes = ("module.", "_orig_mod.")
+
+    def _strip(key):
+        while key.startswith(prefixes):
+            key = key[len(next(p for p in prefixes if key.startswith(p))):]
+        return key
+
+    return {_strip(key): value for key, value in state.items()}
+
+
 def _read_sam2_checkpoint(checkpoint_path):
     """Read a SAM2 checkpoint.
 
@@ -585,7 +604,7 @@ def _read_sam2_checkpoint(checkpoint_path):
             if isinstance(state.get(key), dict):
                 model_state = state[key]
                 break
-    model_state = {(k[len("module."):] if k.startswith("module.") else k): v for k, v in model_state.items()}
+    model_state = strip_wrapper_prefixes(model_state)
 
     encoder_only = "image_encoder.trunk.patch_embed.proj.weight" not in model_state
     if encoder_only:
@@ -702,6 +721,10 @@ def get_sam2_model(
         peft_kwargs = {k: v for k, v in peft_kwargs.items() if k != "quantize"}
 
     model = _load_sam2_from_state(CFG_PATHS[backbone], input_type, model_state, device, peft_kwargs)
+    if peft_kwargs:
+        from micro_sam.models.peft import serialize_peft_kwargs
+        # Training reads the PEFT settings from here, so that it continues with the same PEFT layers.
+        model.peft_config = serialize_peft_kwargs(peft_kwargs)
 
     # Both predictor wrappers and direct model use need this metadata for embedding signatures.
     model.model_type = model_type
@@ -738,7 +761,7 @@ def export_custom_qlora_sam2_model(
         ft_model_state = ft_state["model"]
     else:
         ft_model_state = ft_state
-    ft_model_state = {(k[len("module."):] if k.startswith("module.") else k): v for k, v in ft_model_state.items()}
+    ft_model_state = strip_wrapper_prefixes(ft_model_state)
 
     updated_model_state = {k: v for k, v in ft_model_state.items() if not k.startswith("image_encoder.")}
     modified_attn_layers = set()

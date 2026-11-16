@@ -989,7 +989,8 @@ def _resolve_training_data(
 )
 @click.option(
     "-c", "--checkpoint_path", default=None,
-    help="A custom checkpoint to start from, for 'interactive' and 'joint' training. The model size is read from it."
+    help="A checkpoint to start from, for example the 'best.pt' of an earlier training. It can hold a decoder, "
+    "or have its '_decoder' file next to it. The model size is read from it."
 )
 @click.option(
     "--patch_shape", default="512,512",
@@ -1037,10 +1038,6 @@ def train(
     from .v2.util import DEFAULT_MODEL
     from .v2.training.loaders import default_sam2_loader
 
-    if checkpoint_path is not None and mode in ("automatic", "semantic"):
-        raise click.UsageError(
-            f"'--checkpoint_path' is supported for 'interactive' and 'joint' training, not '{mode}'."
-        )
     if mode == "semantic" and num_classes is None:
         raise click.UsageError("Pass '--num_classes' for 'semantic' training.")
     model_type = DEFAULT_MODEL if model_type is None else model_type
@@ -1065,7 +1062,7 @@ def train(
         train_sam2(checkpoint_path=checkpoint_path, max_num_objects=max_num_objects, **kwargs)
     elif mode == "automatic":
         from .v2.training import train_automatic
-        train_automatic(with_boundaries=True, **kwargs)
+        train_automatic(checkpoint_path=checkpoint_path, with_boundaries=True, **kwargs)
     elif mode == "joint":
         from .v2.training import train_joint_sam2
         train_joint_sam2(
@@ -1073,7 +1070,7 @@ def train(
         )
     else:
         from .v2.training import train_semantic
-        train_semantic(num_classes=num_classes, **kwargs)
+        train_semantic(checkpoint_path=checkpoint_path, num_classes=num_classes, **kwargs)
     print("The trained model is saved at", os.path.join(save_root or ".", "checkpoints", name, "best.pt"))
 
 

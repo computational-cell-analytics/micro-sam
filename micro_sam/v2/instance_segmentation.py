@@ -785,21 +785,15 @@ def get_unisam2_model(
     Raises:
         NoDecoderError: If the checkpoint has no decoder, because it was trained for interactive segmentation only.
     """
-    from micro_sam.v2.models.util import UniSAM2, joint_unetr_state
+    from micro_sam.v2.models.util import UniSAM2, read_unisam2_state
 
     # Captured before 'encoder' is reassigned to the built PEFT module below.
     resolved_model_type = encoder if isinstance(encoder, str) else encoder_model_type
 
     device = "cpu" if device is None else device
     state = load_checkpoint(checkpoint_path, map_location=device)
-    # A joint checkpoint holds the interactive model and the decoder, see joint_unetr_state.
-    if isinstance(state, dict) and ("decoder_state" in state or "unetr_state" in state):
-        model_state = joint_unetr_state(state)
-    elif isinstance(state, dict):
-        model_state = state.get("model_state", state)
-    else:
-        model_state = state
-    if not isinstance(model_state, dict) or "out_conv.weight" not in model_state:
+    model_state = read_unisam2_state(state)
+    if model_state is None:
         raise NoDecoderError(checkpoint_path)
 
     if peft_kwargs is None and isinstance(state, dict) and state.get("peft_kwargs") is not None:
