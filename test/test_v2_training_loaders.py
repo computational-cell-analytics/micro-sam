@@ -4,7 +4,7 @@ import h5py
 import numpy as np
 import pytest
 import imageio.v3 as imageio
-from skimage.measure import label
+from bioimage_cpp.segmentation import label
 from click.testing import CliRunner
 from skimage.data import binary_blobs
 

@@ -5,7 +5,7 @@ import numpy as np
 import torch
 
 from skimage.data import binary_blobs
-from skimage.measure import label
+from bioimage_cpp.segmentation import label
 from skimage.transform import AffineTransform, warp
 
 from micro_sam.util import segmentation_to_one_hot

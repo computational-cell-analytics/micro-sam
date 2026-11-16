@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from scipy.ndimage import shift
 from skimage.draw import disk
-from skimage.measure import label as connected_components
+from bioimage_cpp.segmentation import label as connected_components
 
 import micro_sam.util as util
 

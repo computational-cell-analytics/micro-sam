@@ -10,7 +10,7 @@ from micro_sam.v1.instance_segmentation import get_predictor_and_decoder
 
 from elf.evaluation.matching import matching
 from skimage.draw import disk
-from skimage.measure import label
+from bioimage_cpp.segmentation import label
 
 pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
 

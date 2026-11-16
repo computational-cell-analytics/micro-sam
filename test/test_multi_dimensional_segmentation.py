@@ -3,7 +3,7 @@ import unittest
 import pytest
 import numpy as np
 from skimage.data import binary_blobs
-from skimage.measure import label
+from bioimage_cpp.segmentation import label
 
 pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
 

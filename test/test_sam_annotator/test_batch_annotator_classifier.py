@@ -7,7 +7,7 @@ import pytest
 import imageio.v3 as imageio
 from joblib import load
 from skimage.data import binary_blobs
-from skimage.measure import label
+from bioimage_cpp.segmentation import label
 
 from micro_sam.v2.util import DEFAULT_MODEL
 from micro_sam.sam_annotator._state import AnnotatorState
