@@ -246,11 +246,14 @@ def test_cli_train(data_folder, captured_training, mode, trainer):
         "train", "-i", str(data_folder / "tif_images"), "--image_key", "*.tif",
         "-l", str(data_folder / "tif_labels"), "--label_key", "*.tif", "--mode", mode,
         "--patch_shape", "64,64", "--n_iterations", "5", "--num_workers", "0", "--num_classes", "2",
+        "-c", "model.pt",
     ]
     result = CliRunner().invoke(cli, args)
     assert result.exit_code == 0, result.output
     kwargs = captured_training[trainer]
     assert kwargs["name"] == f"sam2_{mode}" and kwargs["model_type"] == "hvit_t_cells"
+    # All modes can start from a checkpoint.
+    assert kwargs["checkpoint_path"] == "model.pt"
     assert kwargs["n_iterations"] == 5
     x, y = next(iter(kwargs["train_loader"]))
     assert x.shape == (1, 3, 1, 64, 64)
@@ -277,7 +280,6 @@ def test_cli_train_containers(data_folder, captured_training):
 
 @pytest.mark.parametrize("extra_args, message", [
     (["--mode", "semantic"], "--num_classes"),
-    (["--mode", "automatic", "-c", "model.pt"], "--checkpoint_path"),
     (["--val_images", "a.tif"], "--val_labels"),
     (["--patch_shape", "64"], "--patch_shape"),
 ])
