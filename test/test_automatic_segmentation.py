@@ -5,7 +5,7 @@ import pytest
 import numpy as np
 from skimage.draw import disk
 from scipy.ndimage import shift
-from skimage.measure import label as connected_components
+from bioimage_cpp.segmentation import label as connected_components
 
 import micro_sam.util as util
 

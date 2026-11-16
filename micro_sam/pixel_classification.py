@@ -171,7 +171,8 @@ def _compute_tiled_feature_image(
     With `upsampler`, each tile's inner block is upsampled with AnyUp using the matching image crop.
     """
     tile_shape, halo, shape = features.attrs["tile_shape"], features.attrs["halo"], features.attrs["shape"]
-    tiling = Blocking([0, 0], list(shape), list(tile_shape))
+    # A 3d volume stores (z, y, x), but the tiling is in-plane.
+    tiling = Blocking([0, 0], list(shape)[-2:], list(tile_shape))
     grid, scale = _grid_shape(image_hw, max_grid_size)
 
     feature_image = None
@@ -262,7 +263,7 @@ def compute_pixel_features(
     if upsampler is not None:
         if is_tiled:
             n_blocks = Blocking(
-                [0, 0], list(features.attrs["shape"]), list(features.attrs["tile_shape"])
+                [0, 0], list(features.attrs["shape"])[-2:], list(features.attrs["tile_shape"])
             ).number_of_blocks
         else:
             n_blocks = 1
@@ -323,9 +324,21 @@ def accumulate_pixel_labels(annotation: np.ndarray, grid_shape: Tuple[int, ...])
         The labels flattened over the grid, aligned row-wise with the features.
     """
     def resize_plane(plane, target_hw):
-        return resize(
-            plane, target_hw, order=0, anti_aliasing=False, preserve_range=True
-        ).astype(annotation.dtype)
+        # A grid cell takes the class that most of its annotated pixels have. A nearest-neighbour resize
+        # samples one pixel per cell, so it loses most thin scribbles.
+        grid_h, grid_w = target_hw
+        out = np.zeros(target_hw, dtype=annotation.dtype)
+        ys, xs = np.nonzero(plane)
+        if len(ys) == 0:
+            return out
+        cells = (ys * grid_h // plane.shape[0]) * grid_w + xs * grid_w // plane.shape[1]
+        values = plane[ys, xs].astype("int64")
+        n_classes = int(values.max()) + 1
+        counts = np.bincount(cells * n_classes + values, minlength=grid_h * grid_w * n_classes)
+        counts = counts.reshape(grid_h * grid_w, n_classes)
+        annotated = counts.sum(axis=1) > 0
+        out.reshape(-1)[annotated] = counts[annotated].argmax(axis=1)
+        return out
 
     if len(grid_shape) == 2:
         return resize_plane(annotation, grid_shape).reshape(-1)
@@ -498,8 +511,10 @@ def run_training_with_pixel_classifier(
         if isinstance(annotation, (str, os.PathLike)):
             annotation = util.load_image_data(annotation, key=annotation_key)
 
-        this_ndim = ndim if ndim is not None else (image.ndim - 1 if image.shape[-1] == 3 else image.ndim)
+        # Prepared in the same way as in the annotator, so the features match those of the GUI.
+        image, this_ndim, _ = util.prepare_annotation_image(image, ndim=ndim)
         image_shape = image.shape[:this_ndim]
+        annotation = util.match_image_shape(annotation, image_shape)
         embeddings = compute_embeddings(predictor, image, verbose=False, ndim=this_ndim)
         use_image = upsampler is not None or classical_features is not None
         features, grid_shape = compute_pixel_features(
@@ -570,7 +585,8 @@ def run_prediction_with_pixel_classifier(
     for image in tqdm(images, total=len(images), desc="Run prediction with pixel classifier"):
         if isinstance(image, (str, os.PathLike)):
             image = util.load_image_data(image, key=image_key)
-        this_ndim = ndim if ndim is not None else (image.ndim - 1 if image.shape[-1] == 3 else image.ndim)
+        # Prepared in the same way as in the annotator, so the features match those of the GUI.
+        image, this_ndim, _ = util.prepare_annotation_image(image, ndim=ndim)
         image_shape = image.shape[:this_ndim]
         embeddings = compute_embeddings(predictor, image, verbose=False, ndim=this_ndim)
         use_image = upsampler is not None or classical_features is not None

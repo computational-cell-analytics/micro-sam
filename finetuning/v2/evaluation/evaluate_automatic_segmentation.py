@@ -30,7 +30,8 @@ from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder
 
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASET_SPACING, MODEL_TYPES, MODES, VOLUME_SPEED_OPTIONS, build_model,
-    check_data_download, evaluate_samples, has_val_split, load_apg_overrides, postprocess_unisam2, predict_unisam2,
+    check_data_download, check_experiment_variables, evaluate_samples, has_val_split, load_apg_overrides,
+    postprocess_unisam2, predict_unisam2,
     pad_to_min_shape, read_tuned_params, resolve_checkpoint_identity, use_tmpdir_for_embeddings,
 )
 
@@ -74,8 +75,9 @@ def segment(
         from skimage.segmentation import relabel_sequential
         # The z axis is moved last, so that pad_to_min_shape pads the y and x axes of every slice.
         padded, crop = pad_to_min_shape(np.moveaxis(raw, 0, -1), min_shape)
-        seg = segment(model, mode, np.moveaxis(padded, -1, 0), ndim, dataset_name, model_type, params, device, spacing,
-                      devices)
+        seg = segment(
+            model, mode, np.moveaxis(padded, -1, 0), ndim, dataset_name, model_type, params, device, spacing, devices
+        )
         return relabel_sequential(seg[(slice(None),) + crop])[0].astype("uint32")
     if mode == "apg":
         model.clear_state()
@@ -202,6 +204,7 @@ def main():
         "back. Defaults to TRAINING_SCALE_MIN_SHAPE_2D of the dataset.",
     )
     args = parser.parse_args()
+    check_experiment_variables(args.experiment_folder)
 
     check_data_download(args.dataset_name, args.input_path)
     if args.apg_params is not None and args.mode != "apg":
@@ -250,6 +253,13 @@ def main():
         params = {**(params or {}), **overrides}
         if result_tag is None:
             result_tag = config_name
+    # The overrides change the result, so they go into its name, else the result of another run is read back.
+    name_parts = []
+    if args.propagation_waves is not None:
+        name_parts.append(f"waves{args.propagation_waves}")
+    if crop_shape is not None:
+        name_parts.append("crop" + "x".join(str(size) for size in crop_shape))
+    result_tag = "_".join(tag for tag in [result_tag, *name_parts] if tag) or None
 
     run_evaluation(
         model, args.mode, args.dataset_name, args.input_path, args.experiment_folder, args.model_type,

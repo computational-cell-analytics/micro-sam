@@ -119,7 +119,8 @@ def _create_seg_and_embed_generator(segmentation, image_embeddings, is_tiled, is
     if is_tiled:
         tile_embeds = image_embeddings["features"]
         tile_shape, halo = tile_embeds.attrs["tile_shape"], tile_embeds.attrs["halo"]
-        tiling = Blocking([0, 0], tile_embeds.attrs["shape"], tile_shape)
+        # A 3d volume stores (z, y, x), but the tiling is in-plane.
+        tiling = Blocking([0, 0], list(tile_embeds.attrs["shape"])[-2:], tile_shape)
         length = tiling.number_of_blocks * segmentation.shape[0] if is_3d else tiling.number_of_blocks
     else:
         tiling = None
@@ -393,7 +394,10 @@ def run_prediction_with_object_classifier(
             image = util.load_image_data(image, key=image_key)
         if isinstance(segmentation, (str, os.PathLike)):
             segmentation = util.load_image_data(segmentation, key=segmentation_key)
-        embeddings = compute_embeddings(predictor, image, verbose=False, ndim=ndim)
+        # Prepared in the same way as in the annotator, so the features match those of the GUI.
+        image, this_ndim, _ = util.prepare_annotation_image(image, ndim=ndim)
+        segmentation = util.match_image_shape(segmentation, image.shape[:this_ndim])
+        embeddings = compute_embeddings(predictor, image, verbose=False, ndim=this_ndim)
         use_image = upsampler is not None or classical_features is not None
         seg_ids, features = compute_object_features(
             embeddings, segmentation, verbose=False, image=image if use_image else None,

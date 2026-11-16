@@ -1,5 +1,5 @@
-from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -8,8 +8,8 @@ from scipy.ndimage import binary_dilation
 from skimage.measure import regionprops
 from skimage.segmentation import find_boundaries
 
-from bioimage_cpp.distance import distance_transform, geodesic_distance_field, vector_difference_transform
 from bioimage_cpp.segmentation import label as connected_components, relabel_sequential
+from bioimage_cpp.distance import distance_transform, geodesic_distance_field, vector_difference_transform
 
 
 # The integer dtypes that bioimage-cpp's connected-component labeling accepts.
@@ -266,6 +266,9 @@ def _ignore_label_trafo(y, ignore_label, label_trafo=None):
         return y
 
     y = label_trafo(y)
+    # An instance map without a channel axis has no foreground channel, and its ignored voxels are 0 already.
+    if np.ndim(y) == ignore.ndim:
+        return y
     if getattr(label_trafo, "instances", False):
         # The instance channel feeds the interactive branch, which samples objects from it.
         y[0][ignore] = 0

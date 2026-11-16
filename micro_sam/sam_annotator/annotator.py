@@ -11,43 +11,10 @@ from .. import util
 from . import util as vutil
 from . import _widgets as widgets
 from ._state import AnnotatorState
-from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ._titles import get_dock_title
 from ._annotator import _AnnotatorBase
+from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from .util import _sync_embedding_widget, _validate_sam2_model_type
-
-
-def detect_ndim(image: np.ndarray) -> int:
-    """Auto-detect dimensionality from image shape.
-
-    Args:
-        image: The input image array.
-
-    Returns:
-        The detected number of spatial dimensions (2 or 3).
-
-    Raises:
-        ValueError: If the image shape is invalid or ambiguous.
-
-    Rules:
-        - ndim=2: (H, W) or (H, W, 3) for RGB
-        - ndim=3: (Z, H, W) or (Z, H, W, 3) for RGB volumes
-    """
-    if image.ndim == 2:
-        return 2
-    elif image.ndim == 3:
-        # RGB 2D vs grayscale 3D - assume last dimension is RGB if size is 3
-        return 2 if image.shape[-1] == 3 else 3
-    elif image.ndim == 4:
-        if image.shape[-1] == 3:
-            return 3  # RGB 3D volume
-        raise ValueError(
-            f"Invalid 4D shape: {image.shape}. Expected shape (Z, H, W, 3) for RGB volumes."
-        )
-    else:
-        raise ValueError(
-            f"Invalid image shape: {image.shape}. Expected 2D or 3D image."
-        )
 
 
 def detect_ndim_from_viewer(viewer: "napari.viewer.Viewer") -> int:

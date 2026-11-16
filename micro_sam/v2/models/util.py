@@ -34,6 +34,30 @@ def joint_unetr_state(state):
     return {**encoder, **state["decoder_state"]}
 
 
+def read_unisam2_state(state):
+    """The UniSAM2 weights in a loaded checkpoint.
+
+    Args:
+        state: The content of a checkpoint: a joint checkpoint, a training checkpoint with the weights under
+            'model_state', or the weights directly.
+
+    Returns:
+        The UniSAM2 weights, or None if the checkpoint holds no decoder.
+    """
+    from micro_sam.v2.util import strip_wrapper_prefixes
+
+    if not isinstance(state, dict):
+        return None
+    if "decoder_state" in state or "unetr_state" in state:
+        model_state = joint_unetr_state(state)
+    else:
+        model_state = state.get("model_state", state)
+    if not isinstance(model_state, dict):
+        return None
+    model_state = strip_wrapper_prefixes(model_state)
+    return model_state if "out_conv.weight" in model_state else None
+
+
 class SAM2EncoderAdapter(nn.Module):
     """Wraps SAM2's ImageEncoder so UNETR3D can call encoder(x)[0].
 

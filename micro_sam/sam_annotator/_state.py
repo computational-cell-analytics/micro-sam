@@ -65,6 +65,8 @@ class AnnotatorState(metaclass=Singleton):
     current_track_id: Optional[int] = None
     lineage: Optional[Dict] = None
     committed_lineages: Optional[List[Dict]] = None
+    # The lineages of the automatic tracking result, kept apart from the interactive 'lineage'.
+    auto_lineages: Optional[List[Dict]] = None
 
     # Dict to keep track of all widgets, so that we can update their states.
     widgets: Dict[str, QWidget] = field(default_factory=dict)
@@ -145,38 +147,34 @@ class AnnotatorState(metaclass=Singleton):
             self.decoder = decoder
 
         # For SAM2, load a UniSAM2 decoder so the automatic segmentation widget can run in decoder
-        # mode. This mirrors the v1 decoder-from-checkpoint behavior. Two cases are handled: a custom
-        # finetuned checkpoint passed via 'checkpoint_path', or a finetuned model from the download
-        # console (e.g. 'hvit_t_cells') whose decoder is downloaded from the SAM2 model registry.
+        # mode. This mirrors the v1 decoder-from-checkpoint behavior. The decoder comes from 'decoder_path',
+        # from 'checkpoint_path' (a joint checkpoint, or a model file with its '<name>_decoder' file next to it),
+        # or for a finetuned model from the download console (e.g. 'hvit_t_cells') from the model registry.
         if self.is_sam2 and prefer_decoder and self.decoder is None:
-            from micro_sam.v2.instance_segmentation import get_unisam2_model
-            from micro_sam.v2.util import FINETUNED_MODELS, _download_finetuned_sam2_model
+            from micro_sam.v2.instance_segmentation import NoDecoderError, get_decoder
+            from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder
 
-            # The decoder is built on the base SAM2 backbone, i.e. the first 6 characters of the
-            # name ('hvit_t_cells' -> 'hvit_t'). Resolve where to load the decoder weights from and
-            # which encoder ('encoder') the decoder is built on.
-            decoder_source, encoder = None, model_type[:6]
-            if checkpoint_path is not None:
-                decoder_source = checkpoint_path
-            elif model_type in FINETUNED_MODELS:
-                _, _, decoder_source = _download_finetuned_sam2_model(model_type)
-                # Reuse the interactive predictor's already-loaded (finetuned) image encoder as the
-                # decoder's encoder instead of rebuilding it from the base backbone. This avoids a
-                # redundant download and build of the base backbone. The strict load inside
-                # 'get_unisam2_model' still fully redefines these encoder weights from the decoder
-                # checkpoint. The 2d image predictor holds the SAM2 model under '.model'. The 3d
-                # video predictor is itself a SAM2 model. Use the backbone name if the model
-                # exposes no encoder.
-                sam2_model = getattr(self.predictor, "model", self.predictor)
-                encoder = getattr(sam2_model, "image_encoder", encoder)
+            decoder_source = decoder_path if decoder_path is not None else checkpoint_path
 
-            if decoder_source is not None:
+            # Reuse the image encoder of the interactive predictor, so that no base backbone is downloaded
+            # or built. The strict load in 'get_unisam2_model' still redefines its weights from the checkpoint.
+            # The 2d image predictor holds the SAM2 model under '.model', the 3d video predictor is one.
+            sam2_model = getattr(self.predictor, "model", self.predictor)
+            encoder = getattr(sam2_model, "image_encoder", sam2_model.model_type[:6])
+
+            if decoder_source is not None or (model_type in FINETUNED_MODELS and has_registered_decoder(model_type)):
                 try:
                     # Resolve 'auto'/None to a concrete device so the model is loaded and placed on
                     # the same device as the predictor (torch.load does not accept 'auto').
-                    self.decoder = get_unisam2_model(
-                        decoder_source, device=util.get_device(device), encoder=encoder,
+                    self.decoder = get_decoder(
+                        sam2_model.model_type, checkpoint=decoder_source, device=util.get_device(device),
+                        encoder=encoder,
                     )
+                except NoDecoderError as e:
+                    # Trained for interactive segmentation only: there is no automatic segmentation, and the
+                    # decoder of a registered model is not used instead, as it does not match the finetuned encoder.
+                    print(e)
+                    self.decoder = None
                 except Exception as e:
                     print(f"Could not load a UniSAM2 decoder from '{decoder_source}': {e}")
                     self.decoder = None
@@ -380,6 +378,7 @@ class AnnotatorState(metaclass=Singleton):
         self.decoder = None
         self.current_track_id = None
         self.lineage = None
+        self.auto_lineages = None
         self.committed_lineages = None
         self.z_range = None
         self.data_signature = None

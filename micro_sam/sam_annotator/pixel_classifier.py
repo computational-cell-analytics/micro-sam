@@ -1,22 +1,21 @@
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
-import imageio.v3 as imageio
 
 import torch
 
 import napari
 
 from .. import util
-from ._batch import run_batch
 from . import _widgets as widgets
 from ._state import AnnotatorState
-from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ._titles import get_dock_title
 from ._annotator import _ClassifierBase
 from .util import _sync_embedding_widget
-from ._batch_classification import ClassificationBatchTask
+from ._batch import load_batch_image, run_batch
 from ..classical_features import PIXEL_FEATURES
+from ._batch_classification import ClassificationBatchTask
+from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ..pixel_classification import (
     accumulate_pixel_labels, compute_pixel_features, project_prediction_to_image, train_pixel_classifier,
 )
@@ -103,8 +102,8 @@ def pixel_classifier(
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
-    if ndim is None:
-        ndim = image.ndim - 1 if image.shape[-1] == 3 and image.ndim in (3, 4) else image.ndim
+    # Prepare the image in the same way as the annotator: squeeze singletons and map the channels to RGB.
+    image, ndim, rgb = util.prepare_annotation_image(image, ndim=ndim)
 
     state = AnnotatorState()
     state.image_shape = image.shape[:ndim]
@@ -124,7 +123,7 @@ def pixel_classifier(
     if viewer is None:
         viewer = napari.Viewer()
 
-    viewer.add_image(image, name="image")
+    viewer.add_image(image, name="image", rgb=rgb)
 
     annotator = PixelClassifier(viewer)
 
@@ -207,8 +206,7 @@ def batch_pixel_classifier(
     """
     have_inputs_as_arrays = isinstance(images[0], np.ndarray)
     if ndim is None:
-        first = images[0] if have_inputs_as_arrays else imageio.imread(images[0])
-        ndim = first.ndim - 1 if first.shape[-1] == 3 and first.ndim in (3, 4) else first.ndim
+        ndim = load_batch_image(images[0])[1]
 
     task = PixelClassificationBatchTask(
         ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,

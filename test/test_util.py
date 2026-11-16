@@ -9,7 +9,7 @@ import pytest
 import requests
 import numpy as np
 
-from skimage.measure import label
+from bioimage_cpp.segmentation import label
 from skimage.data import binary_blobs
 from micro_sam.v1.util import get_sam_model, set_precomputed
 from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory, _compute_data_signature, _open_embeddings

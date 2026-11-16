@@ -4,7 +4,7 @@ import torch
 import pytest
 import numpy as np
 
-from skimage.measure import label
+from bioimage_cpp.segmentation import label
 from skimage.data import binary_blobs
 from skimage.transform import AffineTransform, warp
 

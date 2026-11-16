@@ -12,31 +12,17 @@ import napari
 from qtpy import QtWidgets
 from qtpy.QtCore import QTimer
 
+from .annotator import Annotator
 from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
-from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ._titles import get_dock_title
+from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
+from ._batch import BatchAnnotatorTask, load_batch_image, run_batch
 from .util import _sync_embedding_widget, _sync_tiling_widget, _validate_sam2_model_type
-from .annotator import Annotator, detect_ndim
-from ._batch import BatchAnnotatorTask, run_batch
 
 # The tasks supported by the unified batch annotator.
 TASKS = ["Segmentation", "Tracking", "Object Classification", "Pixel Classification"]
-
-
-def _get_input_shape(image, ndim):
-    if image.ndim == 2:
-        image_shape = image.shape
-    elif image.ndim == 3:
-        if ndim == 3:
-            image_shape = image.shape
-        else:
-            image_shape = image.shape[:-1]
-    elif image.ndim == 4:
-        image_shape = image.shape[:-1]
-
-    return image_shape
 
 
 class SegmentationBatchTask(BatchAnnotatorTask):
@@ -99,7 +85,8 @@ class SegmentationBatchTask(BatchAnnotatorTask):
             kwargs = dict(predictor=self.predictor, decoder=self.decoder, prefer_decoder=False)
         else:
             kwargs = dict(prefer_decoder=self.prefer_decoder)
-        state.image_shape = _get_input_shape(image, self.ndim)
+        # The image is prepared by 'load_batch_image', so a channel axis is always the last one.
+        state.image_shape = image.shape[:self.ndim]
         # Resolve the tiling per image, since the shapes can differ across the batch.
         tile_shape, halo = resolve_default_tiling(state.image_shape, self.tile_shape, self.halo, embedding_path)
         state.initialize_predictor(
@@ -117,7 +104,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         return tile_shape, halo
 
     def start(self, viewer, entry, image, embedding_path, index):
-        viewer.add_image(image, name="image")
+        viewer.add_image(image, name="image", rgb=image.ndim > self.ndim)
         tile_shape, halo = self._init_predictor(viewer, image, embedding_path)
 
         annotator = Annotator(viewer, ndim=self.ndim, reset_state=False)
@@ -216,10 +203,9 @@ def batch_annotator(
 
     have_inputs_as_arrays = isinstance(images[0], np.ndarray)
 
-    # Auto-detect the dimensionality from the first image if not given.
+    # Derive the dimensionality from the first image if not given, and load every image with it.
     if ndim is None:
-        first_image = images[0] if have_inputs_as_arrays else imageio.imread(images[0])
-        ndim = detect_ndim(first_image)
+        ndim = load_batch_image(images[0])[1]
 
     task = SegmentationBatchTask(
         ndim=ndim, model_type=model_type, embedding_path=embedding_path,

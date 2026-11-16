@@ -239,7 +239,7 @@ def test_adaptformer_starts_from_the_original_mlp_output():
     assert torch.allclose(block.mlp(x), expected)
 
 
-def test_peft_load_restores_eval_mode(tmp_path, monkeypatch):
+def test_peft_load_restores_eval_mode(monkeypatch):
     from micro_sam.v2 import util as v2_util
     from micro_sam.v2.models.peft_sam2 import PEFT_Sam2, FacTSurgery
 
@@ -273,13 +273,9 @@ def test_peft_load_restores_eval_mode(tmp_path, monkeypatch):
 
     peft_kwargs = {"rank": 2, "peft_module": FacTSurgery}
     source = PEFT_Sam2(Sam().eval(), **peft_kwargs).sam
-    checkpoint = tmp_path / "fact.pt"
-    torch.save({"model": source.state_dict()}, checkpoint)
-
-    monkeypatch.setattr(v2_util, "_get_checkpoint", lambda **kwargs: "base.pt")
     monkeypatch.setattr(v2_util, "_build_sam2_backbone", lambda *args, **kwargs: Sam().eval())
 
-    loaded = v2_util._load_peft_finetuned_sam2("config", "hvit_t", "images", checkpoint, "cpu", peft_kwargs)
+    loaded = v2_util._load_sam2_from_state("config", "images", source.state_dict(), "cpu", peft_kwargs)
     fact = loaded.image_encoder.trunk.blocks[0].attn.qkv
     assert not loaded.training
     assert not fact.dp_q.training

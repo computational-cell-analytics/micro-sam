@@ -18,11 +18,11 @@ from micro_sam.v2.transforms.raw import VideoAugment
 from micro_sam.v2.util import has_registered_decoder
 from micro_sam.v2.loss.custom_sam2_loss import CustomSAM2Loss
 from micro_sam.util import get_device, training_autocast_dtype
+from micro_sam.v2.loss.semantic_loss import CustomCombinedLoss
 from .util import get_sam2_train_model, ConvertToSam2VideoBatch
 from .joint_sam2_trainer import JointSam2Trainer, JointSam2Logger
-from micro_sam.v2.loss.directed_distance_based import DirectedDistanceLoss
-from micro_sam.v2.loss.semantic_loss import CustomCombinedLoss
 from micro_sam.v1.training.semantic_sam_trainer import CustomDiceLoss
+from micro_sam.v2.loss.directed_distance_based import DirectedDistanceLoss
 from .sam2_trainer import Sam2Trainer, Sam2Logger, UniSAM2Trainer, UniSAM2Logger
 
 
@@ -157,7 +157,8 @@ def train_sam2(
     3D/video (T>1) batches. All prompting logic - initial point/box/mask selection
     and iterative correction from error regions - is embedded in the model forward
     pass. Pass a MixedLoader(loader_2d, loader_3d) as train_loader for joint 2D+3D
-    training.
+    training. Build the loaders for your own data with
+    `micro_sam.v2.training.loaders.default_sam2_loader` and ``mode="interactive"``.
 
     Args:
         name: Checkpoint/log folder name.
@@ -587,7 +588,45 @@ def train_sam2_multi_gpu(
     )
 
 
-def _build_unisam2_model(model_type, device, peft_kwargs=None, output_channels=4, initial_features=32):
+def _get_start_sam2_model(model_type, device, checkpoint_path=None, peft_kwargs=None):
+    """Build the SAM2 image model to start a training from, with the PEFT layers of the training.
+
+    Args:
+        model_type: The SAM2 model, for example "hvit_t" or "hvit_t_cells".
+        device: The device to build the model on.
+        checkpoint_path: The checkpoint to start from, see `micro_sam.v2.training.util.read_start_weights`.
+            By default the weights of `model_type`.
+        peft_kwargs: The arguments for `PEFT_Sam2`, or None. A checkpoint with PEFT layers keeps its layers.
+
+    Returns:
+        The SAM2 model. Its 'peft_config' holds the PEFT settings, if the model has PEFT layers.
+    """
+    from micro_sam.v2.util import get_sam2_model
+    from micro_sam.v2.training.util import check_start_peft
+
+    sam2_model = get_sam2_model(
+        model_type=model_type, input_type="images", device=device, checkpoint_path=checkpoint_path,
+    )
+    start_peft_config = getattr(sam2_model, "peft_config", None)
+    check_start_peft(peft_kwargs, start_peft_config)
+    if peft_kwargs and start_peft_config is None:
+        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
+        from micro_sam.models.peft import serialize_peft_kwargs
+
+        sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
+        sam2_model.peft_config = serialize_peft_kwargs(peft_kwargs)
+    return sam2_model
+
+
+def _init_start_decoder(model, model_type, checkpoint_path=None, skip_output_head=False):
+    """Initialize the decoder from the start checkpoint or the registered decoder, if one of them exists."""
+    if checkpoint_path is not None or has_registered_decoder(model_type):
+        _init_sam2_decoder(model, model_type, skip_output_head=skip_output_head, checkpoint_path=checkpoint_path)
+
+
+def _build_unisam2_model(
+    model_type, device, peft_kwargs=None, output_channels=4, initial_features=32, checkpoint_path=None,
+):
     """Build a UniSAM2 model and optionally apply PEFT to its encoder.
 
     Registered models initialize both the encoder and decoder from their pretrained weights.
@@ -599,30 +638,28 @@ def _build_unisam2_model(model_type, device, peft_kwargs=None, output_channels=4
         output_channels: The number of UniSAM2 output channels.
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
+        checkpoint_path: The checkpoint to start from. It replaces the weights of `model_type`. Its decoder,
+            or the decoder file next to it, initializes the decoder. Without a decoder, the decoder is random.
 
     Returns:
         The UniSAM2 model on the given device.
     """
     from micro_sam.v2.models.util import UniSAM2
 
-    if peft_kwargs:
-        from micro_sam.v2.util import get_sam2_model
-        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
-        from micro_sam.models.peft import serialize_peft_kwargs
-
-        sam2_model = get_sam2_model(model_type=model_type, input_type="images", device=device)
-        sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
+    if peft_kwargs or checkpoint_path is not None:
+        sam2_model = _get_start_sam2_model(model_type, device, checkpoint_path, peft_kwargs)
         model = UniSAM2(
             encoder=sam2_model.image_encoder, output_channels=output_channels,
             initial_features=initial_features, device=device,
         )
-        model.peft_config = serialize_peft_kwargs(peft_kwargs)
+        peft_config = getattr(sam2_model, "peft_config", None)
+        if peft_config is not None:
+            model.peft_config = peft_config
     else:
         model = UniSAM2(
             encoder=model_type, output_channels=output_channels, initial_features=initial_features, device=device
         )
-    if has_registered_decoder(model_type):
-        _init_sam2_decoder(model, model_type)
+    _init_start_decoder(model, model_type, checkpoint_path)
     return model
 
 
@@ -642,8 +679,9 @@ def train_automatic(
     peft_kwargs: Optional[Dict] = None,
     load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     initial_features: int = 32,
-    with_boundaries: bool = False,
+    with_boundaries: bool = True,
     boundary_dice_weight: float = 1.0,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
 ) -> None:
     """Train UniSAM2 for automatic instance segmentation with directed distance targets.
 
@@ -651,11 +689,13 @@ def train_automatic(
     :class:`~micro_sam.v2.loss.directed_distance_based.DirectedDistanceLoss` on
     combined 2D + 3D data. Pass a loader built by
     :func:`~micro_sam.v2.datasets.generalist_loader.get_dataloaders` with
-    ``label_trafo=GeodesicHybridDistanceTransform`` (the default).
+    ``label_trafo=GeodesicHybridDistanceTransform`` (the default). Build the loaders for your own
+    data with `micro_sam.v2.training.loaders.default_sam2_loader` and ``mode="automatic"``.
 
     Args:
         name: Checkpoint / log folder name.
-        model_type: SAM2 encoder variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
+        model_type: The SAM2 model to start from, a backbone like "hvit_t" or a registered model like
+            "hvit_t_cells". A registered model initializes both the encoder and the decoder.
         train_loader: DataLoader yielding (x, y) tuples with directed-distance targets.
         val_loader: Same format, used for validation.
         n_epochs: Number of training epochs (default 100). Ignored if n_iterations is set.
@@ -673,14 +713,18 @@ def train_automatic(
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
         with_boundaries: The flag to add a fifth decoder output for the full object-boundary target.
+            By default True, which matches the decoders of the registered models.
         boundary_dice_weight: The Dice weight for the boundary channel. One selects Dice only. Zero selects BCE only.
+        checkpoint_path: The checkpoint to start from, for example the 'best.pt' of an earlier training. It
+            replaces the weights of `model_type`. Its decoder, or the decoder file next to it, initializes the
+            decoder. Without a decoder, the decoder starts from random weights.
     """
     import torch_em
 
     device = get_device(device)
     model = _build_unisam2_model(
         model_type, device, peft_kwargs=peft_kwargs, output_channels=4 + int(with_boundaries),
-        initial_features=initial_features,
+        initial_features=initial_features, checkpoint_path=checkpoint_path,
     )
 
     scheduler_kwargs = {"mode": "min", "factor": 0.9, "patience": 10}
@@ -742,6 +786,7 @@ def _train_automatic_rank(
     with_boundaries: bool,
     boundary_dice_weight: float,
     peft_kwargs=None,
+    checkpoint_path=None,
 ):
     """Single-rank torchrun worker for train_automatic_multi_gpu."""
     import torch_em
@@ -792,7 +837,7 @@ def _train_automatic_rank(
 
     model = _build_unisam2_model(
         model_type, device, peft_kwargs=peft_kwargs, output_channels=4 + int(with_boundaries),
-        initial_features=initial_features,
+        initial_features=initial_features, checkpoint_path=checkpoint_path,
     )
     ddp_model = DDP(model, device_ids=[local_rank], find_unused_parameters=find_unused_parameters)
 
@@ -852,8 +897,9 @@ def train_automatic_multi_gpu(
     find_unused_parameters: bool = True,
     peft_kwargs: Optional[Dict] = None,
     initial_features: int = 32,
-    with_boundaries: bool = False,
+    with_boundaries: bool = True,
     boundary_dice_weight: float = 1.0,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
 ) -> None:
     """Train UniSAM2 for automatic segmentation across multiple GPUs with DDP.
 
@@ -863,7 +909,8 @@ def train_automatic_multi_gpu(
 
     Args:
         name: Checkpoint / log folder name.
-        model_type: SAM2 encoder variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
+        model_type: The SAM2 model to start from, a backbone like "hvit_t" or a registered model like
+            "hvit_t_cells". A registered model initializes both the encoder and the decoder.
         input_path: Root path to the generalist training data.
         batch_size: Batch size per GPU for 3D groups.
         batch_size_2d: Batch size per GPU for 2D groups (falls back to batch_size).
@@ -885,7 +932,11 @@ def train_automatic_multi_gpu(
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
         with_boundaries: The flag to add a fifth decoder output for the full object-boundary target.
+            By default True, which matches the decoders of the registered models.
         boundary_dice_weight: The Dice weight for the boundary channel. One selects Dice only. Zero selects BCE only.
+        checkpoint_path: The checkpoint to start from, for example the 'best.pt' of an earlier training. It
+            replaces the weights of `model_type`. Its decoder, or the decoder file next to it, initializes the
+            decoder. Without a decoder, the decoder starts from random weights.
     """
     if z_slices is None:
         z_slices = [8]
@@ -924,6 +975,7 @@ def train_automatic_multi_gpu(
         with_boundaries=with_boundaries,
         boundary_dice_weight=boundary_dice_weight,
         peft_kwargs=peft_kwargs,
+        checkpoint_path=checkpoint_path,
     )
 
 
@@ -1004,26 +1056,40 @@ def _configure_semantic_speed(model, compile):
                 module.compile(dynamic=False)
 
 
-def _init_sam2_decoder(model, model_type, skip_output_head=False):
-    """Initialize the decoder from the registered UniSAM2 weights.
+def _init_sam2_decoder(model, model_type, skip_output_head=False, checkpoint_path=None):
+    """Initialize the decoder from a checkpoint or from the registered UniSAM2 weights.
 
     Args:
         model: The UniSAM2 or SemanticSAM2 model.
         model_type: A finetuned model with a registered decoder, for example, "hvit_l_cells".
+            Not used if `checkpoint_path` is given.
         skip_output_head: Whether to keep the output head for semantic segmentation.
+        checkpoint_path: The checkpoint to start from. The function uses its decoder, or the decoder file next to it.
+            If there is no decoder, the decoder keeps its random weights.
     """
-    from micro_sam.v2.models.util import joint_unetr_state
+    from micro_sam.util import load_checkpoint
+    from micro_sam.v2.models.util import read_unisam2_state
+    from micro_sam.v2.instance_segmentation import find_decoder_checkpoint
     from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
 
-    if model_type not in FINETUNED_MODELS or not has_registered_decoder(model_type):
-        raise ValueError(f"'{model_type}' has no registered decoder to initialize the semantic decoder from.")
-
-    _, _, decoder_path = _download_finetuned_sam2_model(model_type)
-    state = torch.load(decoder_path, map_location="cpu", weights_only=False)
-    if isinstance(state, dict) and ("decoder_state" in state or "unetr_state" in state):
-        state = joint_unetr_state(state)
-    elif isinstance(state, dict):
-        state = state.get("model_state", state)
+    if checkpoint_path is not None:
+        source = checkpoint_path
+        state = read_unisam2_state(load_checkpoint(checkpoint_path))
+        decoder_path = find_decoder_checkpoint(checkpoint_path) if state is None else None
+        if decoder_path is not None:
+            source = decoder_path
+            state = read_unisam2_state(load_checkpoint(decoder_path))
+        if state is None:
+            print(f"'{checkpoint_path}' has no decoder, so the decoder starts from random weights.")
+            return
+    else:
+        if model_type not in FINETUNED_MODELS or not has_registered_decoder(model_type):
+            raise ValueError(f"'{model_type}' has no registered decoder to initialize the decoder from.")
+        _, _, decoder_path = _download_finetuned_sam2_model(model_type)
+        source = model_type
+        state = read_unisam2_state(load_checkpoint(decoder_path))
+        if state is None:
+            raise ValueError(f"The registered decoder of '{model_type}' holds no decoder weights.")
 
     head_prefixes = ("encoder.", "out_conv.") if skip_output_head else ("encoder.",)
     decoder_state = {k: v for k, v in state.items() if not k.startswith(head_prefixes)}
@@ -1033,8 +1099,8 @@ def _init_sam2_decoder(model, model_type, skip_output_head=False):
     if mismatched:
         settings = "'initial_features'" if skip_output_head else "'initial_features' and 'with_boundaries'"
         raise ValueError(
-            f"The decoder of '{model_type}' does not match the model, for example at '{mismatched[0]}'. "
-            f"Match {settings} to the registered decoder."
+            f"The decoder of '{source}' does not match the model, for example at '{mismatched[0]}'. "
+            f"Match {settings} to this decoder."
         )
 
     missing, unexpected = model.load_state_dict(decoder_state, strict=False)
@@ -1044,9 +1110,12 @@ def _init_sam2_decoder(model, model_type, skip_output_head=False):
 
 
 def _build_semantic_sam2_model(
-    model_type, device, num_classes, peft_kwargs=None, initial_features=32, init_decoder=False,
+    model_type, device, num_classes, peft_kwargs=None, initial_features=32, checkpoint_path=None,
 ):
     """Build a SemanticSAM2 model and optionally apply PEFT to its encoder.
+
+    The encoder starts from the weights of `model_type`. For a model with a registered decoder, for example
+    "hvit_t_cells", the decoder starts from it too, and only the output head for the classes is new.
 
     Args:
         model_type: The SAM2 encoder variant, for example, "hvit_t".
@@ -1055,33 +1124,29 @@ def _build_semantic_sam2_model(
         peft_kwargs: The arguments for `PEFT_Sam2`, or None.
         initial_features: Width of the convolutional decoder. The features per level are
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
-        init_decoder: Whether to initialize the decoder from the registered UniSAM2 decoder of a
-            finetuned model, for example, "hvit_l_cells". The output head stays freshly initialized.
+        checkpoint_path: The checkpoint to start from. It replaces the weights of `model_type`. Its decoder,
+            or the decoder file next to it, initializes the decoder, but not the output head.
 
     Returns:
         The SemanticSAM2 model on the given device.
     """
     from micro_sam.v2.models.util import SemanticSAM2
 
-    if peft_kwargs:
-        from micro_sam.v2.util import get_sam2_model
-        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
-        from micro_sam.models.peft import serialize_peft_kwargs
-
-        sam2_model = get_sam2_model(model_type=model_type, input_type="images", device=device)
-        sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
+    if peft_kwargs or checkpoint_path is not None:
+        sam2_model = _get_start_sam2_model(model_type, device, checkpoint_path, peft_kwargs)
         model = SemanticSAM2(
             encoder=sam2_model.image_encoder, num_classes=num_classes,
             initial_features=initial_features, device=device,
         )
-        model.peft_config = serialize_peft_kwargs(peft_kwargs)
+        peft_config = getattr(sam2_model, "peft_config", None)
+        if peft_config is not None:
+            model.peft_config = peft_config
     else:
         model = SemanticSAM2(
             encoder=model_type, num_classes=num_classes, initial_features=initial_features, device=device
         )
 
-    if init_decoder:
-        _init_sam2_decoder(model, model_type, skip_output_head=True)
+    _init_start_decoder(model, model_type, checkpoint_path, skip_output_head=True)
     return model
 
 
@@ -1103,9 +1168,9 @@ def train_semantic(
     load_from_checkpoint: Optional[Union[str, os.PathLike]] = None,
     initial_features: int = 32,
     dice_weight: float = 0.5,
-    init_decoder: bool = False,
     mixed_precision: Optional[bool] = None,
     compile: Optional[List[str]] = None,
+    checkpoint_path: Optional[Union[str, os.PathLike]] = None,
 ) -> None:
     """Train SemanticSAM2 for semantic segmentation on 2d and 3d data.
 
@@ -1119,9 +1184,16 @@ def train_semantic(
     weighted sum of a dice loss and a binary cross entropy loss on the sigmoid of the logits.
     The targets are then binary foreground masks.
 
+    Build the loaders for your own data with `micro_sam.v2.training.loaders.default_sam2_loader`
+    and ``mode="semantic"``.
+
+    The encoder starts from the weights of `model_type`. For a model with a registered decoder, for example
+    "hvit_t_cells", the decoder starts from it too, and only the output head for the classes is new.
+
     Args:
         name: Checkpoint / log folder name.
-        model_type: SAM2 encoder variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
+        model_type: The SAM2 model to start from, a backbone like "hvit_t" or a registered model like
+            "hvit_t_cells".
         train_loader: DataLoader yielding (x, y) tuples, with x of shape (B, 3, Z, Y, X) and the
             class ids in y of shape (B, 1, Z, Y, X). 2d data carries a singleton z axis.
         val_loader: Same format, used for validation.
@@ -1142,19 +1214,20 @@ def train_semantic(
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
         dice_weight: The weight of the dice loss in the combined loss. One selects dice only.
             Zero selects cross entropy only.
-        init_decoder: Whether to initialize the decoder from the registered UniSAM2 decoder of a
-            finetuned model, for example, "hvit_l_cells". The output head stays freshly initialized.
         mixed_precision: Whether to train with bfloat16 mixed precision. The weights and the optimizer state
             stay in float32. The hardware decides if None.
         compile: The parts to compile with ``torch.compile``, a subset of "encoder" and "decoder".
             Set 'TORCHINDUCTOR_CACHE_DIR' to a node-local folder: a cache on a shared filesystem blocks on its locks.
+        checkpoint_path: The checkpoint to start from, for example the 'best.pt' of an earlier training. It
+            replaces the weights of `model_type`. Its decoder, or the decoder file next to it, initializes the
+            decoder, but not the output head.
     """
     import torch_em
 
     device = get_device(device)
     model = _build_semantic_sam2_model(
         model_type, device, num_classes=num_classes, peft_kwargs=peft_kwargs,
-        initial_features=initial_features, init_decoder=init_decoder,
+        initial_features=initial_features, checkpoint_path=checkpoint_path,
     )
     compile = _check_compile(compile)
     if "loss" in compile:
@@ -1207,7 +1280,9 @@ def train_semantic(
 def train_joint_sam2(
     name: str,
     model_type: str,
-    input_path: str,
+    input_path: Optional[str] = None,
+    train_loader: Optional[DataLoader] = None,
+    val_loader: Optional[DataLoader] = None,
     batch_size: int = 2,
     batch_size_2d: Optional[int] = None,
     z_slices: Optional[List[int]] = None,
@@ -1245,7 +1320,7 @@ def train_joint_sam2(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
-    with_boundaries: bool = False,
+    with_boundaries: bool = True,
     boundary_dice_weight: float = 1.0,
     label_trafo_threads: int = 1,
     compile: Optional[List[str]] = None,
@@ -1254,18 +1329,27 @@ def train_joint_sam2(
 
     Builds both the interactive (SAM2Train) and automatic (UniSAM2) models from
     ``model_type``, wires the shared image encoder, then interleaves the two
-    losses in each training step. The interactive loader uses integer instance
-    labels; the automatic loader uses directed-distance targets.
+    losses in each training step. Both branches train on the same patches: the labels
+    hold the instance ids for the interactive branch, followed by the targets of the
+    automatic branch.
+
+    Train either on the generalist training data, with `input_path`, or on your own data,
+    with `train_loader` and `val_loader` from
+    `micro_sam.v2.training.loaders.default_sam2_loader` with ``mode="joint"``.
 
     Args:
         name: Checkpoint / log folder name.
-        model_type: SAM2 encoder variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
-        input_path: Root path to the generalist training data.
-        batch_size: Batch size for 3D groups (both branches).
-        batch_size_2d: Batch size for 2D groups (both branches). Defaults to ``batch_size``.
-        z_slices: Z-slice counts for 3D groups (default [8]).
-        dataset_choice: ``"lm"``, ``"em"``, ``"hp"``, or ``"all"``.
-        n_workers: DataLoader workers.
+        model_type: SAM2 model to start from: a base backbone ("hvit_t", "hvit_s", "hvit_b", "hvit_l")
+            or a finetuned model, e.g. "hvit_t_cells", whose decoder initializes the automatic branch.
+        input_path: Root path to the generalist training data. Pass either this or the loaders.
+        train_loader: The training loader for your own data. Pass it together with `val_loader`.
+        val_loader: The validation loader for your own data.
+        batch_size: Batch size for 3D groups (both branches). Only used with `input_path`.
+        batch_size_2d: Batch size for 2D groups (both branches). Defaults to ``batch_size``. Only used with
+            `input_path`.
+        z_slices: Z-slice counts for 3D groups (default [8]). Only used with `input_path`.
+        dataset_choice: ``"lm"``, ``"em"``, ``"hp"``, or ``"all"``. Only used with `input_path`.
+        n_workers: DataLoader workers. Only used with `input_path`.
         n_epochs: Number of training epochs. Ignored if n_iterations is set.
         n_iterations: If set, train for this many iterations instead of epochs.
         early_stopping: Stop after this many epochs without improvement (None = off).
@@ -1305,11 +1389,14 @@ def train_joint_sam2(
             'initial_features * 2 ** i', so this scales the decoder parameters quadratically.
         distance_type: Directed distance target for the automatic branch. "geodesic" uses the
             geodesic hybrid field around each object's center, "directed" the euclidean vector
-            to the nearest boundary.
+            to the nearest boundary. Only used with `input_path`: `default_sam2_loader` uses "geodesic".
         with_boundaries: The flag to add a fifth automatic output for the full object-boundary target.
+            By default True, which matches the decoders of the registered models.
+            It must match the targets of the loaders, and the decoder of a finetuned `model_type`.
         boundary_dice_weight: The Dice weight for the boundary channel. One selects Dice only. Zero selects BCE only.
         label_trafo_threads: Threads per loader worker that process the objects of one patch in parallel
             in the distance transform. Only pays off when the node has more cores than loader workers.
+            Only used with `input_path`.
         compile: The parts to compile with ``torch.compile``. "encoder" is the shared image encoder,
             "decoder" are the blocks of the UNETR decoder and "loss" are the Dice and focal kernels
             of the interactive loss. The default compiles nothing.
@@ -1317,26 +1404,32 @@ def train_joint_sam2(
     from micro_sam.v2.datasets.generalist_loader import _build_joint_datasets, _prepare_data_loader
     from micro_sam.v2.models.util import UniSAM2
 
-    if z_slices is None:
-        z_slices = [8]
-    if batch_size_2d is None:
-        batch_size_2d = batch_size
+    have_loaders = train_loader is not None or val_loader is not None
+    if (input_path is not None) == have_loaders:
+        raise ValueError("Pass either 'input_path' or both 'train_loader' and 'val_loader'.")
+    if have_loaders and (train_loader is None or val_loader is None):
+        raise ValueError("Pass both 'train_loader' and 'val_loader'.")
 
     device = get_device(device)
 
-    train_ds, val_ds = _build_joint_datasets(
-        input_path, z_slices, dataset_choice, distance_type,
-        with_boundaries=with_boundaries, label_trafo_threads=label_trafo_threads,
-    )
-    bpg = {2: batch_size_2d} if batch_size_2d != batch_size else None
-    train_loader = _prepare_data_loader(
-        train_ds, batch_size=batch_size, shuffle=True,
-        batch_size_per_group=bpg, num_workers=n_workers,
-    )
-    val_loader = _prepare_data_loader(
-        val_ds, batch_size=batch_size, shuffle=False,
-        batch_size_per_group=bpg, num_workers=n_workers, deterministic=True,
-    )
+    if input_path is not None:
+        if z_slices is None:
+            z_slices = [8]
+        if batch_size_2d is None:
+            batch_size_2d = batch_size
+        train_ds, val_ds = _build_joint_datasets(
+            input_path, z_slices, dataset_choice, distance_type,
+            with_boundaries=with_boundaries, label_trafo_threads=label_trafo_threads,
+        )
+        bpg = {2: batch_size_2d} if batch_size_2d != batch_size else None
+        train_loader = _prepare_data_loader(
+            train_ds, batch_size=batch_size, shuffle=True,
+            batch_size_per_group=bpg, num_workers=n_workers,
+        )
+        val_loader = _prepare_data_loader(
+            val_ds, batch_size=batch_size, shuffle=False,
+            batch_size_per_group=bpg, num_workers=n_workers, deterministic=True,
+        )
 
     sam2_model = get_sam2_train_model(
         model_type=model_type, device=device,
@@ -1356,8 +1449,7 @@ def train_joint_sam2(
         initial_features=initial_features, device=device,
         perform_range_checks=False,  # The trainer checks the input range once.
     )
-    if has_registered_decoder(model_type):
-        _init_sam2_decoder(unetr, model_type)
+    _init_start_decoder(unetr, model_type, checkpoint_path)
     compile = _check_compile(compile)
     _configure_joint_speed(sam2_model, unetr, compile)
 
@@ -1453,7 +1545,7 @@ def _train_joint_rank(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
-    with_boundaries: bool = False,
+    with_boundaries: bool = True,
     boundary_dice_weight: float = 1.0,
     label_trafo_threads: int = 1,
     compile: Optional[List[str]] = None,
@@ -1524,8 +1616,7 @@ def _train_joint_rank(
         initial_features=initial_features, device=device,
         perform_range_checks=False,  # The trainer checks the input range once.
     )
-    if has_registered_decoder(model_type):
-        _init_sam2_decoder(unetr, model_type)
+    _init_start_decoder(unetr, model_type, checkpoint_path)
     compile = _check_compile(compile)
     _configure_joint_speed(sam2_model, unetr, compile)
 
@@ -1627,7 +1718,7 @@ def train_joint_sam2_multi_gpu(
     automatic_metric_weight: float = 0.25,
     initial_features: int = 32,
     distance_type: str = "geodesic",
-    with_boundaries: bool = False,
+    with_boundaries: bool = True,
     boundary_dice_weight: float = 1.0,
     label_trafo_threads: int = 1,
     compile: Optional[List[str]] = None,
@@ -1692,6 +1783,7 @@ def train_joint_sam2_multi_gpu(
             geodesic hybrid field around each object's center, "directed" the euclidean vector
             to the nearest boundary.
         with_boundaries: The flag to add a fifth automatic output for the full object-boundary target.
+            By default True, which matches the decoders of the registered models.
         boundary_dice_weight: The Dice weight for the boundary channel. One selects Dice only. Zero selects BCE only.
         label_trafo_threads: Threads per loader worker that process the objects of one patch in parallel
             in the distance transform. Only pays off when the node has more cores than loader workers.

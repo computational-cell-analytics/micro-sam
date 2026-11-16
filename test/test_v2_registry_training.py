@@ -94,8 +94,7 @@ def test_automatic_builder_loads_registered_decoder(monkeypatch, registered_deco
             torch.testing.assert_close(model.state_dict()[key], value)
 
 
-@pytest.mark.parametrize("checkpoint_path", [None, "custom.pt"])
-def test_interactive_training_resolves_registry_checkpoint(monkeypatch, checkpoint_path):
+def test_interactive_training_resolves_registry_checkpoint(monkeypatch):
     from sam2 import build_sam
 
     captured = {}
@@ -113,8 +112,9 @@ def test_interactive_training_resolves_registry_checkpoint(monkeypatch, checkpoi
     monkeypatch.setattr(training_util, "_download_finetuned_sam2_model", fetch)
     monkeypatch.setattr(training_util, "sam2_train_class", lambda: torch.nn.Linear)
     monkeypatch.setattr(build_sam, "build_sam2", build)
-    training_util.get_sam2_train_model(model_type="hvit_t_cells", device="cpu", checkpoint_path=checkpoint_path)
+    training_util.get_sam2_train_model(model_type="hvit_t_cells", device="cpu")
 
-    assert captured["ckpt_path"] == ("registered.pt" if checkpoint_path is None else checkpoint_path)
+    # A custom checkpoint is read by 'read_start_weights' instead, see test_v2_training_start_weights.py.
+    assert captured["ckpt_path"] == "registered.pt"
     assert captured["config_file"] == registry_util.CFG_PATHS["hvit_t"]
-    assert fetched == (["hvit_t_cells"] if checkpoint_path is None else [])
+    assert fetched == ["hvit_t_cells"]

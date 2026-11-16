@@ -15,9 +15,9 @@ import imageio.v3 as imageio
 
 from magicgui.widgets import CheckBox
 
+from ._titles import PLUGIN_NAME
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
-from ._titles import PLUGIN_NAME
 from ._batch import BatchAnnotatorTask
 from ..v2.util import resolve_default_tiling
 from .util import _sync_embedding_widget, _sync_tiling_widget
@@ -75,7 +75,8 @@ class ClassificationBatchTask(BatchAnnotatorTask):
         state = AnnotatorState()
         # Reuse the already-loaded model on subsequent items so it is not re-downloaded/rebuilt.
         kwargs = {"predictor": state.predictor} if (reuse and state.predictor is not None) else {}
-        state.image_shape = image.shape if image.ndim == self.ndim else image.shape[:-1]
+        # The image is prepared by 'load_batch_image', so a channel axis is always the last one.
+        state.image_shape = image.shape[:self.ndim]
         state.ndim = self.ndim
         # Resolve the tiling per image, since the shapes can differ across the batch.
         tile_shape, halo = resolve_default_tiling(state.image_shape, self.tile_shape, self.halo, embedding_path)
@@ -102,7 +103,7 @@ class ClassificationBatchTask(BatchAnnotatorTask):
     def start(self, viewer, entry, image, embedding_path, index):
         AnnotatorState().batch_index = index
         tile_shape, halo = self._init_predictor(viewer, image, embedding_path, reuse=False)
-        viewer.add_image(image, name="image")
+        viewer.add_image(image, name="image", rgb=image.ndim > self.ndim)
         self._set_layers(viewer, index)
 
         annotator = self.classifier_class(viewer)
@@ -136,8 +137,9 @@ class ClassificationBatchTask(BatchAnnotatorTask):
         state = AnnotatorState()
         state.batch_index = index
         viewer.layers["image"].data = image
-        self._set_layers(viewer, index)
+        # The predictor first, because it sets the image shape that a new empty layer is made with.
         tile_shape, halo = self._init_predictor(viewer, image, embedding_path, reuse=True)
+        self._set_layers(viewer, index)
         _sync_tiling_widget(AnnotatorState().widgets["embeddings"], tile_shape, halo)
         annotator._update_image()
         # Drop the cached features/aux of the previous image.
