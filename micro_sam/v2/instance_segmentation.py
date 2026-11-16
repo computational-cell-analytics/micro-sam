@@ -784,16 +784,26 @@ def get_unisam2_model(checkpoint_path, device=None, encoder=_DEFAULT_MODEL, peft
         sam2_model = PEFT_Sam2(sam2_model, **peft_kwargs).sam
         encoder = sam2_model.image_encoder
 
-    # Neither the decoder width nor the channel count is recorded in the checkpoint, so read both off 'out_conv'.
-    output_channels, initial_features = model_state["out_conv.weight"].shape[:2]
+    # Checkpoints of the multi-scale decoders record how to rebuild them. Older checkpoints hold the default
+    # decoder and record neither the width nor the channel count, so both are read off 'out_conv'.
+    decoder_config = state.get("decoder_config") if isinstance(state, dict) else None
+    if decoder_config is None:
+        output_channels, initial_features = model_state["out_conv.weight"].shape[:2]
+        decoder_config = {"decoder_type": "unetr", "decoder_kwargs": {}}
+    else:
+        output_channels, initial_features = decoder_config["output_channels"], decoder_config["initial_features"]
     if output_channels != UNISAM2_OUTPUT_CHANNELS:
         raise ValueError(
             f"The decoder predicts {output_channels} channels, but only decoders with {UNISAM2_OUTPUT_CHANNELS} "
             "output channels (foreground, three directed distances, boundary) are supported."
         )
 
-    model = UniSAM2(encoder=encoder, output_channels=output_channels, initial_features=initial_features, device=device)
-    _check_decoder_width(model, initial_features)
+    model = UniSAM2(
+        encoder=encoder, output_channels=output_channels, initial_features=initial_features, device=device,
+        decoder_type=decoder_config["decoder_type"], decoder_kwargs=decoder_config.get("decoder_kwargs") or None,
+    )
+    if decoder_config["decoder_type"] == "unetr":
+        _check_decoder_width(model, initial_features)
     if peft_kwargs and is_qlora:
         model_state = _convert_automatic_qlora_state(model, model_state)
     model.load_state_dict(model_state)
