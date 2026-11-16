@@ -1911,9 +1911,7 @@ class EmbeddingWidget(_WidgetBase):
             self.image_ndim_mode = "auto"
             self.image_ndim_dropdown, ndim_layout = self._add_choice_param(
                 "image_ndim_mode", self.image_ndim_mode, ["auto", "2d", "3d"], title="image dimensions:",
-                tooltip="Spatial dimensionality of the image. 'auto' detects it (a channels-first "
-                "array is read as a volume); set '2d' to read a multi-channel array (e.g. (C, H, W) "
-                "or (H, W, C)) as a single 2d image, or '3d' to force a (Z, H, W) volume.",
+                tooltip=get_tooltip("embedding", "image_ndim"),
             )
             # Forcing '2d' on a volume removes the slices the batch would span.
             self.image_ndim_dropdown.currentIndexChanged.connect(self._refresh_batch_size)

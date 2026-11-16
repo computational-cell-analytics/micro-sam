@@ -8,6 +8,7 @@ from skimage.data import binary_blobs
 from micro_sam._test_util import check_layer_initialization
 from micro_sam.v2.util import DEFAULT_MODEL, DEFAULT_TILE_SHAPE, DEFAULT_HALO
 from micro_sam.sam_annotator.annotator import annotator, detect_ndim_from_viewer, Annotator
+from micro_sam.sam_annotator._tooltips import get_tooltip
 
 
 @pytest.mark.gui
@@ -510,7 +511,7 @@ class TestAnnotatorClass:
         assert not interactive.batched_checkbox.isChecked()
         assert not interactive.batched_checkbox.isEnabled()
         assert not interactive.batched
-        assert "unavailable while scribble prompts are present" in interactive.batched_checkbox.toolTip()
+        assert interactive.batched_checkbox.toolTip() == get_tooltip("unified_segment", "batched_scribble_disabled")
         if ndim == 3:
             assert not interactive._segment_widget.batched
 
