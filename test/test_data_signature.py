@@ -2,8 +2,8 @@
 
 import hashlib
 
-import numpy as np
 import pytest
+import numpy as np
 
 from micro_sam import util
 from micro_sam.util import _compute_data_signature

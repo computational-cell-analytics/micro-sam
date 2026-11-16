@@ -2,9 +2,9 @@ import os
 import platform
 import tempfile
 
+import pytest
 import numpy as np
 import imageio.v3 as imageio
-import pytest
 from skimage.data import binary_blobs
 
 from micro_sam.v2.util import DEFAULT_MODEL

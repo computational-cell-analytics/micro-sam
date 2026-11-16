@@ -1,12 +1,12 @@
 import platform
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
+import numpy as np
 from qtpy import QtWidgets
 
-from micro_sam.sam_annotator import _annotator, _widgets as widgets
 from micro_sam.sam_annotator._state import AnnotatorState
+from micro_sam.sam_annotator import _annotator, _widgets as widgets
 from micro_sam.sam_annotator.pixel_classifier import PixelClassifier
 from micro_sam.sam_annotator.object_classifier import ObjectClassifier
 
@@ -50,13 +50,15 @@ def test_class_rows_and_selection(annotator):
     row_layout = annotator._class_rows[1][0].layout()
     row_widgets = [row_layout.itemAt(i).widget() for i in range(row_layout.count())]
     types = [type(widget) for widget in row_widgets if widget is not None]
-    assert types == [QtWidgets.QLabel, QtWidgets.QRadioButton, QtWidgets.QPushButton,
-                     QtWidgets.QToolButton, QtWidgets.QLineEdit]
+    assert types == [
+        QtWidgets.QLabel, QtWidgets.QRadioButton, QtWidgets.QPushButton, QtWidgets.QToolButton, QtWidgets.QLineEdit
+    ]
     assert annotator._class_group.button(1).isChecked()
 
     # 'Add Class' paints with the next free id.
-    add_button = [b for b in annotator._label_widget.parentWidget().findChildren(QtWidgets.QPushButton)
-                  if b.text() == "Add Class"][0]
+    add_button = [
+        b for b in annotator._label_widget.parentWidget().findChildren(QtWidgets.QPushButton) if b.text() == "Add Class"
+    ][0]
     add_button.click()
     assert layer.selected_label == 2 and layer.mode == "paint"
     assert annotator._class_group.button(2).isChecked()

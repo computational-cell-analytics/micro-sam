@@ -1,12 +1,12 @@
-import argparse
 import os
 import pickle
+import argparse
 
 from subprocess import run
 
+from tqdm import tqdm
 import micro_sam.v1.evaluation as evaluation
 from util import get_data_paths, ALL_DATASETS, LM_DATASETS
-from tqdm import tqdm
 
 PROMPT_ROOT = "/scratch/projects/nim00007/sam/experiments/prompts"
 

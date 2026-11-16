@@ -28,7 +28,7 @@ rows with ``--force``. Building the training datasets of a domain takes several 
 
 Usage:
 
-    python create_data_overview_em_organelles.py                    # fill in the missing counts
+    python create_data_overview_em_organelles.py  # fill in the missing counts
     python create_data_overview_em_organelles.py --datasets lucchi  # only process this dataset
     python create_data_overview_em_organelles.py --datasets lucchi --force  # recompute its counts
 """
@@ -64,98 +64,155 @@ def _nucleus(folder, select=None):
 
 ENTRIES = [
     # Mitochondria, 2d.
-    Entry("mitolab", EM, MITO, 2, _mito("mitolab"),
-          comment="CEM-MitoLab: tiles from about 600 source volumes and images. The groups whose names match a "
-          "mitochondria evaluation dataset are left out."),
+    Entry(
+        "mitolab", EM, MITO, 2, _mito("mitolab"),
+        comment="CEM-MitoLab: tiles from about 600 source volumes and images. The groups whose names match a "
+        "mitochondria evaluation dataset are left out."
+    ),
     Entry("probtem", EM, MITO, 2, _mito("probtem_full")),
     Entry("u2os_fibsem_mito", EM, MITO, 2, _mito("u2os_fibsem"), comment="Single FIB-SEM slices of a U2-OS cell."),
     Entry("vnc", EM, MITO, 2, _mito("vnc"), comment="Single slices of the 20-slice ssTEM train stack."),
     # Mitochondria, 3d.
     Entry("aive_mito", EM, MITO, 3, _mito("aive")),
     Entry("asem_mito", EM, MITO, 3, _mito("asem"), test="asem_mito", comment="Boxes of the volumes 46, 58 and 2E."),
-    Entry("brain_pfibsem_mito", EM, MITO, 3, _mito("brain_pfibsem"),
-          comment="The noisy stack is registered to the reference stack and shares its labels."),
-    Entry("cellmap_mito", EM, MITO, 3, _mito("cellmap_mito_crops"),
-          comment="Crops of the CellMap Segmentation Challenge."),
+    Entry(
+        "brain_pfibsem_mito", EM, MITO, 3, _mito("brain_pfibsem"),
+        comment="The noisy stack is registered to the reference stack and shares its labels."
+    ),
+    Entry(
+        "cellmap_mito", EM, MITO, 3, _mito("cellmap_mito_crops"), comment="Crops of the CellMap Segmentation Challenge."
+    ),
     Entry("densecell_mito", EM, MITO, 3, _mito("densecell"), comment="The mitochondria class of the semantic labels."),
     Entry("hela_stard3_mito", EM, MITO, 3, _mito("hela_stard3")),
-    Entry("human_organoids_mito", EM, MITO, 3, _mito("human_organoids_mito"),
-          comment="The instances are precomputed with a neck watershed (em_organelles/preprocess_mito_dataset.py)."),
-    Entry("lucchi", EM, MITO, 3, _mito("lucchi"), test="lucchi",
-          comment="Lucchi++, the re-annotated Lucchi train volume."),
-    Entry("microns_pinky_mito", EM, MITO, 3, _mito("microns"),
-          comment="The densely annotated stitched volume vol19-vol34 of MICrONS pinky."),
-    Entry("mito_segem", EM, MITO, 3, _mito("mito_segem"),
-          comment="The testis and brainstem boxes. The intestine box is evaluation data."),
+    Entry(
+        "human_organoids_mito", EM, MITO, 3, _mito("human_organoids_mito"),
+        comment="The instances are precomputed with a neck watershed (em_organelles/preprocess_mito_dataset.py)."
+    ),
+    Entry(
+        "lucchi", EM, MITO, 3, _mito("lucchi"), test="lucchi", comment="Lucchi++, the re-annotated Lucchi train volume."
+    ),
+    Entry(
+        "microns_pinky_mito", EM, MITO, 3, _mito("microns"),
+        comment="The densely annotated stitched volume vol19-vol34 of MICrONS pinky."
+    ),
+    Entry(
+        "mito_segem", EM, MITO, 3, _mito("mito_segem"),
+        comment="The testis and brainstem boxes. The intestine box is evaluation data."
+    ),
     Entry("mitoem", EM, MITO, 3, _mito("mitoem"), test="mitoem", comment="The train volumes of MitoEM-H and MitoEM-R."),
-    Entry("mitoemv2", EM, MITO, 3, _mito("mitoemv2"), test="mitoemv2",
-          comment="MitoEM 2.0: beta, jurkat, macro, podo, sperm and stem. pyra repeats MitoEM-H and is left out. "
-          "The test data also has the mossy fiber boutons (mitoemv2_mossy), which Figure 6 pools into MitoEM 2.0."),
-    Entry("mitoemv2_mossy", EM, MITO, 3, _mito("mitoverse_derived", _path_has("/han24_")),
-          comment="The mossy fiber boutons of MitoEM 2.0 (MitoVerse han24). Only the boutons are annotated."),
+    Entry(
+        "mitoemv2", EM, MITO, 3, _mito("mitoemv2"), test="mitoemv2",
+        comment="MitoEM 2.0: beta, jurkat, macro, podo, sperm and stem. pyra repeats MitoEM-H and is left out. "
+        "The test data also has the mossy fiber boutons (mitoemv2_mossy), which Figure 6 pools into MitoEM 2.0."
+    ),
+    Entry(
+        "mitoemv2_mossy", EM, MITO, 3, _mito("mitoverse_derived", _path_has("/han24_")),
+        comment="The mossy fiber boutons of MitoEM 2.0 (MitoVerse han24). Only the boutons are annotated."
+    ),
     Entry("mitoverse_haberl18", EM, MITO, 3, _mito("mitoverse", _path_has("/haberl18/"))),
-    Entry("mitoverse_microns1", EM, MITO, 3, _mito("mitoverse_derived", _path_has("/turner22_")),
-          comment="MICrONS phase 1."),
+    Entry(
+        "mitoverse_microns1", EM, MITO, 3, _mito("mitoverse_derived", _path_has("/turner22_")),
+        comment="MICrONS phase 1."
+    ),
     Entry("mitoverse_xiao18", EM, MITO, 3, _mito("mitoverse", _path_has("/xiao18/"))),
-    Entry("parlakgul_fasting_liver_mito", EM, MITO, 3, _mito("parlakgul_fasting_liver"),
-          comment="Other samples than the Parlakgul liver samples of the evaluation."),
+    Entry(
+        "parlakgul_fasting_liver_mito", EM, MITO, 3, _mito("parlakgul_fasting_liver"),
+        comment="Other samples than the Parlakgul liver samples of the evaluation."
+    ),
     Entry("snemi_mito", EM, MITO, 3, _mito("snemi_mito"), test="snemi_mito"),
     Entry("uro_cell", EM, MITO, 3, _mito("uro_cell"), comment="The 5 of 8 UroCell volumes with mitochondria labels."),
     # Nuclei, 2d.
     Entry("cardiomyocyte_tem_nucleus", EM, NUCLEUS, 2, _nucleus("cardiomyocyte_tem_nucleus")),
-    Entry("perez_nucleus", EM, NUCLEUS, 2, _nucleus("perez_nucleus"),
-          comment="The test tiles of the dataset are the validation split of the training."),
-    Entry("tumor_spheroid_nuclei", EM, NUCLEUS, 2, _nucleus("tumor_spheroid_nucleus"),
-          comment="Single SBF-SEM slices."),
-    Entry("vem_nuclei_2d", EM, NUCLEUS, 2, _nucleus("vem_nuclei_nucleus", _ndim_is(2)),
-          comment="vEM nuclei, array tomography SEM. Proofread NucleoNet predictions."),
-    Entry("waenet_sstem_nucleus", EM, NUCLEUS, 2, _nucleus("waenet_nucleus", _path_has("/dataset_3_")),
-          comment="WAE-Net dataset 3: serial ssTEM sections of one cell."),
-    Entry("waenet_tem_nucleus", EM, NUCLEUS, 2, _nucleus("waenet_nucleus", _path_has("/tem_")),
-          comment="WAE-Net datasets 4-7: TEM images of lymphocytes and B cells. Only the central cell is labeled."),
+    Entry(
+        "perez_nucleus", EM, NUCLEUS, 2, _nucleus("perez_nucleus"),
+        comment="The test tiles of the dataset are the validation split of the training."
+    ),
+    Entry(
+        "tumor_spheroid_nuclei", EM, NUCLEUS, 2, _nucleus("tumor_spheroid_nucleus"), comment="Single SBF-SEM slices."
+    ),
+    Entry(
+        "vem_nuclei_2d", EM, NUCLEUS, 2, _nucleus("vem_nuclei_nucleus", _ndim_is(2)),
+        comment="vEM nuclei, array tomography SEM. Proofread NucleoNet predictions."
+    ),
+    Entry(
+        "waenet_sstem_nucleus", EM, NUCLEUS, 2, _nucleus("waenet_nucleus", _path_has("/dataset_3_")),
+        comment="WAE-Net dataset 3: serial ssTEM sections of one cell."
+    ),
+    Entry(
+        "waenet_tem_nucleus", EM, NUCLEUS, 2, _nucleus("waenet_nucleus", _path_has("/tem_")),
+        comment="WAE-Net datasets 4-7: TEM images of lymphocytes and B cells. Only the central cell is labeled."
+    ),
     # Nuclei, 3d.
-    Entry("betaseg_nucleus", EM, NUCLEUS, 3, _nucleus("betaseg_nucleus_boxes"),
-          comment="Only the nucleus of one target cell per volume is labeled."),
-    Entry("cellmap_nucleus", EM, NUCLEUS, 3, _nucleus("cellmap_nucleus_crops"), test="cellmap_nucleus",
-          comment="Crops of the CellMap Segmentation Challenge. The test data is the held-out crop357."),
+    Entry(
+        "betaseg_nucleus", EM, NUCLEUS, 3, _nucleus("betaseg_nucleus_boxes"),
+        comment="Only the nucleus of one target cell per volume is labeled."
+    ),
+    Entry(
+        "cellmap_nucleus", EM, NUCLEUS, 3, _nucleus("cellmap_nucleus_crops"), test="cellmap_nucleus",
+        comment="Crops of the CellMap Segmentation Challenge. The test data is the held-out crop357."
+    ),
     Entry("cerebellum_nucleus", EM, NUCLEUS, 3, _nucleus("cerebellum_fibsem_nucleus")),
-    Entry("fafb_nuclei", EM, NUCLEUS, 3, _nucleus("fafb_nuclei"), test="fafb_nuclei",
-          comment="The labels are the automatic FlyWire segmentation."),
-    Entry("human_organoids_nucleus", EM, NUCLEUS, 3, _nucleus("human_organoids_nucleus"),
-          test="human_organoids_nucleus",
-          comment="The test data is the validation part of the volumes (the last 10% of the slices), which is also in "
-          "the train + val counts."),
-    Entry("janelia_nucleus", EM, NUCLEUS, 3, _nucleus("janelia_nucleus"),
-          comment="Cellpose pseudo-labels, except for the 3 manually labeled jrc_mus-nacc volumes."),
-    Entry("macrophage_a431_nucleus", EM, NUCLEUS, 3, _nucleus("macrophage_a431_nucleus"),
-          comment="Quick semantic annotations."),
-    Entry("microns_nuclei", EM, NUCLEUS, 3, _nucleus("microns_nuclei"), test="microns_nuclei",
-          comment="The labels are the automatic MICrONS minnie65 segmentation."),
-    Entry("microsam_em_nuclei", EM, NUCLEUS, 3, _nucleus("microsam_em_nuclei"),
-          comment="The train crop of the microSAM user study."),
+    Entry(
+        "fafb_nuclei", EM, NUCLEUS, 3, _nucleus("fafb_nuclei"), test="fafb_nuclei",
+        comment="The labels are the automatic FlyWire segmentation."
+    ),
+    Entry(
+        "human_organoids_nucleus", EM, NUCLEUS, 3, _nucleus("human_organoids_nucleus"),
+        test="human_organoids_nucleus",
+        comment="The test data is the validation part of the volumes (the last 10% of the slices), which is also in "
+        "the train + val counts."
+    ),
+    Entry(
+        "janelia_nucleus", EM, NUCLEUS, 3, _nucleus("janelia_nucleus"),
+        comment="Cellpose pseudo-labels, except for the 3 manually labeled jrc_mus-nacc volumes."
+    ),
+    Entry(
+        "macrophage_a431_nucleus", EM, NUCLEUS, 3, _nucleus("macrophage_a431_nucleus"),
+        comment="Quick semantic annotations."
+    ),
+    Entry(
+        "microns_nuclei", EM, NUCLEUS, 3, _nucleus("microns_nuclei"), test="microns_nuclei",
+        comment="The labels are the automatic MICrONS minnie65 segmentation."
+    ),
+    Entry(
+        "microsam_em_nuclei", EM, NUCLEUS, 3, _nucleus("microsam_em_nuclei"),
+        comment="The train crop of the microSAM user study."
+    ),
     Entry("openorganelle_nucleus", EM, NUCLEUS, 3, _nucleus("openorganelle_nucleus"), comment="Automatic labels."),
     Entry("platynereis_nuclei", EM, NUCLEUS, 3, _nucleus("platynereis"), test="platynereis_nuclei"),
-    Entry("sxt_nucleus", XRAY, NUCLEUS, 3, _nucleus("sxt_ins1e_mito"),
-          comment="SXT INS-1E: soft X-ray tomography (EM-like), not EM. Semi-automatic labels."),
-    Entry("vem_nuclei_3d", EM, NUCLEUS, 3, _nucleus("vem_nuclei_nucleus", _ndim_is(3)),
-          comment="vEM nuclei, FIB-SEM. Proofread NucleoNet predictions."),
-    Entry("waenet_fibsem_nucleus", EM, NUCLEUS, 3, _nucleus("waenet_nucleus", _path_has("/dataset_1.h5")),
-          comment="WAE-Net dataset 1: FIB-SEM of pancreatic carcinoid cells."),
+    Entry(
+        "sxt_nucleus", XRAY, NUCLEUS, 3, _nucleus("sxt_ins1e_mito"),
+        comment="SXT INS-1E: soft X-ray tomography (EM-like), not EM. Semi-automatic labels."
+    ),
+    Entry(
+        "vem_nuclei_3d", EM, NUCLEUS, 3, _nucleus("vem_nuclei_nucleus", _ndim_is(3)),
+        comment="vEM nuclei, FIB-SEM. Proofread NucleoNet predictions."
+    ),
+    Entry(
+        "waenet_fibsem_nucleus", EM, NUCLEUS, 3, _nucleus("waenet_nucleus", _path_has("/dataset_1.h5")),
+        comment="WAE-Net dataset 1: FIB-SEM of pancreatic carcinoid cells."
+    ),
     # Mitochondria, test data only.
-    Entry("parlakgul_liver_eval", EM, MITO, 3, test="parlakgul_liver_eval",
-          comment="The manual Parlakgul liver evaluation crops. Other Parlakgul liver samples train the model."),
+    Entry(
+        "parlakgul_liver_eval", EM, MITO, 3, test="parlakgul_liver_eval",
+        comment="The manual Parlakgul liver evaluation crops. Other Parlakgul liver samples train the model."
+    ),
     Entry("cerebellum_fibsem_mito", EM, MITO, 3, test="cerebellum_fibsem_mito"),
     Entry("cmito", EM, MITO, 3, test="cmito", comment="The CMito volumes L1, L2, L3, adult and dauer, pooled."),
     Entry("human_liver_em", EM, MITO, 3, test="human_liver_em"),
     Entry("kasthuri", EM, MITO, 3, test="kasthuri"),
     Entry("macrophage_a431_mito", EM, MITO, 3, test="macrophage_a431_mito"),
-    Entry("mitolab_3d", EM, MITO, 3, test="mitolab",
-          comment="The CEM-MitoLab volumes c_elegans, fly_brain, glycolytic_muscle, hela_cell and salivary_gland, "
-          "pooled. They are left out of the training data (see mitolab)."),
+    Entry(
+        "mitolab_3d", EM, MITO, 3, test="mitolab",
+        comment="The CEM-MitoLab volumes c_elegans, fly_brain, glycolytic_muscle, hela_cell and salivary_gland, "
+        "pooled. They are left out of the training data (see mitolab)."
+    ),
     # Nuclei, test data only.
-    Entry("dauer_larva_nucleus", EM, NUCLEUS, 3, test="dauer_larva_nucleus",
-          comment="Boxes of the OpenOrganelle jrc_dauer-larva volume, with automatic COSEM nucleus instances. Other "
-          "OpenOrganelle volumes train the model."),
+    Entry(
+        "dauer_larva_nucleus", EM, NUCLEUS, 3, test="dauer_larva_nucleus",
+        comment="Boxes of the OpenOrganelle jrc_dauer-larva volume, with automatic COSEM nucleus instances. Other "
+        "OpenOrganelle volumes train the model."
+    ),
     Entry("aive_nucleus", EM, NUCLEUS, 3, test="aive_nucleus"),
     Entry("etchacell_nucleus", EM, NUCLEUS, 3, test="etchacell_nucleus"),
     Entry("human_liver_em_nucleus", EM, NUCLEUS, 3, test="human_liver_em_nucleus"),

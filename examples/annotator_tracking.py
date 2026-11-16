@@ -1,10 +1,10 @@
 import os
 
 from elf.io import open_file
+from micro_sam.v2.util import DEFAULT_MODEL
+from micro_sam.util import get_cache_directory
 from micro_sam.sam_annotator import annotator_tracking
 from micro_sam.sample_data import fetch_tracking_example_data
-from micro_sam.util import get_cache_directory
-from micro_sam.v2.util import DEFAULT_MODEL
 
 DATA_CACHE = os.path.join(get_cache_directory(), "sample_data")
 EMBEDDING_CACHE = os.path.join(get_cache_directory(), "embeddings")
@@ -32,7 +32,7 @@ def main():
 
 # The corresponding CLI call for track_ctc_data:
 # (replace with cache directory on your machine)
-# $ micro_sam.annotator_tracking -i <cache>/sample_data/DIC-C2DH-HeLa.zip.unzip/DIC-C2DH-HeLa/01 -k "*.tif" \
+# $ micro_sam annotator tracking -i <cache>/sample_data/DIC-C2DH-HeLa.zip.unzip/DIC-C2DH-HeLa/01 -k "*.tif" \
 #   -e <cache>/embeddings/embeddings-ctc-hvit_t_cells.zarr
 if __name__ == "__main__":
     main()

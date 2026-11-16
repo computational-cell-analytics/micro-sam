@@ -3,8 +3,8 @@ from glob import glob
 
 import torch_em
 
-from torch_em.transform.label import PerObjectDistanceTransform
 from micro_sam.v1.training import train_sam, identity
+from torch_em.transform.label import PerObjectDistanceTransform
 
 
 def get_loader(split):

@@ -15,9 +15,9 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
-import json
 import sys
+import json
+import argparse
 
 import h5py
 import napari

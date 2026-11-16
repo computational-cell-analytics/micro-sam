@@ -2,8 +2,8 @@ import os
 from glob import glob
 
 import h5py
-import imageio.v3 as imageio
 import napari
+import imageio.v3 as imageio
 
 # DATA_ROOT = "./figure_data"
 DATA_ROOT = "/media/anwai/ANWAI/figure_data"

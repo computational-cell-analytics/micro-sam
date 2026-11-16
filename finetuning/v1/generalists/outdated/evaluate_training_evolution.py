@@ -1,5 +1,5 @@
-import argparse
 import os
+import argparse
 
 from glob import glob
 from subprocess import run

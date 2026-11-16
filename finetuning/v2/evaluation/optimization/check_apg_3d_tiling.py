@@ -29,8 +29,8 @@ import pandas as pd
 import torch
 
 from micro_sam.v2.util import get_sam2_model, FINETUNED_MODELS
-from micro_sam.v2.instance_segmentation import get_decoder, get_instance_segmentation_generator
 from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION
+from micro_sam.v2.instance_segmentation import get_decoder, get_instance_segmentation_generator
 
 EVALUATION_ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, EVALUATION_ROOT)

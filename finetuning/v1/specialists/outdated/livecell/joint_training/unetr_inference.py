@@ -59,8 +59,9 @@ def predict_for_unetr(inputs, save_dir, model, device):
     os.makedirs(save_dir, exist_ok=True)
 
     with torch.no_grad():
-        for img_path in tqdm(glob(os.path.join(inputs, "images", "livecell_test_images", "*")),
-                             desc="Run unetr inference"):
+        for img_path in tqdm(
+            glob(os.path.join(inputs, "images", "livecell_test_images", "*")), desc="Run unetr inference"
+        ):
             fname = Path(img_path).stem
             save_path = os.path.join(save_dir, f"{fname}.h5")
             if os.path.exists(save_path):
@@ -87,8 +88,9 @@ def evaluation_for_unetr(inputs, save_dir, csv_path):
         return
 
     msa_list, sa50_list = [], []
-    for gt_path in tqdm(glob(os.path.join(inputs, "annotations", "livecell_test_images", "*", "*")),
-                        desc="Run unetr evaluation"):
+    for gt_path in tqdm(
+        glob(os.path.join(inputs, "annotations", "livecell_test_images", "*", "*")), desc="Run unetr evaluation"
+    ):
         gt = imageio.imread(gt_path)
         fname = Path(gt_path).stem
 

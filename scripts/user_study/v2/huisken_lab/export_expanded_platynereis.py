@@ -17,10 +17,10 @@ Usage:
 import os
 import argparse
 
+import zarr
+import tifffile
 import numpy as np
 import pandas as pd
-import tifffile
-import zarr
 
 from bioimage_py.stats import unique
 

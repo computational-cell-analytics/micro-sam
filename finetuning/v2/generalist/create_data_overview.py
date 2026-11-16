@@ -29,8 +29,8 @@ Counting all datasets needs a CPU job with about 64 GB of memory and 8 workers.
 
 Usage:
 
-    python create_data_overview.py                       # fill in the missing counts
-    python create_data_overview.py --datasets livecell   # only process this dataset
+    python create_data_overview.py  # fill in the missing counts
+    python create_data_overview.py --datasets livecell  # only process this dataset
     python create_data_overview.py --datasets livecell --force  # recompute its counts
 """
 
@@ -42,8 +42,8 @@ import argparse
 import warnings
 from collections import Counter
 from dataclasses import dataclass, replace
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from typing import Callable, Dict, List, Optional, Tuple
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 
 import numpy as np
 from tqdm import tqdm
@@ -150,18 +150,26 @@ ENTRIES = [
     ),
     Entry("cellular", LF, "cell", 2, _lm("cellular")),
     Entry("cisd", LF, "cell", 2, _lm("cisd")),
-    Entry("ctc_label_free", LF, "cell", 2, _lm("ctc", _path_has(*CTC_LABEL_FREE)),
-          comment="Cell Tracking Challenge: BF-C2DL-HSC, BF-C2DL-MuSC, DIC-C2DH-HeLa, PhC-C2DH-U373, PhC-C2DL-PSC."),
-    Entry("ctc_fluorescence_cells", FL, "cell", 2, _lm("ctc", _path_has("/Fluo-C2DL-Huh7/", "/Fluo-C2DL-MSC/")),
-          comment="Cell Tracking Challenge: Fluo-C2DL-Huh7, Fluo-C2DL-MSC."),
-    Entry("ctc_fluorescence_nuclei", FL, "nucleus", 2, _lm("ctc", _path_has("/Fluo-N2DH-SIM+/")),
-          comment="Cell Tracking Challenge: Fluo-N2DH-SIM+, simulated nuclei."),
+    Entry(
+        "ctc_label_free", LF, "cell", 2, _lm("ctc", _path_has(*CTC_LABEL_FREE)),
+        comment="Cell Tracking Challenge: BF-C2DL-HSC, BF-C2DL-MuSC, DIC-C2DH-HeLa, PhC-C2DH-U373, PhC-C2DL-PSC."
+    ),
+    Entry(
+        "ctc_fluorescence_cells", FL, "cell", 2, _lm("ctc", _path_has("/Fluo-C2DL-Huh7/", "/Fluo-C2DL-MSC/")),
+        comment="Cell Tracking Challenge: Fluo-C2DL-Huh7, Fluo-C2DL-MSC."
+    ),
+    Entry(
+        "ctc_fluorescence_nuclei", FL, "nucleus", 2, _lm("ctc", _path_has("/Fluo-N2DH-SIM+/")),
+        comment="Cell Tracking Challenge: Fluo-N2DH-SIM+, simulated nuclei."
+    ),
     Entry("cvz_fluo_cell", FL, "cell", 2, _lm("cvz", _path_has("_Cell_")), "cvz_fluo_cell"),
     Entry("cvz_fluo_dapi", FL, "nucleus", 2, _lm("cvz", _path_has("_Dapi_"))),
     Entry("dcis_com_nuclei", FL, "nucleus", 2, _lm("dcis_com_nuclei")),
     Entry("deepbacs_fluorescence", FL, "cell", 2, _lm("deepbacs", _deepbacs_fluorescence), "deepbacs_fluorescence"),
-    Entry("deepbacs_label_free", LF, "cell", 2, _lm("deepbacs", _deepbacs_label_free),
-          comment="Includes the E. coli stationary-phase images (train split only)."),
+    Entry(
+        "deepbacs_label_free", LF, "cell", 2, _lm("deepbacs", _deepbacs_label_free),
+        comment="Includes the E. coli stationary-phase images (train split only)."
+    ),
     Entry("dememseg", FL, "prospore membrane", 2, _lm("dememseg")),
     Entry("dsb", FL, "nucleus", 2, _lm("dsb"), "dsb", "The fluorescence images of DSB 2018."),
     Entry("dynamicnuclearnet", FL, "nucleus", 2, _lm("dynamicnuclearnet"), "dynamicnuclearnet"),
@@ -190,32 +198,44 @@ ENTRIES = [
     Entry("organoidnet", LF, "organoid", 2, _lm("organoidnet")),
     Entry("orgasegment", LF, "organoid", 2, _lm("orgasegment")),
     Entry("orgline", LF, "organoid", 2, _lm("orgline"), "orgline"),
-    Entry("pan_multiplex", FL, "cell", 2, _lm("pan_multiplex"),
-          comment="MIBI, CODEX and Vectra images. MIBI is mass spectrometry imaging, not fluorescence."),
+    Entry(
+        "pan_multiplex", FL, "cell", 2, _lm("pan_multiplex"),
+        comment="MIBI, CODEX and Vectra images. MIBI is mass spectrometry imaging, not fluorescence."
+    ),
     Entry("tissuenet", FL, "cell", 2, _lm("tissuenet"), "tissuenet"),
     Entry("toiam", LF, "cell", 2, _lm("toiam")),
     Entry("tsakiroglou", FL, "nucleus", 2, _lm("tsakiroglou")),
     Entry("u20s", FL, "nucleus", 2, _lm("u20s"), "u20s"),
     Entry("usiigaci", LF, "cell", 2, _lm("usiigaci")),
     Entry("vicar", LF, "cell", 2, _lm("vicar"), "vicar"),
-    Entry("xenium_cells", FL, "cell", 2, _lm("xenium", _key_is("labels/cells")),
-          comment="The labels are the automatic Xenium segmentation, not manual annotations."),
-    Entry("xenium_nuclei", FL, "nucleus", 2, _lm("xenium", _key_is("labels/nuclei")),
-          comment="The labels are the automatic Xenium segmentation, not manual annotations."),
+    Entry(
+        "xenium_cells", FL, "cell", 2, _lm("xenium", _key_is("labels/cells")),
+        comment="The labels are the automatic Xenium segmentation, not manual annotations."
+    ),
+    Entry(
+        "xenium_nuclei", FL, "nucleus", 2, _lm("xenium", _key_is("labels/nuclei")),
+        comment="The labels are the automatic Xenium segmentation, not manual annotations."
+    ),
     Entry("yeaz", LF, "cell", 2, _lm("yeaz")),
     # Light microscopy, 2d, OOD.
     Entry("arvidsson", FL, "nucleus", 2, test="arvidsson"),
-    Entry("bac_mother", LF, "cell", 2, test="bac_mother",
-          comment="E. coli in a mother machine. Every 10th frame of the test movies is scored."),
+    Entry(
+        "bac_mother", LF, "cell", 2, test="bac_mother",
+        comment="E. coli in a mother machine. Every 10th frame of the test movies is scored."
+    ),
     Entry("bbbc010", LF, "worm", 2, test="bbbc010", comment="C. elegans."),
     Entry("cardioblast_nuclei", FL, "nucleus", 2, test="cardioblast_nuclei"),
-    Entry("cellapp", LF, "cell", 2, test="cellapp",
-          comment="The HeLa, RPE1 and U2OS subsets. The labels are automatic, so not every cell is annotated."),
+    Entry(
+        "cellapp", LF, "cell", 2, test="cellapp",
+        comment="The HeLa, RPE1 and U2OS subsets. The labels are automatic, so not every cell is annotated."
+    ),
     Entry("covid_if_cells", FL, "cell", 2, test="covid_if_cells"),
     Entry("covid_if_nuclei", FL, "nucleus", 2, test="covid_if_nuclei"),
     Entry("deepseas", LF, "cell", 2, test="deepseas"),
-    Entry("ecoli_microcolony_lineage", LF, "cell", 2, test="ecoli_microcolony_lineage",
-          comment="E. coli microcolonies (cib, crosstalk, recA, rpsM). Every 10th frame of the movies is scored."),
+    Entry(
+        "ecoli_microcolony_lineage", LF, "cell", 2, test="ecoli_microcolony_lineage",
+        comment="E. coli microcolonies (cib, crosstalk, recA, rpsM). Every 10th frame of the movies is scored."
+    ),
     Entry("fusionx", FL, "cell", 2, test="fusionx"),
     Entry("hela_cytonuc", FL, "nucleus", 2, test="hela_cytonuc"),
     Entry("hpa", FL, "cell", 2, test="hpa"),
@@ -228,17 +248,27 @@ ENTRIES = [
     # Light microscopy, 3d.
     Entry("cartocell", FL, "cell", 3, _lm("cartocell"), "cartocell"),
     Entry("celegans_atlas", FL, "nucleus", 3, _lm("celegans_atlas"), "celegans_atlas"),
-    Entry("cochleanet_ihc", FL, "cell", 3, _lm("cochleanet_data", _path_has("/ihc/")),
-          comment=f"Inner hair cells. {INTERNAL}"),
-    Entry("cochleanet_sgn", FL, "cell", 3, _lm("cochleanet_data", _path_has("/sgn/")),
-          comment=f"Spiral ganglion neuron somata. {INTERNAL}"),
-    Entry("embedseg_mouse_skull", FL, "nucleus", 3, _lm("embedseg", _path_has("/Mouse-Skull-Nuclei-CBG/")),
-          "embedseg_mouse_skull"),
-    Entry("embedseg_organoid", FL, "cell", 3, _lm("embedseg", _path_has("/Mouse-Organoid-Cells-CBG/")),
-          "embedseg_organoid"),
+    Entry(
+        "cochleanet_ihc", FL, "cell", 3, _lm("cochleanet_data", _path_has("/ihc/")),
+        comment=f"Inner hair cells. {INTERNAL}"
+    ),
+    Entry(
+        "cochleanet_sgn", FL, "cell", 3, _lm("cochleanet_data", _path_has("/sgn/")),
+        comment=f"Spiral ganglion neuron somata. {INTERNAL}"
+    ),
+    Entry(
+        "embedseg_mouse_skull", FL, "nucleus", 3, _lm("embedseg", _path_has("/Mouse-Skull-Nuclei-CBG/")),
+        "embedseg_mouse_skull"
+    ),
+    Entry(
+        "embedseg_organoid", FL, "cell", 3, _lm("embedseg", _path_has("/Mouse-Organoid-Cells-CBG/")),
+        "embedseg_organoid"
+    ),
     Entry("embedseg_platy_ish", FL, "nucleus", 3, _lm("embedseg", _path_has("/Platynereis-ISH-Nuclei-CBG/"))),
-    Entry("embedseg_platy_nuclei", FL, "nucleus", 3, _lm("embedseg", _path_has("/Platynereis-Nuclei-CBG/")),
-          "embedseg_platy_nuclei"),
+    Entry(
+        "embedseg_platy_nuclei", FL, "nucleus", 3, _lm("embedseg", _path_has("/Platynereis-Nuclei-CBG/")),
+        "embedseg_platy_nuclei"
+    ),
     Entry("gonuclear", FL, "nucleus", 3, _lm("gonuclear"), "gonuclear"),
     Entry("nis3d", FL, "nucleus", 3, _lm("nis3d"), "nis3d"),
     Entry("nucverse3d", FL, "nucleus", 3, _lm("nucverse3d"), "nucverse3d"),
@@ -253,15 +283,21 @@ ENTRIES = [
     Entry("blastospim", FL, "nucleus", 3, test="blastospim"),
     Entry("cshaper", FL, "cell", 3, test="cshaper"),
     Entry("morphonet_celegans", FL, "nucleus", 3, test="morphonet_celegans"),
-    Entry("morphonet_patiria", FL, "cell", 3, test="morphonet_patiria",
-          comment="The MorphoNet starfish (Patiria miniata) embryo with its curated labels."),
-    Entry("nus_organoids", FL, "nucleus", 3, test="nus_organoids",
-          comment="Three of the four manually annotated volumes of the nucleus benchmark of the Digitalized "
-          "Organoid paper: cell monolayer, colon organoid and breast cancer spheroid."),
+    Entry(
+        "morphonet_patiria", FL, "cell", 3, test="morphonet_patiria",
+        comment="The MorphoNet starfish (Patiria miniata) embryo with its curated labels."
+    ),
+    Entry(
+        "nus_organoids", FL, "nucleus", 3, test="nus_organoids",
+        comment="Three of the four manually annotated volumes of the nucleus benchmark of the Digitalized "
+        "Organoid paper: cell monolayer, colon organoid and breast cancer spheroid."
+    ),
     Entry("plantseg_ovules", FL, "cell", 3, test="plantseg_ovules"),
     # Electron microscopy (and EM-like), 2d.
-    Entry("astih_bf", LF, "axon", 2, _em("astih", _path_has("/BF1/", "/BF2/")),
-          comment="ASTIH BF1 and BF2: brightfield light microscopy of nerve sections, myelinated axons."),
+    Entry(
+        "astih_bf", LF, "axon", 2, _em("astih", _path_has("/BF1/", "/BF2/")),
+        comment="ASTIH BF1 and BF2: brightfield light microscopy of nerve sections, myelinated axons."
+    ),
     Entry("astih_sem", EM, "axon", 2, _em("astih", _path_has("/SEM1/")), comment="ASTIH SEM1: myelinated axons."),
     Entry("tumor_spheroid", EM, "cell", 2, _em("tumor_spheroid_em")),
     # Electron microscopy (and EM-like), 3d.
@@ -285,23 +321,32 @@ ENTRIES = [
     Entry("microns_pinky", EM, "neurite", 3, _em("microns")),
     Entry("platynereis_cells", EM, "cell", 3, _em("platynereis")),
     Entry("snemi", EM, "neurite", 3, _em("snemi"), "snemi"),
-    Entry("synapsenet_compartments", EM, "synaptic compartment", 3, _em("synapsenet_compartments_data"),
-          comment=INTERNAL),
+    Entry(
+        "synapsenet_compartments", EM, "synaptic compartment", 3, _em("synapsenet_compartments_data"), comment=INTERNAL
+    ),
     Entry("wafer4", EM, "neurite", 3, _em("wafer4")),
     Entry("wildenberg", EM, "neurite", 3, _em("wildenberg2023"), comment="The labels are an automatic segmentation."),
-    Entry("xpress", "X-ray", "axon", 3, _em("xpress"),
-          comment="X-ray holographic nano-tomography (EM-like), not EM. Myelinated axons."),
+    Entry(
+        "xpress", "X-ray", "axon", 3, _em("xpress"),
+        comment="X-ray holographic nano-tomography (EM-like), not EM. Myelinated axons."
+    ),
     Entry("zebrafinch_j0126", EM, "neurite", 3, _em("zebrafinch", _path_has("/j0126_")), "zebrafinch_j0126"),
     Entry("zebrafinch_j0251", EM, "neurite", 3, _em("zebrafinch", _path_has("/j0251_"))),
     # Electron microscopy, 3d, OOD.
-    Entry("humanneurons", EM, "neurite", 3, test="humanneurons",
-          comment="A 64 x 2048 x 2048 crop of the H01 human cortex volume."),
-    Entry("ionsem", EM, "neurite", 3, test="ionsem",
-          comment="Ionsem, an out-of-distribution validation volume of EMNeuron."),
+    Entry(
+        "humanneurons", EM, "neurite", 3, test="humanneurons",
+        comment="A 64 x 2048 x 2048 crop of the H01 human cortex volume."
+    ),
+    Entry(
+        "ionsem", EM, "neurite", 3, test="ionsem",
+        comment="Ionsem, an out-of-distribution validation volume of EMNeuron."
+    ),
     Entry("isbi2012", EM, "neurite", 3, test="isbi2012"),
-    Entry("microns_basil", EM, "neurite", 3, test="microns_basil",
-          comment="MICrONS basil (mouse visual cortex, ssTEM), an out-of-distribution validation volume of "
-          "EMNeuron."),
+    Entry(
+        "microns_basil", EM, "neurite", 3, test="microns_basil",
+        comment="MICrONS basil (mouse visual cortex, ssTEM), an out-of-distribution validation volume of "
+        "EMNeuron."
+    ),
     Entry("nisb", EM, "neurite", 3, test="nisb", comment="Synthetic data."),
     Entry("synapseweb", EM, "neurite", 3, test="synapseweb"),
     # Histopathology, 2d.
@@ -325,8 +370,10 @@ ENTRIES = [
     Entry("srsanet", HP, "nucleus", 2, _hp("srsanet"), comment="IHC."),
     Entry("tnbc_celltype", HP, "nucleus", 2, _hp("tnbc_celltype")),
     # Histopathology, 2d, OOD.
-    Entry("amonuseg", HP, "nucleus", 2, test="amonuseg",
-          comment="H&E. Semantic masks: the instances are connected components, so touching nuclei merge."),
+    Entry(
+        "amonuseg", HP, "nucleus", 2, test="amonuseg",
+        comment="H&E. Semantic masks: the instances are connected components, so touching nuclei merge."
+    ),
     Entry("beacon", HP, "nucleus", 2, test="beacon", comment="H&E biopsies of Barrett's esophagus."),
     Entry("cd47_ihcnusc", HP, "nucleus", 2, test="cd47_ihcnusc", comment="CD47 IHC of esophageal cancer."),
     Entry("cytodark0", HP, "nucleus", 2, test="cytodark0"),
@@ -530,8 +577,9 @@ def write_table(path: str, rows: Dict[str, dict]) -> None:
     """Write the table sorted by dimensionality, modality, structure and role, via a temporary file."""
     ordered = sorted(
         rows.values(),
-        key=lambda row: (row["dimensionality"], row["modality"], row["structure"], ROLE_ORDER[row["role"]],
-                         row["dataset"]),
+        key=lambda row: (
+            row["dimensionality"], row["modality"], row["structure"], ROLE_ORDER[row["role"]], row["dataset"]
+        ),
     )
     tmp_path = f"{path}.tmp{os.getpid()}"
     with open(tmp_path, "w", newline="") as f:

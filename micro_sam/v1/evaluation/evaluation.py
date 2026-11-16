@@ -9,8 +9,8 @@ from typing import List, Optional, Union
 
 import numpy as np
 import pandas as pd
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 from natsort import natsorted
 
 from elf.evaluation import mean_segmentation_accuracy, matching

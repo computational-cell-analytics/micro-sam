@@ -3096,8 +3096,10 @@ def correction_badge(drawing, x, y, label_dy=4.2):
 C_ROWS = [
     ("Segmentation", ["interactive_2d", "interactive_3d"], ["automatic_2d", "automatic_3d"]),
     ("Tracking", ["interactive_2dt"], ["automatic_2dt", "automatic_3dt"]),
-    ("Classification", ["pixel_classification", "object_classification"],
-     ["automatic_batch", "automatic_batch_objects"]),
+    (
+        "Classification", ["pixel_classification", "object_classification"],
+        ["automatic_batch", "automatic_batch_objects"]
+    ),
 ]
 
 

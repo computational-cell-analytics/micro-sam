@@ -2,17 +2,17 @@ import os
 import platform
 import tempfile
 
-import numpy as np
-import imageio.v3 as imageio
 import pytest
+import numpy as np
 from qtpy import QtWidgets
+import imageio.v3 as imageio
 from skimage.data import binary_blobs
 
 from micro_sam.v2.util import DEFAULT_MODEL
-from micro_sam.sam_annotator import batch_annotator, image_folder_annotator
-from micro_sam.sam_annotator._batch import _maximize_dock_vertically
 from micro_sam.sam_annotator._state import AnnotatorState
 from micro_sam._test_util import check_layer_initialization
+from micro_sam.sam_annotator._batch import _maximize_dock_vertically
+from micro_sam.sam_annotator import batch_annotator, image_folder_annotator
 
 
 def _create_images(tmpdir, n_images):

@@ -15,10 +15,10 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
-import json
 import os
 import sys
+import json
+import argparse
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
 
@@ -187,9 +187,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     out_dir = args.out / args.subset
     out_dir.mkdir(parents=True, exist_ok=True)
     selected.to_csv(out_dir / "cases.csv")
-    print(selected[["dataset", "msa_v2_defaults", "msa_v4_defaults", "msa_v4_refine", "refine_delta_msa",
-                    "checkpoint_delta_msa", "merged_v4_defaults", "merged_v4_refine", "gt_objects", "reasons"]]
-          .round(4).to_string())
+    columns = [
+        "dataset", "msa_v2_defaults", "msa_v4_defaults", "msa_v4_refine", "refine_delta_msa",
+        "checkpoint_delta_msa", "merged_v4_defaults", "merged_v4_refine", "gt_objects", "reasons"
+    ]
+    print(selected[columns].round(4).to_string())
     for sample_id, row in selected.iterrows():
         path = out_dir / f"{row['dataset']}__{sample_id.replace(':', '_')}.h5"
         print(f"packaging {sample_id} -> {path}")

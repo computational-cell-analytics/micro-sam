@@ -22,10 +22,10 @@ import h5py
 import tifffile
 import numpy as np
 
+from explore_huisken_data import SMALL_DEFAULT_SETTINGS, segment_small
 from segment_huisken_timelapse import (
     OUTPUT_DIR, NORM_PERCENTILES, load_timepoint, tophat, get_norm_bounds, remove_dim_objects, add_spots,
 )
-from explore_huisken_data import SMALL_DEFAULT_SETTINGS, segment_small
 
 
 SWEEP_DIR = os.path.join(OUTPUT_DIR, "nuclei_division_sweep")

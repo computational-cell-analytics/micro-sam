@@ -18,19 +18,19 @@ Usage examples:
 
 from __future__ import annotations
 
+import sys
+import json
+import hashlib
 import argparse
 import dataclasses
-import hashlib
-import json
-import sys
-from collections import defaultdict
 from glob import glob
 from pathlib import Path
+from collections import defaultdict
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from skimage.measure import label as connected_components
 from tqdm import tqdm
+from skimage.measure import label as connected_components
 
 EVALUATION_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(EVALUATION_ROOT))
@@ -221,10 +221,6 @@ def _test_source_specs() -> List[SourceSpec]:
 def _keys_for_test_dataset(dataset: str, data_root: Path) -> Tuple[Optional[str], Optional[str]]:
     _, _, raw_key, label_key = get_data_paths(dataset, str(data_root), split="test")
     return raw_key, label_key
-
-
-# ----------------------------------------------------------------------------------------------
-# scanning
 
 
 def _grid_starts(start: int, stop: int, size: int, step: Optional[int] = None) -> List[int]:
@@ -482,15 +478,13 @@ def load_manifest(subset: str, campaign_root: Path = CAMPAIGN_ROOT, data_root: P
     return manifest
 
 
-# ----------------------------------------------------------------------------------------------
-# loading samples
-
-
 def load_normalized_source(sample: Dict[str, Any], data_root: Path) -> np.ndarray:
     """The raw volume of the legal slab, normalized like the production evaluation normalizes it."""
     z_start, z_stop = sample["normalization_z_range"]
-    raw = _read_array(_source_path(sample["raw_path"], data_root), sample["raw_key"],
-                      roi=(slice(z_start, z_stop), slice(None), slice(None)))
+    raw = _read_array(
+        _source_path(sample["raw_path"], data_root), sample["raw_key"],
+        roi=(slice(z_start, z_stop), slice(None), slice(None))
+    )
     return (common.normalize_raw(raw) * 255.0).astype("float32")
 
 
@@ -540,16 +534,13 @@ def load_labels(sample: Dict[str, Any], data_root: Path) -> np.ndarray:
 
 def realized_depth(sample: Dict[str, Any], data_root: Path) -> int:
     roi = _roi_from_json(sample["roi"])
-    labels = _read_labels(_source_path(sample["label_path"], data_root), sample["label_key"], roi,
-                          bool(sample.get("mask_invalid_labels")))
+    labels = _read_labels(
+        _source_path(sample["label_path"], data_root), sample["label_key"], roi, bool(sample.get("mask_invalid_labels"))
+    )
     annotated = np.any(labels != 0, axis=(1, 2))
     return int(annotated.sum()) if not annotated.any() else int(
         len(annotated) - int(np.argmax(annotated[::-1])) - int(np.argmax(annotated))
     )
-
-
-# ----------------------------------------------------------------------------------------------
-# CLI
 
 
 def _show(manifest: Dict[str, Any]) -> None:
@@ -563,8 +554,10 @@ def _show(manifest: Dict[str, Any]) -> None:
         entry["sources"].add(sample["source_id"])
     print(f"{manifest['subset']} ({manifest['manifest_checksum']}): {len(manifest['samples'])} crops")
     for dataset, entry in sorted(counts.items()):
-        print(f"  {dataset:24s} crops {entry['n']:3d}  deep {entry['deep']:3d}  objects {entry['objects']:6d}  "
-              f"sources {len(entry['sources']):2d}  seen {','.join(sorted(entry['seen']))}")
+        print(
+            f"  {dataset:24s} crops {entry['n']:3d}  deep {entry['deep']:3d}  objects {entry['objects']:6d}  "
+            f"sources {len(entry['sources']):2d}  seen {','.join(sorted(entry['seen']))}"
+        )
     under = manifest["selection_policy"].get("under_target")
     if under:
         print(f"  under target: {under}")

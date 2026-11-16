@@ -2,8 +2,8 @@ import platform
 import unittest
 from unittest import mock
 
-import numpy as np
 import pytest
+import numpy as np
 
 import micro_sam.util as util
 import micro_sam.v2.util as v2_util

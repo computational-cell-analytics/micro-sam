@@ -7,10 +7,10 @@ All inputs must be complete runs of the requested dimension, manifest, model and
 
 from __future__ import annotations
 
-import argparse
 import json
-from collections import defaultdict
+import argparse
 from pathlib import Path
+from collections import defaultdict
 from typing import Any, Dict, List, Sequence, Tuple
 
 import numpy as np

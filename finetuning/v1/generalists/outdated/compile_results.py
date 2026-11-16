@@ -3,8 +3,8 @@ from glob import glob
 
 import pandas as pd
 
-from evaluate_generalist import EXPERIMENT_ROOT
 from util import EM_DATASETS, LM_DATASETS
+from evaluate_generalist import EXPERIMENT_ROOT
 
 
 def get_results(model, ds):

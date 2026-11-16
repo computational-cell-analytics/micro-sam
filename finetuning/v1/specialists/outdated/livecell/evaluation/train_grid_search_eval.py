@@ -25,8 +25,10 @@ def precompute_embeddings():
             if not os.path.exists(ckpt):
                 print("Skipping:", ckpt)
                 continue
-            cmd = ["sbatch", "precompute_embeddings.sbatch", "--name", f"livecell_grid_search/{name}",
-                   "-m", "vit_b", "-c", ckpt]
+            cmd = [
+                "sbatch", "precompute_embeddings.sbatch", "--name", f"livecell_grid_search/{name}",
+                "-m", "vit_b", "-c", ckpt
+            ]
             run(cmd)
 
 
@@ -38,16 +40,22 @@ def run_evaluations():
                 print("Skipping:", ckpt)
                 continue
             # iterative prompting (start with prompt)
-            cmd = ["sbatch", "iterative_prompting.sbatch", "--name", f"livecell_grid_search/{name}",
-                   "-m", "vit_b", "-c", ckpt]
+            cmd = [
+                "sbatch", "iterative_prompting.sbatch", "--name", f"livecell_grid_search/{name}",
+                "-m", "vit_b", "-c", ckpt
+            ]
             run(cmd)
             # iterative prompting (start with box)
-            cmd = ["sbatch", "iterative_prompting.sbatch", "--name", f"livecell_grid_search/{name}",
-                   "-m", "vit_b", "-c", ckpt, "--box"]
+            cmd = [
+                "sbatch", "iterative_prompting.sbatch", "--name", f"livecell_grid_search/{name}",
+                "-m", "vit_b", "-c", ckpt, "--box"
+            ]
             run(cmd)
             # instance segmentation
-            cmd = ["sbatch", "evaluate_instance_segmentation.sbatch", "--name", f"livecell_grid_search/{name}",
-                   "-m", "vit_b", "-c", ckpt]
+            cmd = [
+                "sbatch", "evaluate_instance_segmentation.sbatch", "--name", f"livecell_grid_search/{name}",
+                "-m", "vit_b", "-c", ckpt
+            ]
             run(cmd)
 
 

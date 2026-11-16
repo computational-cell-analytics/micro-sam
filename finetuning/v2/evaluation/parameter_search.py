@@ -420,8 +420,9 @@ def score_image_sparse_cached(
         ft, sigma, n_iter, dt, density_threshold, fw = key
         fg_mask, hmap = fg_mask_cache[ft], hmap_cache[fw]
         try:
-            base = watershed(hmap, markers=connected_components(density_cache[key[:4]] > density_threshold),
-                             mask=fg_mask)
+            base = watershed(
+                hmap, markers=connected_components(density_cache[key[:4]] > density_threshold), mask=fg_mask
+            )
         except Exception as e:
             warnings.warn(f"Sparse postprocessing failed for {dict(zip(FLOW_DENSITY_KEYS, key))}: {e}")
             return [(index, None) for index in indices]

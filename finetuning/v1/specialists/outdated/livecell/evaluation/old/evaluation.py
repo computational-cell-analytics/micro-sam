@@ -1,12 +1,12 @@
-import argparse
 import os
+import argparse
 from glob import glob
 
 import pandas as pd
 from tqdm import tqdm
 
-from micro_sam.v1.evaluation.livecell import evaluate_livecell_predictions
 from util import get_experiment_folder, DATA_ROOT
+from micro_sam.v1.evaluation.livecell import evaluate_livecell_predictions
 
 
 def run_eval(gt_dir, experiment_folder, prompt_prefix):

@@ -7,8 +7,8 @@ from contextlib import contextmanager, nullcontext
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 
 import torch
 from torch.optim import Optimizer

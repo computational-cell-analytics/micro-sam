@@ -17,7 +17,7 @@ The readout is chosen with the positional argument, as for ``summarize_data_over
 
 Usage:
 
-    python summarize_data_overview_em_organelles.py          # same as 'train'
+    python summarize_data_overview_em_organelles.py  # same as 'train'
     python summarize_data_overview_em_organelles.py train
     python summarize_data_overview_em_organelles.py test
     python summarize_data_overview_em_organelles.py detail
@@ -26,8 +26,8 @@ Usage:
 import argparse
 from collections import defaultdict
 
-from create_data_overview_em_organelles import DEFAULT_OUTPUT, ENTRIES, MITO, NUCLEUS
 from summarize_data_overview import read_table, select_test_rows
+from create_data_overview_em_organelles import DEFAULT_OUTPUT, ENTRIES, MITO, NUCLEUS
 
 # The groups of the training data: the structure of the table and the name it is printed with.
 GROUPS = {MITO: "mitochondria", NUCLEUS: "nuclei"}

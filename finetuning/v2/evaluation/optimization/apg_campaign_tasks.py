@@ -18,9 +18,9 @@ Usage examples:
 
 from __future__ import annotations
 
-import argparse
-import shlex
 import sys
+import shlex
+import argparse
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence, Tuple
 

@@ -1,7 +1,7 @@
 import unittest
 
-import pytest
 import torch
+import pytest
 
 from micro_sam.v1.util import get_sam_model
 

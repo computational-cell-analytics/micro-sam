@@ -12,9 +12,11 @@ benchmark = pytest.importorskip("benchmark_apg_optimization")
 
 def _fake_candidates(dataset, n):
     return [
-        {"dataset": dataset, "ndim": 2, "raw_path": f"{dataset}/img{i}.tif", "label_path": f"{dataset}/lab{i}.tif",
-         "raw_key": None, "label_key": None, "roi": [[0, 512], [0, 512]], "object_count": 5 + i,
-         "foreground_fraction": 0.1 + 0.01 * i}
+        {
+            "dataset": dataset, "ndim": 2, "raw_path": f"{dataset}/img{i}.tif", "label_path": f"{dataset}/lab{i}.tif",
+            "raw_key": None, "label_key": None, "roi": [[0, 512], [0, 512]], "object_count": 5 + i,
+            "foreground_fraction": 0.1 + 0.01 * i
+        }
         for i in range(n)
     ]
 

@@ -16,8 +16,8 @@ import numpy as np
 
 import torch
 
-from .util import UNISAM2_OUTPUT_CHANNELS, Devices, autocast, recommend_batch_size, to_float32
 from micro_sam.util import _create_dataset_without_data
+from .util import UNISAM2_OUTPUT_CHANNELS, Devices, autocast, recommend_batch_size, to_float32
 from .normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING, compute_percentile_bounds, to_image
 
 

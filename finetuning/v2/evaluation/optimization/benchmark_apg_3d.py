@@ -17,17 +17,17 @@ Usage examples:
 
 from __future__ import annotations
 
-import argparse
-import json
-import platform
 import sys
+import json
 import time
+import argparse
+import platform
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import torch
 import numpy as np
 import pandas as pd
-import torch
 
 EVALUATION_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(EVALUATION_ROOT))
@@ -121,10 +121,6 @@ def sibling_run_dirs(run_path: Path) -> List[Path]:
     return sorted(path for path in run_path.parent.glob(f"{prefix}*") if path.is_dir())
 
 
-# ----------------------------------------------------------------------------------------------
-# object counts
-
-
 def object_counts(labels: np.ndarray, segmentation: np.ndarray) -> Dict[str, Any]:
     """Ground-truth object counts of one crop: all, crop-severed, matched in the output, and the misses."""
     gt_ids = set(int(value) for value in np.unique(labels) if value != 0)
@@ -138,10 +134,6 @@ def object_counts(labels: np.ndarray, segmentation: np.ndarray) -> Dict[str, Any
     }
     result["unmatched"], result["genuine_misses"] = genuine_misses(labels, segmentation)
     return result
-
-
-# ----------------------------------------------------------------------------------------------
-# running
 
 
 def _build(model_type: str, joint_checkpoint: str, checkpoint_id: str, device: str, export_root: Path):
@@ -207,9 +199,11 @@ def _write_crop(run_path: Path, row: Dict[str, Any]) -> None:
     _atomic_write_json(run_path / "crops" / f"{row['sample_id'].replace(':', '_')}.json", row)
 
 
-def _write_metadata(run_path: Path, manifest: Dict[str, Any], config_name: str, params_3d: Dict[str, Any],
-                    model_type: str, joint_checkpoint: str, checkpoint_id: str, device: str, status: str,
-                    extra: Optional[dict] = None) -> None:
+def _write_metadata(
+    run_path: Path, manifest: Dict[str, Any], config_name: str, params_3d: Dict[str, Any],
+    model_type: str, joint_checkpoint: str, checkpoint_id: str, device: str, status: str,
+    extra: Optional[dict] = None
+) -> None:
     metadata = {
         "campaign": "apg3d",
         "status": status,
@@ -279,18 +273,16 @@ def run(args: argparse.Namespace) -> None:
         row["trial_id"] = args.trial_id
         row["hardware"] = _hardware_identity(args.device).get("accelerator")
         _write_crop(run_path, row)
-        print(f"{sample['sample_id']:36s} msa={row.get('msa', float('nan')):.4f} "
-              f"objects {row['gt_objects']}/{row['predicted_objects']} passes {row['propagation_passes']} "
-              f"{row['total_seconds']:.1f} s")
+        print(
+            f"{sample['sample_id']:36s} msa={row.get('msa', float('nan')):.4f} "
+            f"objects {row['gt_objects']}/{row['predicted_objects']} passes {row['propagation_passes']} "
+            f"{row['total_seconds']:.1f} s"
+        )
         if args.time_budget_minutes and (time.perf_counter() - started) / 60 > args.time_budget_minutes:
             print("Time budget exhausted; stopping after this crop.")
             break
     segmenter.clear_state()
     print(f"Run directory: {run_path}")
-
-
-# ----------------------------------------------------------------------------------------------
-# aggregation
 
 
 def _bootstrap_ci(values: np.ndarray, seed: int = 0, n_samples: int = BOOTSTRAP_SAMPLES) -> tuple:
@@ -397,8 +389,10 @@ def aggregate(args: argparse.Namespace) -> None:
         ),
     })
     _atomic_write_json(metadata_path, metadata)
-    columns = ["dataset", "n_crops", "msa_mean", "msa_ci_low", "msa_ci_high", "gt_objects", "merged", "genuine_misses",
-               "propagation_passes", "total_seconds"]
+    columns = [
+        "dataset", "n_crops", "msa_mean", "msa_ci_low", "msa_ci_high", "gt_objects", "merged", "genuine_misses",
+        "propagation_passes", "total_seconds"
+    ]
     print(summary[[column for column in columns if column in summary]].to_string(index=False))
     print(f"{metadata['status']}: {len(rows)}/{len(expected)} crops in {run_path}")
 

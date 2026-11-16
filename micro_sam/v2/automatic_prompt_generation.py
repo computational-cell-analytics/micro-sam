@@ -17,8 +17,8 @@ import copy
 import queue
 import shutil
 import contextlib
-from concurrent.futures import ThreadPoolExecutor
 import multiprocessing as mp
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 import numpy as np
@@ -30,8 +30,8 @@ import torch
 from sam2.utils.amg import calculate_stability_score
 
 from bioimage_cpp.utils import Blocking
-from bioimage_cpp.distance import distance_transform
 from bioimage_cpp.segmentation import label
+from bioimage_cpp.distance import distance_transform
 
 # Only the tiled stitching uses it, so a missing 'bioimage_py' must not break the import of this module.
 try:
@@ -1637,8 +1637,9 @@ class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
                 if take_second:
                     replaced += 1
                     rows, columns = np.nonzero(mask)
-                    box = (slice(int(rows.min()), int(rows.max()) + 1),
-                           slice(int(columns.min()), int(columns.max()) + 1))
+                    box = (
+                        slice(int(rows.min()), int(rows.max()) + 1), slice(int(columns.min()), int(columns.max()) + 1)
+                    )
                     chosen.append((score, instance_id, _shift_box(box, origin), mask[box]))
                 else:
                     chosen.append((

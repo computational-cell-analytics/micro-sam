@@ -101,8 +101,9 @@ class JointSamTrainer(SamTrainer):
 
             with forward_context():
                 # 1. train for the interactive segmentation
-                (loss, mask_loss, iou_regression_loss, model_iou,
-                 sampled_binary_y) = self._interactive_train_iteration(x, labels_instances)
+                (
+                    loss, mask_loss, iou_regression_loss, model_iou, sampled_binary_y
+                ) = self._interactive_train_iteration(x, labels_instances)
 
             backprop(loss)
 
@@ -150,8 +151,9 @@ class JointSamTrainer(SamTrainer):
 
                 with forward_context():
                     # 1. validate for the interactive segmentation
-                    (loss, mask_loss, iou_regression_loss, model_iou,
-                     sampled_binary_y, metric) = self._interactive_val_iteration(x, labels_instances, val_iteration)
+                    (
+                        loss, mask_loss, iou_regression_loss, model_iou, sampled_binary_y, metric
+                    ) = self._interactive_val_iteration(x, labels_instances, val_iteration)
 
                 with forward_context():
                     # 2. validate for the automatic instance segmentation

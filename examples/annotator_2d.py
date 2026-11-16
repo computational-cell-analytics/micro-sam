@@ -1,8 +1,8 @@
 import os
 
 import imageio.v3 as imageio
-from micro_sam.util import get_cache_directory
 from micro_sam.sam_annotator import annotator
+from micro_sam.util import get_cache_directory
 from micro_sam.sample_data import fetch_hela_2d_example_data, fetch_livecell_example_data, fetch_wholeslide_example_data
 
 
@@ -58,6 +58,7 @@ def main():
 
 
 # The corresponding CLI call for hela_2d_annotator:
-# $ micro_sam annotator -i /home/pape/.cache/micro_sam/sample_data/hela-2d-image.png  # noqa
+# (replace <cache> with the cache directory on your machine)
+# $ micro_sam annotator segmentation -i <cache>/sample_data/hela-2d-image.png
 if __name__ == "__main__":
     main()

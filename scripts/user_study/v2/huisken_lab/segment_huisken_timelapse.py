@@ -176,8 +176,10 @@ def merge_timepoints(output_path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("-t", "--timepoints", nargs="+", default=[f"0-{N_TIMEPOINTS - 1}"],
-                        help="Time points or ranges, e.g. '0 44 88' or '0-29'.")
+    parser.add_argument(
+        "-t", "--timepoints", nargs="+", default=[f"0-{N_TIMEPOINTS - 1}"],
+        help="Time points or ranges, e.g. '0 44 88' or '0-29'."
+    )
     parser.add_argument("--merge", action="store_true", help="Merge all time points into one h5.")
     parser.add_argument("-o", "--output_path", default=OUTPUT_PATH, help="The h5 of the merge.")
     args = parser.parse_args()

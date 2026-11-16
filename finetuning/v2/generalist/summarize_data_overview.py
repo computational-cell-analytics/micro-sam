@@ -25,7 +25,7 @@ The readout is chosen with the positional argument:
 
 Usage:
 
-    python summarize_data_overview.py          # same as 'train'
+    python summarize_data_overview.py  # same as 'train'
     python summarize_data_overview.py train
     python summarize_data_overview.py test-2d
     python summarize_data_overview.py test-3d

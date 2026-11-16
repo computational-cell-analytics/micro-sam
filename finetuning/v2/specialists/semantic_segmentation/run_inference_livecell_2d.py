@@ -7,8 +7,8 @@ import os
 import argparse
 
 import numpy as np
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 
 from elf.evaluation import dice_score
 

@@ -10,8 +10,8 @@ from typing import Optional, Union, Dict, Any
 import h5py
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 from tqdm import tqdm
+import matplotlib.pyplot as plt
 from scipy.ndimage import binary_dilation
 
 import skimage.draw as draw

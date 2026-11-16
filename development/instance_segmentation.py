@@ -2,12 +2,12 @@ import napari
 from elf.io import open_file
 
 import micro_sam.util as util
+from micro_sam.v1.visualization import compute_pca
 from micro_sam.segment_instances import (
     segment_instances_from_embeddings,
     segment_instances_sam,
     segment_instances_from_embeddings_3d,
 )
-from micro_sam.v1.visualization import compute_pca
 
 INPUT_PATH = "/home/pape/Work/data/mouse-embryo/Nuclei/for_sam.h5"
 EMBEDDINGS_PATH = "./embeddings/embedding-nuclei-3d.zarr"

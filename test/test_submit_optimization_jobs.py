@@ -27,8 +27,10 @@ def _only_job_dir(root):
 def test_dry_run_writes_job_dir(tmp_path):
     tasks = _tasks_file(tmp_path, [("a", "echo a"), ("b", "echo b")])
     jobs_root = tmp_path / "jobs"
-    soj.main(["submit", "--name", "unit", "--preset", "2d", "--tasks-file", str(tasks),
-              "--dry-run", "--jobs-root", str(jobs_root)])
+    soj.main([
+        "submit", "--name", "unit", "--preset", "2d", "--tasks-file", str(tasks),
+        "--dry-run", "--jobs-root", str(jobs_root)
+    ])
     job_dir = _only_job_dir(jobs_root)
     assert job_dir.name.endswith("_unit") and job_dir.name[:8].isdigit()
     for name in ("tasks.txt", "job.sh", "logs", "submit.json"):
@@ -63,11 +65,15 @@ def test_job_script_header_and_activation_order(tmp_path):
 def test_preset_overrides_and_optional_lines(tmp_path):
     tasks = _tasks_file(tmp_path, [("a", "echo a")])
     jobs_root = tmp_path / "jobs"
-    soj.main(["submit", "--name", "unit", "--preset", "3d", "--time", "04:00:00", "--qos", "2h",
-              "--dependency", "afterok:123", "--tasks-file", str(tasks), "--dry-run", "--jobs-root", str(jobs_root)])
+    soj.main([
+        "submit", "--name", "unit", "--preset", "3d", "--time", "04:00:00", "--qos", "2h",
+        "--dependency", "afterok:123", "--tasks-file", str(tasks), "--dry-run", "--jobs-root", str(jobs_root)
+    ])
     script = (_only_job_dir(jobs_root) / "job.sh").read_text()
-    for expected in ("#SBATCH -G 2g.20gb:1", "#SBATCH --mem=32G", "#SBATCH -t 04:00:00", "#SBATCH --qos=2h",
-                     "#SBATCH --dependency=afterok:123", "#SBATCH --array=0-0%8"):
+    for expected in (
+        "#SBATCH -G 2g.20gb:1", "#SBATCH --mem=32G", "#SBATCH -t 04:00:00", "#SBATCH --qos=2h",
+        "#SBATCH --dependency=afterok:123", "#SBATCH --array=0-0%8"
+    ):
         assert expected in script, expected
 
 
@@ -90,8 +96,10 @@ def test_tasks_file_roundtrip_and_validation(tmp_path):
 def test_local_mode_marks_done_and_failed(tmp_path):
     tasks = _tasks_file(tmp_path, [("ok", "echo hello"), ("bad", "false")])
     jobs_root = tmp_path / "jobs"
-    soj.main(["submit", "--name", "unit", "--tasks-file", str(tasks), "--local", "--attempts", "1",
-              "--jobs-root", str(jobs_root)])
+    soj.main([
+        "submit", "--name", "unit", "--tasks-file", str(tasks), "--local", "--attempts", "1",
+        "--jobs-root", str(jobs_root)
+    ])
     job_dir = _only_job_dir(jobs_root)
     assert "exit=0" in (job_dir / "logs" / "ok.done").read_text()
     assert "hello" in (job_dir / "logs" / "ok.out").read_text()
@@ -109,12 +117,18 @@ def test_status_maps_sacct_rows_to_tags(tmp_path, monkeypatch, capsys):
     job_dir = _only_job_dir(jobs_root)
     (job_dir / "job_id.txt").write_text("15465049\n")
     rows = [
-        {"JobID": "15465049_0", "State": "COMPLETED", "ExitCode": "0:0", "Elapsed": "00:12:54", "Restarts": "0",
-         "NodeList": "ggpu101"},
-        {"JobID": "15465049_1", "State": "FAILED", "ExitCode": "1:0", "Elapsed": "00:00:40", "Restarts": "1",
-         "NodeList": "ggpu102"},
-        {"JobID": "15465049_[2-3%8]", "State": "PENDING", "ExitCode": "0:0", "Elapsed": "00:00:00", "Restarts": "0",
-         "NodeList": "None assigned"},
+        {
+            "JobID": "15465049_0", "State": "COMPLETED", "ExitCode": "0:0", "Elapsed": "00:12:54", "Restarts": "0",
+            "NodeList": "ggpu101"
+        },
+        {
+            "JobID": "15465049_1", "State": "FAILED", "ExitCode": "1:0", "Elapsed": "00:00:40", "Restarts": "1",
+            "NodeList": "ggpu102"
+        },
+        {
+            "JobID": "15465049_[2-3%8]", "State": "PENDING", "ExitCode": "0:0", "Elapsed": "00:00:00", "Restarts": "0",
+            "NodeList": "None assigned"
+        },
     ]
     monkeypatch.setattr(soj, "_sacct_rows", lambda job_id: rows)
     assert soj.status(job_dir) == 1

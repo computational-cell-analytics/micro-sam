@@ -2,8 +2,8 @@
 
 import warnings
 
-import numpy as np
 import pytest
+import numpy as np
 
 from micro_sam.sam_annotator.util import prepare_annotation_image
 
@@ -16,16 +16,16 @@ def _make(shape):
 @pytest.mark.parametrize(
     "shape, exp_shape, exp_ndim, exp_rgb",
     [
-        ((256, 256), (256, 256), 2, False),            # plain 2d grayscale
-        ((256, 256, 1), (256, 256), 2, False),         # trailing singleton squeezed
-        ((1, 256, 256), (256, 256), 2, False),         # leading singleton squeezed
-        ((1, 256, 256, 1), (256, 256), 2, False),      # multiple singletons squeezed
-        ((256, 256, 3), (256, 256, 3), 2, True),       # RGB
-        ((10, 256, 256), (10, 256, 256), 3, False),    # grayscale volume
-        ((2, 256, 256), (2, 256, 256), 3, False),      # channels-first NOT auto-detected -> volume
-        ((3, 256, 256), (3, 256, 256), 3, False),      # channels-first -> volume
-        ((4, 256, 256), (4, 256, 256), 3, False),      # channels-first -> volume
-        ((256, 256, 5), (256, 256, 5), 3, False),      # 5 trailing -> volume
+        ((256, 256), (256, 256), 2, False),  # plain 2d grayscale
+        ((256, 256, 1), (256, 256), 2, False),  # trailing singleton squeezed
+        ((1, 256, 256), (256, 256), 2, False),  # leading singleton squeezed
+        ((1, 256, 256, 1), (256, 256), 2, False),  # multiple singletons squeezed
+        ((256, 256, 3), (256, 256, 3), 2, True),  # RGB
+        ((10, 256, 256), (10, 256, 256), 3, False),  # grayscale volume
+        ((2, 256, 256), (2, 256, 256), 3, False),  # channels-first NOT auto-detected -> volume
+        ((3, 256, 256), (3, 256, 256), 3, False),  # channels-first -> volume
+        ((4, 256, 256), (4, 256, 256), 3, False),  # channels-first -> volume
+        ((256, 256, 5), (256, 256, 5), 3, False),  # 5 trailing -> volume
     ],
 )
 def test_auto_detect(shape, exp_shape, exp_ndim, exp_rgb):
@@ -59,8 +59,8 @@ def test_auto_volume_with_channels(n_channels):
 @pytest.mark.parametrize(
     "shape",
     [
-        (5, 10, 256, 256),       # 4D with large trailing axis (volumetric time series)
-        (2, 3, 10, 256, 256),    # 5D
+        (5, 10, 256, 256),  # 4D with large trailing axis (volumetric time series)
+        (2, 3, 10, 256, 256),  # 5D
     ],
 )
 def test_auto_four_dim_rejected(shape):
@@ -72,8 +72,8 @@ def test_auto_four_dim_rejected(shape):
 @pytest.mark.parametrize(
     "shape, exp_shape, exp_rgb",
     [
-        ((256, 256), (256, 256), False),       # grayscale stays grayscale
-        ((256, 256, 1), (256, 256), False),    # singleton squeezed -> grayscale
+        ((256, 256), (256, 256), False),  # grayscale stays grayscale
+        ((256, 256, 1), (256, 256), False),  # singleton squeezed -> grayscale
         ((256, 256, 2), (256, 256, 3), True),  # channels-last 2
         ((256, 256, 3), (256, 256, 3), True),  # channels-last 3
         ((256, 256, 4), (256, 256, 3), True),  # channels-last 4

@@ -19,9 +19,9 @@ Example:
         --labels crop.h5 --labels-key labels --device cuda
 """
 
-import argparse
 import sys
 import time
+import argparse
 from pathlib import Path
 
 import numpy as np

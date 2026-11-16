@@ -1,10 +1,10 @@
 import platform
 
-import numpy as np
 import pytest
-from napari.utils.key_bindings import coerce_keybinding
+import numpy as np
 from qtpy import QtWidgets
 from skimage.data import binary_blobs
+from napari.utils.key_bindings import coerce_keybinding
 
 from micro_sam.sam_annotator._state import AnnotatorState
 from micro_sam.sam_annotator.pixel_classifier import PixelClassifier

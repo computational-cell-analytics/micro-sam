@@ -59,8 +59,9 @@ class TestBands(unittest.TestCase):
     def test_nominal_card_sizes_reach_their_own_band(self):
         # No card reports its nominal size as free, so each of these would otherwise fall a band
         # short: an 80 GB A100 has 79.25 GiB free and would be batched as a 48 GiB card.
-        for nominal, free in [(8, 7.7), (10, 9.6), (12, 11.6), (16, 15.6), (24, 23.6),
-                              (32, 31.6), (40, 39.1), (48, 47.4), (80, 79.25)]:
+        for nominal, free in [
+            (8, 7.7), (10, 9.6), (12, 11.6), (16, 15.6), (24, 23.6), (32, 31.6), (40, 39.1), (48, 47.4), (80, 79.25)
+        ]:
             self.assertEqual(_band_for(free), nominal, f"{nominal} GB card with {free} GiB free")
 
     def test_a_busy_card_drops_to_a_lower_band(self):

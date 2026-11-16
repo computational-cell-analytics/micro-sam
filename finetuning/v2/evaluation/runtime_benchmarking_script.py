@@ -39,8 +39,8 @@ import platform
 import contextlib
 
 import h5py
-import numpy as np
 import torch
+import numpy as np
 
 ROOT = os.environ.get(
     "RUNTIME_BENCHMARK_ROOT", "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/runtime_benchmark"
@@ -237,10 +237,14 @@ def automatic_runner(method, size, dataset, device, timer):
             # The encoder is the embedding of the image or of the volume, the decoder the UniSAM2 decoder on it.
             originals = [
                 (model, "_encode", timed_method(model, "_encode", timer, times, "encoder")),
-                (apg_module, "precompute_image_embeddings",
-                 timed_method(apg_module, "precompute_image_embeddings", timer, times, "encoder")),
-                (UniSAM2InstanceSegmentation, "initialize",
-                 timed_method(UniSAM2InstanceSegmentation, "initialize", timer, times, "decoder")),
+                (
+                    apg_module, "precompute_image_embeddings",
+                    timed_method(apg_module, "precompute_image_embeddings", timer, times, "encoder")
+                ),
+                (
+                    UniSAM2InstanceSegmentation, "initialize",
+                    timed_method(UniSAM2InstanceSegmentation, "initialize", timer, times, "decoder")
+                ),
             ]
             try:
                 model.clear_state()
@@ -702,11 +706,15 @@ def collect():
         base = {key: record.get(key) for key in keys}
         base["selected"] = record["sample"] in selected
         for part, seconds in record["times"].items():
-            samples.append({**base, "part": part, "seconds": seconds,
-                            "n_objects": record.get("n_objects", len(record.get("object_times", [])))})
+            samples.append({
+                **base, "part": part, "seconds": seconds,
+                "n_objects": record.get("n_objects", len(record.get("object_times", [])))
+            })
         for k, seconds in enumerate(record.get("object_times", [])):
-            objects.append({**base, "object": k, "seconds": seconds, "n_slices": record["n_slices"],
-                            "seconds_per_slice": seconds / record["n_slices"]})
+            objects.append({
+                **base, "object": k, "seconds": seconds, "n_slices": record["n_slices"],
+                "seconds_per_slice": seconds / record["n_slices"]
+            })
     pd.DataFrame(samples).to_csv(os.path.join(ROOT, "runtimes_per_sample.csv"), index=False)
     pd.DataFrame(objects).to_csv(os.path.join(ROOT, "runtimes_per_object.csv"), index=False)
     print(f"{len(samples)} part rows and {len(objects)} object rows in '{ROOT}'.")

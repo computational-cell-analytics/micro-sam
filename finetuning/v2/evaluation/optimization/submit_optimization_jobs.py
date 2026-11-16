@@ -18,15 +18,15 @@ fixed GRES type.
 
 from __future__ import annotations
 
-import argparse
-import dataclasses
-import datetime
-import json
 import os
 import re
-import shlex
-import subprocess
 import sys
+import json
+import shlex
+import argparse
+import datetime
+import subprocess
+import dataclasses
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -311,10 +311,6 @@ def warn_missing_env() -> None:
         print(f"Warning: micromamba environment '{ENV}' was not found on this host.", file=sys.stderr)
 
 
-# ----------------------------------------------------------------------------------------------
-# status
-
-
 def _sacct_rows(job_id: str) -> List[Dict[str, str]]:
     fields = ["JobID", "State", "ExitCode", "Elapsed", "Restarts", "NodeList"]
     result = subprocess.run(
@@ -377,16 +373,14 @@ def status(job_dir: Path, tail: int = 1) -> int:
         last = _last_line(log) if tail else ""
         restarts = row.get("Restarts", "0")
         flag = " RESTARTED" if restarts not in ("", "0") else ""
-        print(f"{index:4d} {tag:40s} {slurm_state:12s} exit={row.get('ExitCode', '-'):6s} "
-              f"{row.get('Elapsed', '-'):10s} {marker:8s}{flag} {marker_text} | {last[:80]}")
+        print(
+            f"{index:4d} {tag:40s} {slurm_state:12s} exit={row.get('ExitCode', '-'):6s} "
+            f"{row.get('Elapsed', '-'):10s} {marker:8s}{flag} {marker_text} | {last[:80]}"
+        )
         if marker == "failed" or any(word in slurm_state for word in ("FAILED", "TIMEOUT", "CANCELLED", "OUT_OF")):
             failing += 1
     print(f"{failing} failing task(s) of {len(tasks)}.")
     return int(failing > 0)
-
-
-# ----------------------------------------------------------------------------------------------
-# CLI
 
 
 def add_submit_arguments(parser: argparse.ArgumentParser) -> None:

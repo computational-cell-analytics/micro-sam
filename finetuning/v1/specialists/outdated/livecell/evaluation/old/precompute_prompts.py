@@ -1,11 +1,11 @@
-import argparse
 import os
 import pickle
+import argparse
 from subprocess import run
 
-import micro_sam.v1.evaluation as evaluation
 from tqdm import tqdm
 from util import get_paths, PROMPT_FOLDER
+import micro_sam.v1.evaluation as evaluation
 
 
 def precompute_setting(prompt_settings):

@@ -22,13 +22,13 @@ import inspect
 import zipfile
 import argparse
 
-import numpy as np
-import pandas as pd
 import tifffile
 import matplotlib
+import numpy as np
+import pandas as pd
 from PIL import Image
-from scipy import ndimage
 from skimage import draw
+from scipy import ndimage
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import matplotlib.patheffects as patheffects
@@ -156,8 +156,10 @@ def first_prompt(script, args):
             raw_paths, label_paths, *keys = original_paths(*args, **kwargs)
             keep = [path in names or os.path.basename(path) in names for path in raw_paths]
             assert sum(keep) == len(names), f"Found {sum(keep)} of {len(names)} images."
-            return ([path for path, k in zip(raw_paths, keep) if k], [path for path, k in zip(label_paths, keep) if k],
-                    *keys)
+            return (
+                [path for path, k in zip(raw_paths, keep) if k], [path for path, k in zip(label_paths, keep) if k],
+                *keys
+            )
 
         common.get_data_paths = get_data_paths
 
@@ -216,8 +218,10 @@ def first_prompt_sam3(args):
                 if prompt == "box":
                     kwargs = dict(box=prompts["boxes"][index:index + 1].astype("float32"))
                 else:
-                    kwargs = dict(point_coords=prompts["points"][index].astype("float32"),
-                                  point_labels=prompts["point_labels"][index])
+                    kwargs = dict(
+                        point_coords=prompts["points"][index].astype("float32"),
+                        point_labels=prompts["point_labels"][index]
+                    )
                 # A single mask for the first prompt, as in the SAM3 evaluation.
                 object_masks, _, _ = model.predict_inst(state, multimask_output=False, **kwargs)
                 masks.append(object_masks[0] > 0)
@@ -294,9 +298,11 @@ def score_objects():
                 reference = labels == object_id
                 ys, xs = np.nonzero(reference)
                 # The least distance of the object from the image border, as a fraction of the image.
-                border = min(ys.min() / labels.shape[0], xs.min() / labels.shape[1],
-                             (labels.shape[0] - 1 - ys.max()) / labels.shape[0],
-                             (labels.shape[1] - 1 - xs.max()) / labels.shape[1])
+                border = min(
+                    ys.min() / labels.shape[0], xs.min() / labels.shape[1],
+                    (labels.shape[0] - 1 - ys.max()) / labels.shape[0],
+                    (labels.shape[1] - 1 - xs.max()) / labels.shape[1]
+                )
                 row = dict(
                     dataset=dataset, image=image, object=int(object_id), index=index, area=int(reference.sum()),
                     cy=ys.mean() / labels.shape[0], cx=xs.mean() / labels.shape[1], border=border,
@@ -399,8 +405,9 @@ def render_row(axes, dataset, image_name, chosen, title):
         ax.imshow(out)
         name = "μSAM2" if method == "micro-sam2" else "μSAM"
         ious = " / ".join(f"{obj[f'{method}_{prompt}']:.2f}" for obj in chosen)
-        ax.set_title(f"{name}, {prompt}: IoU {ious}", fontsize=8,
-                     fontweight="bold" if method == "micro-sam2" else "normal")
+        ax.set_title(
+            f"{name}, {prompt}: IoU {ious}", fontsize=8, fontweight="bold" if method == "micro-sam2" else "normal"
+        )
     for ax in axes:
         ax.axis("off")
 
@@ -460,8 +467,10 @@ def rank_candidates(rescore=False):
     fig, axes = plt.subplots(len(tops), 5, figsize=(17, 3.5 * len(tops)), squeeze=False)
     for ax_row, (dataset, image_name) in zip(axes, tops):
         chosen = picked[(picked.dataset == dataset) & (picked.image == image_name)].to_dict("records")
-        render_row(ax_row, dataset, image_name, chosen,
-                   f"{dataset} ({DATASETS[dataset][0].upper()}), image {image_name}: reference")
+        render_row(
+            ax_row, dataset, image_name, chosen,
+            f"{dataset} ({DATASETS[dataset][0].upper()}), image {image_name}: reference"
+        )
     plt.tight_layout()
     plt.savefig(os.path.join(RANK_OUTPUT, "chosen.png"), dpi=90)
     plt.close()
@@ -497,21 +506,23 @@ MODALITY_FOLDERS = {
 IMAGING = {"livecell": "Phase Contrast", "orgline": "Brightfield", "vicar": "QPI"}
 # The shortlisted images of a dataset as (image, specimen), instead of the images with the most candidates.
 SHORTLISTS = {
-    "livecell": [("00005", "BT474 Cells, Day 4"), ("00013", "Huh7 Cells, Day 3"), ("00000", "A172 Cells, Day 2"),
-                 ("00027", "SKOV3 Cells, Day 3")],
+    "livecell": [
+        ("00005", "BT474 Cells, Day 4"), ("00013", "Huh7 Cells, Day 3"), ("00000", "A172 Cells, Day 2"),
+        ("00027", "SKOV3 Cells, Day 3")
+    ],
 }
 OTHERS = ["SAM", "SAM2", "SAM3", "micro-sam"]
 OUTLINE_COLOR = np.array([1.0, 0.3, 0.43])  # the objects where micro-sam2 is best
-N_IMAGES = 24       # the images of a dataset: the N_CROWDED most crowded, and the rest spread over the others
+N_IMAGES = 24  # the images of a dataset: the N_CROWDED most crowded, and the rest spread over the others
 N_CROWDED = 16
-MAX_OBJECTS = 800   # leaves out the images with too many, tiny objects, where there are others
+MAX_OBJECTS = 800  # leaves out the images with too many, tiny objects, where there are others
 N_COLUMNS = 4
 N_SHORTLIST = 4
 N_CANDIDATES = 5
-TIE = 0.02          # micro-sam2 counts as the best within this of the best other method
-BORDER = 40         # pixels between the center of an object and the image border
+TIE = 0.02  # micro-sam2 counts as the best within this of the best other method
+BORDER = 40  # pixels between the center of an object and the image border
 BORDER_FRACTION = 0.2  # at most this fraction of the image side, for small images
-SPACING = 60        # pixels between the centers of the objects of an image
+SPACING = 60  # pixels between the centers of the objects of an image
 SMALL_FRACTION = 0.3  # the small objects (with '--small') are at most this fraction of the median area
 
 
@@ -626,8 +637,10 @@ FINALS = {
     "neurips_cellseg_fluorescence": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_neurips_cellseg_fluorescence",
-        [("00018", 33, None), ("00010", 14, None), ("00010", 30, None), ("00003", 5, None), ("00003", 38, None),
-         ("00003", 7, None)],
+        [
+            ("00018", 33, None), ("00010", 14, None), ("00010", 30, None), ("00003", 5, None), ("00003", 38, None),
+            ("00003", 7, None)
+        ],
     ),
     "omnipose_bact_fluor": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
@@ -642,8 +655,10 @@ FINALS = {
     # TissueNet: crowded images of all tissues.
     "tissuenet": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/qualitative_single_prompt_tissuenet",
-        [("00021", 87, "LN Metastasis"), ("00013", 156, "Tonsil"), ("00013", 75, None),
-         ("00010", 198, "Colon"), ("00010", 101, None)],
+        [
+            ("00021", 87, "LN Metastasis"), ("00013", 156, "Tonsil"), ("00013", 75, None),
+            ("00010", 198, "Colon"), ("00010", 101, None)
+        ],
     ),
     # The nuclei datasets of the main figure: crowded images, as for LIVECell.
     "bmgd": (
@@ -680,8 +695,10 @@ FINALS = {
     "cpm17": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_cpm17",
-        [("00006", 75, None), ("00022", 75, None), ("00014", 109, None), ("00023", 43, None), ("00022", 80, None),
-         ("00022", 55, None)],
+        [
+            ("00006", 75, None), ("00022", 75, None), ("00014", 109, None), ("00023", 43, None), ("00022", 80, None),
+            ("00022", 55, None)
+        ],
     ),
     "glysac": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
@@ -691,8 +708,10 @@ FINALS = {
     "histo_miner": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_histo_miner",
-        [("00009", 70, None), ("00009", 62, None), ("00008", 62, None), ("00009", 80, None), ("00023", 18, None),
-         ("00023", 51, None), ("00008", 51, None), ("00008", 75, None), ("00008", 66, None)],
+        [
+            ("00009", 70, None), ("00009", 62, None), ("00008", 62, None), ("00009", 80, None), ("00023", 18, None),
+            ("00023", 51, None), ("00008", 51, None), ("00008", 75, None), ("00008", 66, None)
+        ],
     ),
     "monuseg": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
@@ -718,8 +737,10 @@ FINALS = {
     "neurips_cellseg_label_free": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_neurips_cellseg_label_free",
-        [("00006", 70, None), ("00006", 74, None), ("00006", 6, None), ("00000", 19, None), ("00004", 21, None),
-         ("00004", 42, None), ("00009", 42, None), ("00009", 32, None)],
+        [
+            ("00006", 70, None), ("00006", 74, None), ("00006", 6, None), ("00000", 19, None), ("00004", 21, None),
+            ("00004", 42, None), ("00009", 42, None), ("00009", 32, None)
+        ],
     ),
     "omnipose_bact_phase": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
@@ -740,14 +761,18 @@ FINALS = {
     "hpa": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_hpa",
-        [("00003", 2, None), ("00003", 12, None), ("00007", 11, None), ("00001", 11, None), ("00001", 9, None),
-         ("00004", 25, None)],
+        [
+            ("00003", 2, None), ("00003", 12, None), ("00007", 11, None), ("00001", 11, None), ("00001", 9, None),
+            ("00004", 25, None)
+        ],
     ),
     "medussa": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_medussa",
-        [("00017", 3, None), ("00017", 10, None), ("00017", 6, None), ("00004", 18, None), ("00004", 16, None),
-         ("00023", 16, None), ("00017", 12, None), ("00023", 12, None)],
+        [
+            ("00017", 3, None), ("00017", 10, None), ("00017", 6, None), ("00004", 18, None), ("00004", 16, None),
+            ("00023", 16, None), ("00017", 12, None), ("00023", 12, None)
+        ],
     ),
     # mIF tonsil cells and the wing disc time-lapse: crowded images, as for LIVECell.
     "mif_tonsil_cells": (
@@ -769,8 +794,10 @@ FINALS = {
     "cardioblast_nuclei": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_cardioblast_nuclei",
-        [("00020", 6, None), ("00018", 6, None), ("00018", 22, None), ("00007", 12, None), ("00018", 12, None),
-         ("00006", 9, None), ("00007", 9, None)],
+        [
+            ("00020", 6, None), ("00018", 6, None), ("00018", 22, None), ("00007", 12, None), ("00018", 12, None),
+            ("00006", 9, None), ("00007", 9, None)
+        ],
     ),
     "covid_if_nuclei": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
@@ -812,8 +839,10 @@ FINALS = {
     "lynsec_he": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_lynsec_he",
-        [("00023", 59, None), ("00023", 105, None), ("00023", 136, None), ("00002", 104, None), ("00002", 153, None),
-         ("00003", 39, None)],
+        [
+            ("00023", 59, None), ("00023", 105, None), ("00023", 136, None), ("00002", 104, None), ("00002", 153, None),
+            ("00003", 39, None)
+        ],
     ),
     "pcns": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
@@ -823,8 +852,10 @@ FINALS = {
     "srsanet": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_srsanet",
-        [("00007", 23, None), ("00007", 28, None), ("00011", 28, None), ("00011", 17, None), ("00016", 17, None),
-         ("00016", 5, None), ("00011", 21, None), ("00016", 21, None)],
+        [
+            ("00007", 23, None), ("00007", 28, None), ("00011", 28, None), ("00011", 17, None), ("00016", 17, None),
+            ("00016", 5, None), ("00011", 21, None), ("00016", 21, None)
+        ],
     ),
     # The out-of-domain label-free datasets: crowded images, as for LIVECell.
     "bbbc010": (
@@ -840,14 +871,18 @@ FINALS = {
     "deepseas": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_deepseas",
-        [("00022", 16, None), ("00022", 8, None), ("00022", 1, None), ("00006", 1, None), ("00023", 3, None),
-         ("00009", 3, None), ("00006", 3, None)],
+        [
+            ("00022", 16, None), ("00022", 8, None), ("00022", 1, None), ("00006", 1, None), ("00023", 3, None),
+            ("00009", 3, None), ("00006", 3, None)
+        ],
     ),
     "mcellseg": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_mcellseg",
-        [("00004", 17, None), ("00006", 17, None), ("00013", 17, None), ("00006", 19, None), ("00013", 19, None),
-         ("00006", 9, None), ("00010", 9, None), ("00010", 3, None), ("00010", 6, None), ("00013", 7, None)],
+        [
+            ("00004", 17, None), ("00006", 17, None), ("00013", 17, None), ("00006", 19, None), ("00013", 19, None),
+            ("00006", 9, None), ("00010", 9, None), ("00010", 3, None), ("00010", 6, None), ("00013", 7, None)
+        ],
     ),
     "toiam": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
@@ -883,8 +918,10 @@ FINALS = {
     "cellapp": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_cellapp",
-        [("00013", 108, None), ("00013", 58, None), ("00014", 41, None), ("00014", 52, None), ("00010", 99, None),
-         ("00010", 82, None)],
+        [
+            ("00013", 108, None), ("00013", 58, None), ("00014", 41, None), ("00014", 52, None), ("00010", 99, None),
+            ("00010", 82, None)
+        ],
     ),
     "cellbindb_he": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
@@ -894,8 +931,10 @@ FINALS = {
     "cellular": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_cellular",
-        [("00000", 16, None), ("00000", 3, None), ("00000", 8, None), ("00001", 8, None), ("00000", 12, None),
-         ("00001", 17, None), ("00001", 4, None), ("00001", 11, None)],
+        [
+            ("00000", 16, None), ("00000", 3, None), ("00000", 8, None), ("00001", 8, None), ("00000", 12, None),
+            ("00001", 17, None), ("00001", 4, None), ("00001", 11, None)
+        ],
     ),
     "cvz_fluo_dapi": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
@@ -930,8 +969,10 @@ FINALS = {
     "lynsec_ihc": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
         "qualitative_single_prompt_lynsec_ihc",
-        [("00004", 101, None), ("00017", 206, None), ("00019", 246, None), ("00019", 125, None), ("00001", 117, None),
-         ("00001", 212, None), ("00001", 109, None)],
+        [
+            ("00004", 101, None), ("00017", 206, None), ("00019", 246, None), ("00019", 125, None),
+            ("00001", 117, None), ("00001", 212, None), ("00001", 109, None)
+        ],
     ),
     "micro_bench": (
         "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/"
@@ -1004,10 +1045,10 @@ REFERENCE_COLOR = fig2.REFERENCE_COLOR
 REFERENCE_WIDTH = fig2.ZOOM_REFERENCE_WIDTH
 
 # The layout, in inches.
-LABEL_WIDTH = 1.0    # the captions of the images left of the crops
-CROP_GAP = 0.025     # between the crops of a block
-PROMPT_GAP = 0.08    # between the point and the box columns
-BLOCK_GAP = 0.1      # between the blocks of the images
+LABEL_WIDTH = 1.0  # the captions of the images left of the crops
+CROP_GAP = 0.025  # between the crops of a block
+PROMPT_GAP = 0.08  # between the point and the box columns
+BLOCK_GAP = 0.1  # between the blocks of the images
 HEADER_HEIGHT = 0.3  # the prompt and method names over the crops
 
 
@@ -1040,8 +1081,10 @@ def load(dataset, image_name, root=None):
     labels = tifffile.imread(f"{inputs}/labels/{image_name}.tif")
     image = as_rgb(tifffile.imread(f"{inputs}/images/{image_name}.tif"), labels.shape)
     # The npz files are read once, as every access to an array of an open npz file decompresses it again.
-    data = {(prompt, method): dict(np.load(f"{prediction_folder(dataset, prompt, method)}/{image_name}.npz"))
-            for prompt in PROMPTS for method in METHODS}
+    data = {
+        (prompt, method): dict(np.load(f"{prediction_folder(dataset, prompt, method)}/{image_name}.npz"))
+        for prompt in PROMPTS for method in METHODS
+    }
     return image, labels, data
 
 
@@ -1084,8 +1127,10 @@ def plot_crops(chosen_images=CHOSEN, objects_of=None, tag_objects=False):
         for dataset, image_name, *_ in chosen_images:
             if dataset in FINALS:
                 root, finals = FINALS[dataset]
-                objects_of[dataset, image_name] = [dict(image=image, object=object_id, specimen=specimen, root=root)
-                                                   for image, object_id, specimen in finals]
+                objects_of[dataset, image_name] = [
+                    dict(image=image, object=object_id, specimen=specimen, root=root)
+                    for image, object_id, specimen in finals
+                ]
                 continue
             chosen = picked[(picked.dataset == dataset) & (picked.image == image_name)]
             objects_of[dataset, image_name] = chosen.sort_values("gap", ascending=False).to_dict("records")
@@ -1125,20 +1170,24 @@ def plot_crops(chosen_images=CHOSEN, objects_of=None, tag_objects=False):
                     spine.set_visible(True)
                     spine.set_color(fig2.FRAME_COLOR)
                     spine.set_linewidth(fig2.FRAME_WIDTH)
-                ax.imshow(panel(image, mask, color, prompt, data[prompt, method], index)[window],
-                          interpolation="none")
+                ax.imshow(panel(image, mask, color, prompt, data[prompt, method], index)[window], interpolation="none")
                 if x == lefts[0] and obj.get("specimen"):
-                    text = ax.text(0.04, 0.96, obj["specimen"], transform=ax.transAxes, ha="left", va="top",
-                                   fontsize=5, color="white")
+                    text = ax.text(
+                        0.04, 0.96, obj["specimen"], transform=ax.transAxes, ha="left", va="top",
+                        fontsize=5, color="white"
+                    )
                     text.set_path_effects([patheffects.withStroke(linewidth=1.0, foreground="black")])
-                contour = ax.contour(reference[window], levels=[0.5], colors=REFERENCE_COLOR,
-                                     linewidths=REFERENCE_WIDTH)
+                contour = ax.contour(
+                    reference[window], levels=[0.5], colors=REFERENCE_COLOR, linewidths=REFERENCE_WIDTH
+                )
                 contour.set(path_effects=[patheffects.withStroke(linewidth=2 * REFERENCE_WIDTH, foreground="black")])
                 iou = np.logical_and(mask, reference).sum() / np.logical_or(mask, reference).sum()
                 fig2.draw_score(ax, iou, method == "micro-sam2")
             if tag_objects:
-                fig.text((LABEL_WIDTH - 0.04) / fig2.FIGURE_WIDTH, (bottom + size / 2) / height, f"#{obj['object']}",
-                         ha="right", va="center", fontsize=5, color=fig2.GROUP_COLOR)
+                fig.text(
+                    (LABEL_WIDTH - 0.04) / fig2.FIGURE_WIDTH, (bottom + size / 2) / height, f"#{obj['object']}",
+                    ha="right", va="center", fontsize=5, color=fig2.GROUP_COLOR
+                )
 
         # The caption of the image left of its block, as in the automatic figure: the dataset over the imaging and
         # the specimen, the dataset name in italics in-domain and in bold out-of-domain.
@@ -1146,26 +1195,31 @@ def plot_crops(chosen_images=CHOSEN, objects_of=None, tag_objects=False):
         y = (block_top - block / 2) / height
         x = (LABEL_WIDTH - (0.3 if tag_objects else 0.06)) / fig2.FIGURE_WIDTH
         details = imaging if specimen is None else f"{imaging}\n{specimen}"
-        fig.text(x, y, details, ha="right", va="top", fontsize=5.5, color=TEXT_COLOR,
-                 linespacing=1.15)
-        fig.text(x, y + 0.02 / height, DATASET_NAMES.get(dataset, dataset), ha="right", va="bottom",
-                 fontsize=5.5, color=TEXT_COLOR, style="italic" if in_domain else "normal",
-                 fontweight="normal" if in_domain else "bold")
+        fig.text(x, y, details, ha="right", va="top", fontsize=5.5, color=TEXT_COLOR, linespacing=1.15)
+        fig.text(
+            x, y + 0.02 / height, DATASET_NAMES.get(dataset, dataset), ha="right", va="bottom",
+            fontsize=5.5, color=TEXT_COLOR, style="italic" if in_domain else "normal",
+            fontweight="normal" if in_domain else "bold"
+        )
         block_top -= block + BLOCK_GAP
 
     # Over the crops: the method names, and the methods of each prompt grouped under a line with the prompt name.
     names = dict(zip(METHODS, fig2.names_of(METHODS, set())))
     for (prompt, method), x in zip(keys, lefts):
-        fig.text((x + size / 2) / fig2.FIGURE_WIDTH, (height - HEADER_HEIGHT + 0.03) / height, names[method],
-                 ha="center", va="bottom", fontsize=6, color=TEXT_COLOR,
-                 fontweight="bold" if method == "micro-sam2" else "normal")
+        fig.text(
+            (x + size / 2) / fig2.FIGURE_WIDTH, (height - HEADER_HEIGHT + 0.03) / height, names[method],
+            ha="center", va="bottom", fontsize=6, color=TEXT_COLOR,
+            fontweight="bold" if method == "micro-sam2" else "normal"
+        )
     line = (height - 0.13) / height
     for prompt, group_name in PROMPT_GROUPS.items():
         xs = [x for (p, _), x in zip(keys, lefts) if p == prompt]
         x0, x1 = xs[0] / fig2.FIGURE_WIDTH, (xs[-1] + size) / fig2.FIGURE_WIDTH
         fig.add_artist(plt.Line2D([x0, x1], [line, line], color=fig2.GROUP_COLOR, linewidth=0.6))
-        fig.text((x0 + x1) / 2, line + 0.02 / height, group_name, ha="center", va="bottom", fontsize=6,
-                 color=fig2.GROUP_COLOR)
+        fig.text(
+            (x0 + x1) / 2, line + 0.02 / height, group_name, ha="center", va="bottom", fontsize=6,
+            color=fig2.GROUP_COLOR
+        )
     return fig
 
 
@@ -1239,8 +1293,10 @@ def select_images(dataset):
     with open(f"{output}/images.txt", "w") as f:
         f.write("\n".join(images.path) + "\n")
     pd.DataFrame({"name": images.path, "group": groups}).to_csv(f"{output}/groups.csv", index=False)
-    print(f"Picked {len(images)} images of '{dataset}' with {images.n_objects.median():.0f} objects and "
-          f"{images.touching.median():.0f} touching ones in the median.")
+    print(
+        f"Picked {len(images)} images of '{dataset}' with {images.n_objects.median():.0f} objects and "
+        f"{images.touching.median():.0f} touching ones in the median."
+    )
 
 
 def groups_of(dataset):
@@ -1272,8 +1328,9 @@ def score(dataset):
             row = dict(
                 image=image_name, name=os.path.basename(name), group=group, object=int(object_id), index=index,
                 area=int(reference.sum()), cy=ys.mean(), cx=xs.mean(), height=labels.shape[0], width=labels.shape[1],
-                neighbours=len(np.setdiff1d(np.unique(np.concatenate([labels[ring], grown[reference]])),
-                                            [0, object_id])),
+                neighbours=len(np.setdiff1d(
+                    np.unique(np.concatenate([labels[ring], grown[reference]])), [0, object_id]
+                )),
             )
             for (prompt, method), mask in masks.items():
                 mask = mask[index]
@@ -1400,8 +1457,10 @@ def select_candidates(argv):
     parser.add_argument("--select", action="store_true", help="Pick the images of the dataset.")
     parser.add_argument("--rescore", action="store_true", help="Score the objects again.")
     parser.add_argument("--small", action="store_true", help="Show small objects ('crops_small.png').")
-    parser.add_argument("--microsam_only", action="store_true",
-                        help="Compare micro-sam2 with micro-sam only, for datasets without SAM, SAM2 and SAM3 runs.")
+    parser.add_argument(
+        "--microsam_only", action="store_true",
+        help="Compare micro-sam2 with micro-sam only, for datasets without SAM, SAM2 and SAM3 runs."
+    )
     args = parser.parse_args(argv)
     if args.microsam_only:
         global METHODS, OTHERS
@@ -1418,8 +1477,10 @@ def select_candidates(argv):
         objects, images = score(dataset)
         objects.to_csv(f"{output}/objects.csv", index=False)
         images.to_csv(f"{output}/images.csv", index=False)
-        print(images[["image", "group", "n_objects", "neighbours", "best_both", "lead_point", "lead_box"]].round(2)
-              .to_string(index=False))
+        print(
+            images[["image", "group", "n_objects", "neighbours", "best_both", "lead_point", "lead_box"]].round(2)
+            .to_string(index=False)
+        )
         fig = plot_sheet(dataset, objects, images)
         fig.savefig(f"{output}/candidates.png", dpi=250)
         plt.close(fig)
@@ -1438,8 +1499,9 @@ def select_candidates(argv):
         return
     picks = pick_crops(objects, [image_name for image_name, _ in shortlist], args.small)
     domain, modality = domain_of(dataset)
-    chosen_images = [(dataset, image_name, modality, domain, IMAGING.get(dataset, f"Image {image_name}"),
-                      specimen or None) for image_name, specimen in shortlist]
+    chosen_images = [(
+        dataset, image_name, modality, domain, IMAGING.get(dataset, f"Image {image_name}"), specimen or None
+    ) for image_name, specimen in shortlist]
     objects_of = {(dataset, image_name): picks[image_name] for image_name, _ in shortlist}
     fig = plot_crops(chosen_images, objects_of, tag_objects=True)
     fig.savefig(f"{output}/{'crops_small' if args.small else 'crops'}.png", dpi=300)

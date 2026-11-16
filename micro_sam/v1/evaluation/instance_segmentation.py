@@ -9,8 +9,8 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 
 from elf.io import open_file
 from elf.evaluation import mean_segmentation_accuracy, matching

@@ -1,19 +1,19 @@
-import napari
-from elf.io import open_file
-import h5py
 import os
+import h5py
 import torch
+import napari
 import numpy as np
+from elf.io import open_file
 
-import micro_sam.sam_3d_wrapper as sam_3d
 import micro_sam.util as util
+import micro_sam.sam_3d_wrapper as sam_3d
 # from micro_sam.segment_instances import (
 #     segment_instances_from_embeddings,
 #     segment_instances_sam,
 #     segment_instances_from_embeddings_3d,
 # )
-from micro_sam import multi_dimensional_segmentation as mds
 from micro_sam.v1.visualization import compute_pca
+from micro_sam import multi_dimensional_segmentation as mds
 INPUT_PATH_CLUSTER = "/scratch-grete/projects/nim00007/data/mitochondria/cooper/mito_tomo/outer-membrane1/1_20230125_TOMO_HOI_WT_36859_J2_upSTEM750_BC3.6/upSTEM750_36859_J2_TS_SP_003_rec_2kb1dawbp_crop.h5"
 # EMBEDDINGS_PATH_CLUSTER = "/scratch-grete/projects/nim00007/data/mitochondria/cooper/mito_tomo/outer-membrane1/1_20230125_TOMO_HOI_WT_36859_J2_upSTEM750_BC3.6/embedding-mito-3d.zarr"
 EMBEDDINGS_PATH_CLUSTER = "/scratch-grete/usr/nimlufre/"
@@ -58,8 +58,9 @@ EMBEDDINGS_TRACKING_PATH = "../examples/embeddings/embeddings-ctc.zarr"
 #             raise ValueError(f"Failed to reshape dataset with key '{key}' to shape {shape}.")
 
 #     return dataset
-def get_dataset_cutout(path: str, key: str = "raw", shape: tuple = (32, 256, 256),
-                       start_index: tuple = (0, 0, 0)) -> np.ndarray:
+def get_dataset_cutout(
+    path: str, key: str = "raw", shape: tuple = (32, 256, 256), start_index: tuple = (0, 0, 0)
+) -> np.ndarray:
     """
     Loads a cutout from a dataset in an HDF5 file.
 
@@ -96,9 +97,7 @@ def get_dataset_cutout(path: str, key: str = "raw", shape: tuple = (32, 256, 256
         end_index = tuple(min(i + s, dim) for i, s, dim in zip(start_index, shape, dataset_shape))
 
         # Load the cutout
-        cutout = dataset[start_index[0]:end_index[0],
-                         start_index[1]:end_index[1],
-                         start_index[2]:end_index[2]]
+        cutout = dataset[start_index[0]:end_index[0], start_index[1]:end_index[1], start_index[2]:end_index[2]]
         print("cutout data shape", cutout.shape)
 
     return cutout

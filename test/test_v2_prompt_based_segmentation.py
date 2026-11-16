@@ -1,9 +1,9 @@
 import threading
 from types import SimpleNamespace
 
-import numpy as np
-import pytest
 import torch
+import pytest
+import numpy as np
 from bioimage_cpp.utils import Blocking
 from scipy.ndimage import gaussian_filter
 
@@ -244,8 +244,9 @@ class RecordingPredictor:
         self.mask_calls = []
         self.active_objects = set()
 
-    def add_new_points_or_box(self, inference_state, frame_idx, obj_id, clear_old_points=False,
-                              points=None, labels=None, box=None):
+    def add_new_points_or_box(
+        self, inference_state, frame_idx, obj_id, clear_old_points=False, points=None, labels=None, box=None
+    ):
         self.active_objects.add(obj_id)
         self.calls.append({
             "frame_idx": frame_idx, "obj_id": obj_id, "clear_old_points": clear_old_points,
