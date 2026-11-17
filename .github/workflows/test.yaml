@@ -32,7 +32,6 @@ jobs:
 
       - name: Setup micromamba
         uses: mamba-org/setup-micromamba@v1
-        # Test: the macOS tests are about 5x slower since threadpoolctl 3.8 (2026-11-11), so pin it to 3.7.
         # Build pip packages on the main disk: the /tmp of ubuntu-latest is too small for the torch wheels.
         env:
           TMPDIR: ${{ runner.temp }}
@@ -40,7 +39,6 @@ jobs:
           environment-file: "environment.yaml"
           create-args: >-
             python=${{ matrix.python-version }}
-            threadpoolctl=3.7
             ${{ runner.os == 'Linux' && 'qt6-wayland' || '' }}
 
       # Setup Qt libraries for GUI testing on Linux
@@ -49,6 +47,13 @@ jobs:
       - name: Install additional dev requirements
         shell: bash -l {0}
         run: python -m pip install -r requirements-dev.txt
+
+      # Test: elf with the thread limits set once per thread pool (constantinpape/elf#150), with threadpoolctl 3.8.
+      - name: Install elf from the threadpool fix
+        shell: bash -l {0}
+        run: |
+          python -m pip install --no-deps --force-reinstall "python-elf @ git+https://github.com/anwai98/elf.git@threadpool-limits-once"
+          python -c "import elf, threadpoolctl; print('elf', elf.__file__, 'threadpoolctl', threadpoolctl.__version__)"
 
       - name: Install micro-sam
         id: install
