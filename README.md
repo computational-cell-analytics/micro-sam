@@ -53,7 +53,7 @@ If you use this repository in your research, please cite
 - our [μSAM publication](https://www.nature.com/articles/s41592-024-02580-4) (published in Nature Methods)
 - and the [Segment Anything 2 publication](https://arxiv.org/abs/2408.00714).
 - If you use automatic tracking, please also cite [Trackastra](https://arxiv.org/abs/2405.15700).
-- If you use automatic prompt generation (APG), please also cite [our APG paper](https://openreview.net/forum?id=xFO3DFZN45).
+- If you use automatic prompt generation (APG), please also cite [our μSAM++ paper](https://openreview.net/forum?id=xFO3DFZN45).
 - If you use the SAM1 functionality in `micro_sam.v1`, please also cite the [Segment Anything publication](https://arxiv.org/abs/2304.02643), and [MobileSAM](https://arxiv.org/abs/2306.14289) if you use a `vit_t` model.
 
 
