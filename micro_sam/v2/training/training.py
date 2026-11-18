@@ -164,7 +164,8 @@ def train_sam2(
         name: Checkpoint/log folder name.
         model_type: SAM2 variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
         train_loader: DataLoader yielding (x, y) tuples with integer instance labels.
-            x: (B,C,H,W) for 2D or (B,C,Z,H,W) for 3D in [0, 255].
+            x: (B,C,H,W) for 2D or (B,C,Z,H,W) for 3D in [0, 1].
+                `default_sam2_loader` normalizes the images to this range.
             y: (B,1,H,W) or (B,1,Z,H,W) with integer instance IDs.
         val_loader: Same format as train_loader, used for validation.
         n_epochs: Training epochs.
