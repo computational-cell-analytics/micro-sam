@@ -1,10 +1,11 @@
 """Record the demo GIFs of the README with the napari annotation tools.
 
-Usage: python make_gifs.py 2d 3d tracking objects pixels batch
+Usage: python make_gifs.py 2d 3d auto3d tracking objects pixels batch
 
 Run each GIF in its own process, so that each tool starts with a fresh state.
 The script needs a display and a GPU.
 The pixel classification GIF needs your own HuggingFace access to UNI2-h.
+The auto3d GIF needs the PlantSeg ovules data.
 The object, pixel and batch classification GIFs need the BBBC041, BCSS and PUMA data.
 """
 import io
@@ -65,6 +66,9 @@ BBBC041_WINDOW = (250, 1200)  # x, size
 # The BBBC041 classes red blood cell (1), gametocyte (3), ring (4), trophozoite (5) and schizont (6).
 # Class 1 is the uninfected cells, class 2 the infected cells.
 BBBC041_GROUPS = {1: 1, 3: 2, 4: 2, 5: 2, 6: 2}
+
+# A full confocal volume of an Arabidopsis ovule from PlantSeg, with stained cell membranes.
+OVULE_FILE = "/mnt/vast-nhr/projects/cidas/cca/data/plantseg_ovules/ovules_test/N_511_final_crop_ds2.h5"
 
 # The arrow cursor as a polygon in pixels, with the tip at (0, 0).
 CURSOR = [(0, 0), (0, 17), (4, 13), (7, 20), (10, 19), (7, 12), (12, 12)]
@@ -384,6 +388,101 @@ def gif_3d_em():
     viewer.close()
 
 
+def gif_3d_automatic():
+    with h5py.File(OVULE_FILE, "r") as f:
+        raw = f["raw"][:]
+    seg = auto_segment(raw, CELL_MODEL, "ovules-N_511", ndim=3)
+    # Remove the fragments outside of the ovule: keep only the cells of the largest connected component.
+    components = connected_components(seg[::2, ::2, ::2] > 0)
+    ovule = np.argmax(np.bincount(components.ravel())[1:]) + 1
+    seg = np.where(np.isin(seg, np.unique(seg[::2, ::2, ::2][components == ovule])), seg, 0)
+    zc, (h, w) = raw.shape[0] // 2, raw.shape[1:]
+    size = 256
+    (y0, x0), objects = best_window(seg[zc], size, min_area=200)
+    print("The crop at", (y0, x0), "has", len(objects), "cells, the volume has", len(np.unique(seg)) - 1)
+
+    viewer = napari.Viewer(show=False)
+    viewer.add_image(raw, name="raw")
+    # A 2d layer of the central slice, so that the segmentation can appear step by step.
+    reveal = viewer.add_labels(np.zeros_like(seg[zc]), name="reveal")
+    box = viewer.add_shapes(
+        [[[y0, x0], [y0 + size, x0 + size]]], shape_type="rectangle", edge_color="white", face_color="transparent",
+        edge_width=4, name="crop",
+    )
+    viewer.dims.current_step = (zc, 0, 0)
+    rec = Recorder(viewer)
+    center = np.array([y0 + size / 2, x0 + size / 2])
+    # The crop fills 70 percent of the frame at the start.
+    crop_zoom, full_zoom = 0.7 * rec.size / size, rec.size / max(h, w)
+    yy, xx = np.mgrid[:h, :w]
+    inside = (np.abs(yy - center[0]) < size / 2) & (np.abs(xx - center[1]) < size / 2)
+
+    def look(t):
+        """Move the camera between the crop (t = 0) and the full slice (t = 1)."""
+        viewer.camera.center = tuple(center + t * (np.array([h / 2, w / 2]) - center))
+        viewer.camera.zoom = crop_zoom * (full_zoom / crop_zoom) ** t
+
+    def grow(origin, mask, n_steps, duration, zoom_out=False):
+        """Show the cells in the mask in the order of their distance to the origin."""
+        distance = np.hypot(yy - origin[0], xx - origin[1])
+        radii = np.linspace(0, distance[mask].max(), n_steps + 1)[1:]
+        shown = reveal.data.copy()
+        for i, radius in enumerate(radii):
+            if zoom_out:
+                look((i + 1) / n_steps)
+            # Show a cell as a whole, as soon as its closest pixel is inside the radius.
+            labels = np.unique(seg[zc][mask & (distance < radius)])
+            shown = np.where(np.isin(seg[zc], labels[labels > 0]) & (mask | (shown > 0)), seg[zc], shown)
+            reveal.data = shown
+            rec.snap(duration)
+
+    # Start on the crop, then click to segment it.
+    rec.fit((h, w))
+    look(0)
+    rec.snap(1500, cursor=None)
+    click = tuple(center + 30)
+    rec.move(click, steps=6)
+    rec.snap(300)
+    rec.label = "Segment the crop"
+    grow(click, inside, n_steps=10, duration=90)
+    rec.hold(1000)
+
+    # Click again to segment the full volume, and zoom out while the segmentation grows over the slice.
+    rec.move(tuple(center + 60), steps=4)
+    rec.snap(300)
+    rec.label = "Segment the full volume"
+    box.visible = False
+    grow(center, np.ones_like(inside), n_steps=24, duration=80, zoom_out=True)
+    rec.snap(1200, cursor=None)
+
+    # Scroll through the volume, to show that every slice is segmented.
+    viewer.layers.remove(reveal)
+    labels = viewer.add_labels(seg, name="segmentation")
+    steps = list(range(zc, raw.shape[0] - 30, 6)) + list(range(raw.shape[0] - 30, 30, -6)) + list(range(30, zc, 6))
+    for z in steps:
+        viewer.dims.current_step = (z, 0, 0)
+        rec.snap(80)
+    rec.hold(600)
+
+    # Show the segmentation in 3d and turn it once around.
+    viewer.layers["raw"].visible = False
+    viewer.dims.ndisplay = 3
+    rec.label = "3D view"
+    # The z spacing is about 2 times the xy spacing. The data does not store it, so we only use it for the 3d view.
+    labels.scale = (2, 1, 1)
+    viewer.layers.remove(box)
+    voxels = np.argwhere(seg[::4, ::4, ::4] > 0) * 4 * np.array([2, 1, 1])
+    viewer.camera.center = tuple(voxels.mean(axis=0))
+    # Zoom so that the ovule fits into the frame from every side.
+    viewer.camera.zoom = 0.9 * rec.size / np.linalg.norm(voxels.max(axis=0) - voxels.min(axis=0))
+    for angle in np.linspace(0, 360, 37)[:-1]:
+        viewer.camera.angles = (0, 30, 60 + angle)
+        rec.snap(110)
+    rec.hold(800)
+    rec.save(os.path.join(OUT_DIR, "automatic_3d.gif"), out_size=360)
+    viewer.close()
+
+
 def gif_tracking():
     with open_file(fetch_tracking_example_data(DATA_CACHE), mode="r") as f:
         timeseries = f["*.tif"][:]
@@ -685,7 +784,7 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs(EMB_DIR, exist_ok=True)
     gifs = {
-        "2d": gif_2d_boxes, "3d": gif_3d_em, "tracking": gif_tracking,
+        "2d": gif_2d_boxes, "3d": gif_3d_em, "auto3d": gif_3d_automatic, "tracking": gif_tracking,
         "objects": gif_object_classifier, "pixels": gif_pixel_classifier, "batch": gif_batch_nuclei,
     }
     for name in sys.argv[1:]:

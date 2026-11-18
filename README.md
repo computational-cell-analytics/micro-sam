@@ -24,14 +24,17 @@ The functionality of the previous version, based on the original [Segment Anythi
 
 <table>
 <tr>
-<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/interactive_2d.gif" width="256"><br>Interactive Cell Segmentation in 2D</td>
-<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/interactive_3d.gif" width="256"><br>Interactive Mitochondria Segmentation in volumeEM</td>
-<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/interactive_tracking.gif" width="256"><br>Interactive Cell Tracking in 2D+T</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/interactive_2d.gif" width="176"><br>Interactive Cell Segmentation in 2D</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/interactive_3d.gif" width="176"><br>Interactive Mitochondria Segmentation in volumeEM</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/automatic_3d.gif" width="176"><br>Automatic Cell Segmentation in 3D</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/interactive_tracking.gif" width="176"><br>Interactive Cell Tracking in 2D+T</td>
 </tr>
+</table>
+<table align="center">
 <tr>
-<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/object_classification.gif" width="256"><br>Object Classification with Corrections</td>
-<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/pixel_classification.gif" width="256"><br>Pixel Classification in Histopathology</td>
-<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/batch_object_classification.gif" width="256"><br>Batch Nucleus Classification in Histopathology</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/pixel_classification.gif" width="176"><br>Pixel Classification in Histopathology</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/object_classification.gif" width="176"><br>Object Classification with Corrections</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/batch_object_classification.gif" width="176"><br>Batch Nucleus Classification in Histopathology</td>
 </tr>
 </table>
 
