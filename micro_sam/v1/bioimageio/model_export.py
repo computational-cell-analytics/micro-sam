@@ -226,7 +226,7 @@ dependencies:
         content += """
     - timm
     - pip:
-        - git+https://github.com/ChaoningZhang/MobileSAM.git@f706ad9c4eb7f219c00d9050e46328518ffb65d2"""
+        - git+https://github.com/ChaoningZhang/MobileSAM.git"""
     with open(dependency_file, "w") as f:
         f.write(content)
 

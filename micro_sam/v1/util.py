@@ -238,8 +238,7 @@ def get_sam_model(
     if abbreviated_model_type == "vit_t" and not VIT_T_SUPPORT:
         raise RuntimeError(
             "'mobile_sam' is required for the vit-tiny. "
-            "You can install it via "
-            "'pip install git+https://github.com/ChaoningZhang/MobileSAM.git@f706ad9c4eb7f219c00d9050e46328518ffb65d2'"
+            "You can install it via 'pip install git+https://github.com/ChaoningZhang/MobileSAM.git'"
         )
 
     state, model_state = _load_checkpoint(checkpoint_path)
