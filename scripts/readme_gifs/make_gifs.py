@@ -5,7 +5,7 @@ Usage: python make_gifs.py 2d 3d tracking objects pixels batch
 Run each GIF in its own process, so that each tool starts with a fresh state.
 The script needs a display and a GPU.
 The pixel classification GIF needs your own HuggingFace access to UNI2-h.
-The pixel and batch classification GIFs need the BCSS and PUMA data.
+The object, pixel and batch classification GIFs need the BBBC041, BCSS and PUMA data.
 """
 import io
 import os
@@ -33,9 +33,7 @@ from micro_sam.sam_annotator import annotator, annotator_tracking
 from micro_sam.sam_annotator.pixel_classifier import pixel_classifier
 from micro_sam.sam_annotator.object_classifier import object_classifier, batch_object_classifier
 from micro_sam.v2.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
-from micro_sam.sample_data import (
-    fetch_3d_example_data, fetch_hela_2d_example_data, fetch_livecell_example_data, fetch_tracking_example_data
-)
+from micro_sam.sample_data import fetch_3d_example_data, fetch_hela_2d_example_data, fetch_tracking_example_data
 
 DATA_CACHE = os.path.join(util.get_cache_directory(), "sample_data")
 OUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "doc", "gifs")
@@ -58,6 +56,15 @@ PUMA_TILES = "/mnt/lustre-grete/usr/u12090/few_shot_sam/data/puma/train.h5"
 PUMA_NAMES = [f"training_set_metastatic_roi_047_{y}_{x}" for y, x in [(0, 0), (0, 1), (1, 0), (1, 1)]]
 # The PUMA classes stroma (1), tumor (2) and lymphocyte (5). Class 1 is the lymphocytes, class 2 the other nuclei.
 PUMA_GROUPS = {5: 1, 1: 2, 2: 2}
+
+# A square window of one BBBC041 blood smear with P. vivax malaria, from the few-shot-sam data.
+# The cell masks come from box prompts on the annotated boxes. This image gave the best result in a simulation.
+BBBC041_FILE = "/mnt/lustre-grete/usr/u12090/few_shot_sam/data/bbbc041/train.h5"
+BBBC041_IMAGE = "72732579-a812-4496-b2dd-ea1556924337"
+BBBC041_WINDOW = (250, 1200)  # x, size
+# The BBBC041 classes red blood cell (1), gametocyte (3), ring (4), trophozoite (5) and schizont (6).
+# Class 1 is the uninfected cells, class 2 the infected cells.
+BBBC041_GROUPS = {1: 1, 3: 2, 4: 2, 5: 2, 6: 2}
 
 # The arrow cursor as a polygon in pixels, with the tip at (0, 0).
 CURSOR = [(0, 0), (0, 17), (4, 13), (7, 20), (10, 19), (7, 12), (12, 12)]
@@ -449,66 +456,78 @@ def gif_tracking():
     viewer.close()
 
 
-def gif_object_classifier():
-    image = imageio.imread(fetch_livecell_example_data(DATA_CACHE))
-    h, w = image.shape[:2]
-    y0, x0 = (h - 512) // 2, (w - 512) // 2
-    image = image[y0:y0 + 512, x0:x0 + 512]
-    seg = auto_segment(image, CELL_MODEL, "livecell-crop")
+def load_bbbc041_window():
+    """Load the BBBC041 window with the cells of BBBC041_GROUPS, and the reference class of each cell."""
+    with h5py.File(BBBC041_FILE, "r") as f:
+        raw, instances, semantic = [f[BBBC041_IMAGE][key][:] for key in ("raw", "instances", "semantic")]
+    x0, size = BBBC041_WINDOW
+    raw, instances, semantic = [data[:size, x0:x0 + size] for data in (raw, instances, semantic)]
+    seg, reference = np.zeros_like(instances), {}
+    for p in regionprops(instances):
+        value = int(np.bincount(semantic[p.coords[:, 0], p.coords[:, 1]]).argmax())
+        y1, x1, y2, x2 = p.bbox
+        # Leave out the cells that the window border cuts.
+        if value in BBBC041_GROUPS and min(y1, x1) > 0 and max(y2, x2) < size:
+            seg[p.coords[:, 0], p.coords[:, 1]] = p.label
+            reference[p.label] = BBBC041_GROUPS[value]
+    return raw, seg, reference
 
-    # Class 1 is the round cells and class 2 is the elongated cells, split at the median eccentricity.
-    # The cells close to the median are ambiguous, so the corrections use only the clear cells.
-    cells = pick_objects(seg, n=None, min_area=250, margin=4)
-    cells.sort(key=lambda p: p.eccentricity)
-    median = np.median([p.eccentricity for p in cells])
-    reference = {p.label: 1 if p.eccentricity < median else 2 for p in cells}
-    clear = {p.label for p in cells if abs(p.eccentricity - median) > 0.08}
-    examples = [(p, 1) for p in cells[:3]] + [(p, 2) for p in cells[-3:]]
+
+def gif_object_classifier():
+    image, seg, reference = load_bbbc041_window()
+    cells = regionprops(seg)
 
     viewer = napari.Viewer(show=False)
     object_classifier(
-        image, seg, model_type=CELL_MODEL, embedding_path=os.path.join(EMB_DIR, "livecell-crop.zarr"),
+        image, seg, model_type=CELL_MODEL, embedding_path=os.path.join(EMB_DIR, f"bbbc041-{BBBC041_IMAGE}.zarr"),
         return_viewer=True, viewer=viewer,
     )
     classifier = AnnotatorState().annotator
-    # The embeddings do not describe the shape, so add the classical shape features.
-    shape_features = ["eccentricity", "solidity", "axis_major_length", "axis_minor_length"]
-    classifier._set_options(False, None, False, classical_features_val=shape_features)
+    # The size, the color and the shape of a cell show the parasites.
+    classifier._set_options(False, None, False, classical_features_val=list(OBJECT_FEATURES))
     rec = Recorder(viewer)
-    rec.fit(image.shape)
+    rec.fit(image.shape[:2])
     annotations = viewer.layers["annotations"]
+    clicked = set()
 
     def click(p, value):
         pos = inner_point(seg == p.label)[0]
         rec.move(pos, steps=5)
-        paint_disc(annotations, pos, value)
+        paint_disc(annotations, pos, value, radius=20)
+        clicked.add(p.label)
         rec.snap(250)
 
-    def mistakes():
+    def train():
+        rec.hold(200)
+        classifier._run_train_and_predict()
+        viewer.layers["segmentation"].visible = False
+        rec.snap(2000)
         prediction = viewer.layers["prediction"].data
-        wrong = [p for p in cells if p.label in clear and np.median(prediction[seg == p.label]) != reference[p.label]]
-        return sorted(wrong, key=lambda p: abs(p.eccentricity - median), reverse=True)
+        wrong = [p for p in cells if np.median(prediction[p.coords[:, 0], p.coords[:, 1]]) != reference[p.label]]
+        print("Accuracy:", round(1 - len(wrong) / len(cells), 3))
+        # Correct the infected cells first.
+        return sorted([p for p in wrong if p.label not in clicked], key=lambda p: -reference[p.label])
 
-    rec.snap(600, cursor=(400, 80))
-    for p, value in examples:
-        click(p, value)
-    rec.hold(200)
-    classifier._run_train_and_predict()
-    viewer.layers["segmentation"].visible = False
-    rec.snap(2000)
+    # Show the raw image first, then the segmentation.
+    segmentation = viewer.layers["segmentation"]
+    segmentation.visible = False
+    rec.snap(1500, cursor=None)
+    segmentation.visible = True
 
-    # Correct the clearest mistakes and train again, two times.
+    # Click 3 cells of each class.
+    rec.snap(800, cursor=(1000, 150))
+    for value in (1, 2):
+        for p in [p for p in cells if reference[p.label] == value][:3]:
+            click(p, value)
+    wrong = train()
+
+    # Correct 3 mistakes and train again, two times.
     for _ in range(2):
-        wrong = mistakes()
-        print("Clearly wrong cells:", len(wrong), "of", len(clear))
         if not wrong:
             break
         for p in wrong[:3]:
             click(p, reference[p.label])
-        rec.hold(200)
-        classifier._run_train_and_predict()
-        rec.snap(2000)
-    print("Clearly wrong cells at the end:", len(mistakes()), "of", len(clear))
+        wrong = train()
     rec.hold(1000)
     rec.snap(100, cursor=None)
     rec.save(os.path.join(OUT_DIR, "object_classification.gif"))
