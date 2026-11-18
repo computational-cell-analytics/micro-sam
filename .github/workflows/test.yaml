@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   test:
-    name: ${{ matrix.os }} ${{ matrix.python-version }}
+    name: ${{ matrix.os }} ${{ matrix.python-version }} ${{ matrix.torch }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -26,23 +26,18 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.12"]
+        torch: [conda]
+        # Test: a second macOS job with the PyPI torch wheels, to compare against the conda-forge build.
+        include:
+          - os: macos-latest
+            python-version: "3.12"
+            torch: pip
 
     steps:
       # Spotlight indexes the fresh disk of a macOS runner and competes with the tests for the CPU.
       - name: Disable Spotlight indexing
         if: runner.os == 'macOS'
         run: sudo mdutil -a -i off || true
-
-      # Test: sample the load of the macOS runner every minute, to see what competes with the tests.
-      - name: Start the resource sampler
-        if: runner.os == 'macOS'
-        run: |
-          nohup bash -c 'while true; do
-            echo "=== $(date +%H:%M:%S) $(uptime | sed "s/.*load/load/")"
-            sysctl -n vm.swapusage
-            ps -Ao pcpu,rss,comm -r | head -6 | sed "s|/.*/||"
-            sleep 60
-          done' > "$RUNNER_TEMP/sampler.log" 2>&1 &
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,32 +62,33 @@ jobs:
         shell: bash -l {0}
         run: python -m pip install -r requirements-dev.txt
 
-      # Test: time the threadpool limits with threadpoolctl 3.7 and 3.8 on macOS, with torch loaded.
-      - name: Time threadpoolctl 3.7 and 3.8
-        if: runner.os == 'macOS'
-        continue-on-error: true
+      # Test: replace the conda-forge torch and torchvision with the PyPI wheels of the same versions.
+      - name: Install torch from PyPI
+        if: matrix.torch == 'pip'
         shell: bash -l {0}
         run: |
-          python -m pip install --no-deps --target "$RUNNER_TEMP/tpc38" threadpoolctl==3.8.0
-          cat > "$RUNNER_TEMP/time_tpc.py" << 'EOF'
+          TORCH=$(python -c "import torch; print(torch.__version__.split('+')[0])")
+          VISION=$(python -c "import torchvision; print(torchvision.__version__.split('+')[0])")
+          python -m pip install --force-reinstall --no-deps "torch==$TORCH" "torchvision==$VISION"
+
+      # Test: print the torch build and time a decoder-sized conv, to compare the builds directly.
+      - name: Print the torch build and time a conv
+        shell: bash -l {0}
+        run: |
+          python - << 'EOF'
           import time
-          import numpy, scipy.linalg, sklearn, torch  # noqa: F401
-          import threadpoolctl
-          from threadpoolctl import threadpool_info, threadpool_limits
-          t0 = time.perf_counter()
-          info = threadpool_info()
-          t_info = time.perf_counter() - t0
-          t0 = time.perf_counter()
-          for _ in range(20):
-              with threadpool_limits(limits=1):
-                  pass
-          t_limits = (time.perf_counter() - t0) / 20
-          print(f"threadpoolctl {threadpoolctl.__version__}: threadpool_info {t_info:.3f} s, threadpool_limits {t_limits:.3f} s per call")
-          for lib in info:
-              print("  ", lib["internal_api"], lib["num_threads"], lib["filepath"])
+          import torch
+          print(torch.__version__, "mkldnn:", torch.backends.mkldnn.is_available(), "threads:", torch.get_num_threads())
+          print(torch.__config__.show())
+          conv = torch.nn.Conv2d(64, 64, 3, padding=1)
+          x = torch.randn(1, 64, 512, 512)
+          with torch.no_grad():
+              conv(x)
+              t0 = time.perf_counter()
+              for _ in range(5):
+                  conv(x)
+          print(f"conv2d 64x64x3x3 on 512x512: {(time.perf_counter() - t0) / 5:.3f} s per call")
           EOF
-          python "$RUNNER_TEMP/time_tpc.py"
-          PYTHONPATH="$RUNNER_TEMP/tpc38" python "$RUNNER_TEMP/time_tpc.py"
 
       - name: Install micro-sam
         id: install
@@ -102,23 +98,18 @@ jobs:
       # The tests run in two parts: the SAM1 tests (vit_t / vit_t_lm), marked with 'pytest.mark.v1',
       # and everything else, i.e. the SAM2 tests (hvit_t / hvit_t_cells) and the annotator.
       # The v2 part also runs when the v1 part fails, and appends to the v1 coverage.
-      # The macOS runners vary up to 3x in speed, so macOS skips the slow tests. Linux and Windows run them.
       - name: Run v1 tests
         uses: aganders3/headless-gui@v2
         with:
           shell: bash -l {0}
-          run: pytest -m "v1${{ runner.os == 'macOS' && ' and not slow' || '' }}"
+          run: pytest -m "v1"
 
       - name: Run v2 tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         uses: aganders3/headless-gui@v2
         with:
           shell: bash -l {0}
-          run: pytest -m "not v1${{ runner.os == 'macOS' && ' and not slow' || '' }}" --cov-append
-
-      - name: Print the resource sampler log
-        if: ${{ always() && runner.os == 'macOS' }}
-        run: cat "$RUNNER_TEMP/sampler.log"
+          run: pytest -m "not v1" --cov-append
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v3
