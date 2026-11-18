@@ -24,18 +24,16 @@ The functionality of the previous version, based on the original [Segment Anythi
 
 <table>
 <tr>
-<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/dev/doc/gifs/interactive_2d.gif" width="256"><br>Interactive cell segmentation with box prompts</td>
-<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/dev/doc/gifs/interactive_3d.gif" width="256"><br>Interactive mitochondria segmentation in a 3d EM volume</td>
-<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/dev/doc/gifs/interactive_tracking.gif" width="256"><br>Interactive tracking of a dividing cell</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/interactive_2d.gif" width="256"><br>Interactive cell segmentation with box prompts</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/interactive_3d.gif" width="256"><br>Interactive mitochondria segmentation in a 3d EM volume</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/interactive_tracking.gif" width="256"><br>Interactive tracking of a dividing cell</td>
 </tr>
 <tr>
-<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/dev/doc/gifs/object_classification.gif" width="256"><br>Object classification of round and elongated cells, with corrections</td>
-<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/dev/doc/gifs/pixel_classification.gif" width="256"><br>Pixel classification of tissue in histopathology, with corrections</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/object_classification.gif" width="256"><br>Object classification of round and elongated cells, with corrections</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/pixel_classification.gif" width="256"><br>Pixel classification of tissue in histopathology, with corrections</td>
 <td></td>
 </tr>
 </table>
-
-The GIFs are recorded with [scripts/readme_gifs/make_gifs.py](scripts/readme_gifs/make_gifs.py).
 
 If you run into any problems or have questions about our tool, please open an [issue](https://github.com/computational-cell-analytics/micro-sam/issues/new/choose) on GitHub or contact us via [image.sc](https://forum.image.sc/) using the tag `micro-sam`, and tagging [@anwai98](https://forum.image.sc/u/anwai98/summary) and [@constantinpape](https://forum.image.sc/u/constantinpape/summary).
 You can follow recent updates on `micro_sam` in our [news feed](https://forum.image.sc/t/microsam-news-feed).
