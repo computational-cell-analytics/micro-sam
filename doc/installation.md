@@ -24,6 +24,11 @@ To use the SAM1 `vit_t` (MobileSAM) model of the previous version (`micro_sam.v1
 pip install git+https://github.com/ChaoningZhang/MobileSAM.git@f706ad9c4eb7f219c00d9050e46328518ffb65d2
 ```
 
+The AnyUp upsampling option of the pixel and object classification tools needs [AnyUp](https://github.com/wimmerth/anyup). It is not available on PyPI or conda-forge, so it has to be installed from GitHub:
+```bash
+pip install git+https://github.com/wimmerth/anyup@351807a9c4287368732cc247f26c7c81c9139af4
+```
+
 ## From conda
 
 `conda` is a python package manager. If you don't have it installed yet you can follow the instructions [here](https://conda-forge.org/download/) or look into our [installation FAQs](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#faq) to set it up on your system.
@@ -50,6 +55,11 @@ This means it will install the CPU version if you don't have a nvidia GPU, and w
 However, if you have an older operating system, or a CUDA version older than 12, than it may not install the correct version. In this case you will have to specify you're CUDA version, for example for CUDA 11, like this:
 ```bash
 conda install -c conda-forge micro_sam "libtorch=*=cuda11*"
+```
+
+The AnyUp upsampling option of the pixel and object classification tools needs [AnyUp](https://github.com/wimmerth/anyup). Install it with pip in the conda environment, since it is not available on PyPI or conda-forge:
+```bash
+pip install git+https://github.com/wimmerth/anyup@351807a9c4287368732cc247f26c7c81c9139af4
 ```
 
 ## From source

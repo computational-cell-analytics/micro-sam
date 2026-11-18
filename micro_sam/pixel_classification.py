@@ -57,8 +57,9 @@ def get_anyup_upsampler(checkpoint_path: Optional[Union[str, os.PathLike]] = Non
         from anyup.model import AnyUp
     except ImportError as e:
         raise ImportError(
-            "Upsampling with AnyUp requires the 'anyup' package. Install it from "
-            "https://github.com/wimmerth/anyup to use this option."
+            "Upsampling with AnyUp requires the 'anyup' package. It is not available on PyPI or conda-forge. "
+            "Install it via "
+            "'pip install git+https://github.com/wimmerth/anyup@351807a9c4287368732cc247f26c7c81c9139af4'"
         ) from e
 
     device = util.get_device(device)
