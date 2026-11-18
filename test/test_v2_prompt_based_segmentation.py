@@ -168,12 +168,8 @@ def test_points_with_multiple_boxes_are_rejected():
 class DiskTilePredictor:
     """A stand-in SAM2 image predictor for tiled 2d prompts.
 
-    It segments:
-    - a single object from points: the union of disks around its positive points;
-    - batched objects from points: a disk around the first point of each object;
-    - a box: the box region.
-
-    It records the tile and the prompts of every call.
+    It segments one object from points as the union of the disks around its positive points. It segments
+    a box as the box region. It records the tile and the prompts of every call.
     """
 
     def __init__(self, radius):
@@ -210,12 +206,9 @@ class DiskTilePredictor:
                 objects.append(mask)
         else:
             coords, labels = np.asarray(point_coords), np.asarray(point_labels)
-            if coords.ndim == 2:
-                objects = [self._disk(coords[labels == 1])]
-            else:  # Batched: one object per row, its first point is the positive one.
-                objects = [self._disk(row[:1]) for row in coords]
+            objects = [self._disk(coords[labels == 1])]
         masks = np.stack(objects)[:, None].astype("float32")
-        if len(objects) == 1:  # SAM2 squeezes the batch axis, so one object comes back as (C, H, W).
+        if len(objects) == 1:  # SAM2 removes the batch axis for one object, so the shape is (C, H, W).
             masks = masks[0]
         return masks, np.ones(len(objects)), None
 
@@ -254,11 +247,9 @@ def test_tiled_2d_completes_an_object_across_the_tile_border(monkeypatch):
     assert {call["tile_id"] for call in predictor.calls} == {0}
 
 
-def test_tiled_single_object_2d_tile_with_prompts_decides_its_inner_block(monkeypatch):
+def test_tiled_2d_tile_with_prompts_decides_its_inner_block(monkeypatch):
     # Both tiles segment the object, so tile 0's halo does not fill tile 1's inner block.
-    seg, _ = run_tiled_2d(
-        monkeypatch, points=np.array([[16, 29], [16, 50]]), labels=np.array([1, 1]), batched=False,
-    )
+    seg, _ = run_tiled_2d(monkeypatch, points=np.array([[16, 29], [16, 50]]), labels=np.array([1, 1]))
 
     assert seg[16, 31] == 1 and seg[16, 50] == 1
     assert seg[16, 34] == 0
@@ -271,8 +262,18 @@ def test_tiled_2d_negative_points_reach_every_tile_that_sees_them(monkeypatch):
     (call,) = predictor.calls
     assert call["tile_id"] == 0
     assert call["point_labels"].tolist() == [1, 0]
-    # (x, y) in tile-local coordinates.
+    # The points are (x, y) in the coordinates of the tile.
     assert call["point_coords"].tolist() == [[29, 16], [36, 16]]
+
+
+def test_tiled_2d_negative_point_in_the_halo_keeps_the_boxes_of_a_tile(monkeypatch):
+    # The negative point lies in tile 0, but inside the halo of tile 1, which has two boxes.
+    boxes = [np.array([4, 40, 12, 48]), np.array([20, 40, 28, 48])]
+    seg, predictor = run_tiled_2d(monkeypatch, points=np.array([[16, 29]]), labels=np.array([0]), boxes=boxes)
+
+    (call,) = predictor.calls
+    assert call["tile_id"] == 1 and call["point_coords"] is None
+    assert seg[8, 44] == 1 and seg[24, 44] == 2
 
 
 def make_tiled_segmenter():

@@ -1685,8 +1685,7 @@ def _segment_object_2d(viewer, batched=False):
         from micro_sam.v2.prompt_based_segmentation import tiled_promptable_segmentation_2d
         seg = tiled_promptable_segmentation_2d(
             predictor=predictor, image_embeddings=image_embeddings,
-            points=points, labels=labels, boxes=boxes, masks=masks, batched=batched,
-            devices=state.inference_devices,
+            points=points, labels=labels, boxes=boxes, masks=masks, devices=state.inference_devices,
         )
     else:
         from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d

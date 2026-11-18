@@ -420,14 +420,11 @@ def _points_in_block(points, block):
 
 
 def _stitch_tiles(shape, tiling, halo, tile_segs, tile_object_ids):
-    """Stitch the per-tile label maps into the full image.
+    """Stitch the label maps of the tiles into the full image.
 
-    The same id in two tiles counts as the same object.
-
-    Each tile writes its inner block first. The halos then complete the objects that cross into a
-    neighbouring tile, but only for object ids that the neighbouring tile has no prompt for. A halo
-    never overwrites an inner-block result, because the tile that owns a pixel sees it with more
-    context.
+    The function treats the same id in two tiles as the same object. Each tile writes its inner block first.
+    Then the halo of a tile fills the empty pixels of a neighbouring inner block. The halo fills only the
+    object ids that the neighbouring tile has no prompt for.
     """
     out = np.zeros(shape, dtype="uint32")
     for tile_id, seg in tile_segs.items():
@@ -464,26 +461,25 @@ def tiled_promptable_segmentation_2d(
     labels: Optional[np.ndarray] = None,
     boxes: Optional[np.ndarray] = None,
     masks: Optional[np.ndarray] = None,
-    batched: Optional[bool] = None,
     devices: Devices = None,
 ):
     """Tiled 2d promptable segmentation for the SAM2 image predictor.
 
-    Each tile with a prompt runs `promptable_segmentation_2d` on its precomputed embeddings (set via
-    `set_precomputed`). The function stitches the tile results into the full image. Points are in
-    (y, x) order, as passed by the annotator. Same return convention as `promptable_segmentation_2d`.
+    Each tile with a prompt runs `promptable_segmentation_2d` on its precomputed embeddings. The function
+    stitches the tile results into the full image. The points are in (y, x) order. The return value is
+    the same as for `promptable_segmentation_2d`. Only single-object segmentation is supported, because
+    each tile numbers its objects from 1.
 
     Prompt routing:
     - A positive point goes to the tile whose inner block contains it.
-    - A negative point goes to every tile whose outer block contains it, if that tile also has a
-      positive point or a box.
-    - A box goes to every tile whose inner block it overlaps, clipped to the outer block of that tile.
+    - A negative point goes to every tile with a positive point or a box whose outer block contains it.
+      A tile with more than one box gets only the negative points of its inner block.
+    - A box goes to every tile whose inner block it overlaps. The box is clipped to the outer block of the tile.
 
-    An object that extends more than the halo beyond the tile of its prompt is cut at the outer edge of
-    the halo.
+    The halo is the limit for an object: the result cuts an object at the outer edge of the halo.
 
-    Independent active tiles run concurrently on persistent predictor replicas. By default all
-    visible CUDA devices are used; pass `devices` to select or restrict them.
+    The active tiles run in parallel on predictor replicas. By default, the function uses all visible CUDA
+    devices. Pass `devices` to select the devices.
     """
     from bioimage_cpp.utils import Blocking
     from micro_sam.v2.util import set_precomputed
@@ -522,18 +518,18 @@ def tiled_promptable_segmentation_2d(
 
     tile_jobs, tile_object_ids = {}, {}
     for tile_id, job in jobs.items():
-        outer = tiling.get_block_with_halo(tile_id, list(halo)).outer_block
+        block = tiling.get_block_with_halo(tile_id, list(halo))
+        outer = block.outer_block
         origin = np.array([outer.begin[0], outer.begin[1]])
-        in_tile = _points_in_block(negative_points, outer)
+        # A tile cannot combine points with more than one box, so a negative point from the halo must not reject it.
+        in_tile = _points_in_block(negative_points, block.inner_block if len(job["boxes"]) > 1 else outer)
         local_points = np.concatenate([np.asarray(job["points"]).reshape(-1, 2), negative_points[in_tile]]) - origin
         local_labels = np.concatenate([np.ones(len(job["points"]), dtype=labels.dtype), negative_labels[in_tile]])
         local_boxes = [box - np.concatenate([origin, origin]) for box in job["boxes"]] or None
         local_masks = job["masks"] if job["boxes"] else None
         tile_jobs[tile_id] = local_points, local_labels, local_boxes, local_masks
-        # The object ids that 'promptable_segmentation_2d' returns for this tile. Batched mode: one per positive
-        # point and one per box. Single-object mode: one, or one per box for a tile with boxes only.
-        n_objects = len(job["points"]) + len(job["boxes"]) if batched else max(1, len(job["boxes"]))
-        tile_object_ids[tile_id] = np.arange(1, n_objects + 1, dtype="uint32")
+        # The tile returns one object id, or one id for each box if the tile has only boxes.
+        tile_object_ids[tile_id] = np.arange(1, max(1, len(job["boxes"])) + 1, dtype="uint32")
 
     predictor_devices = _get_image_predictor_devices(predictor, devices)
     # Spread the active tiles round-robin. Their ids are sparse, so mapping by 'tile_id % n_devices'
@@ -551,7 +547,7 @@ def tiled_promptable_segmentation_2d(
             set_precomputed(local_predictor, image_embeddings, tile_id=tile_id)
             tile_seg = promptable_segmentation_2d(
                 local_predictor, image=None, points=local_points, labels=local_labels,
-                boxes=local_boxes, masks=local_masks, batched=batched,
+                boxes=local_boxes, masks=local_masks, batched=False,
             )
             results.append((tile_id, tile_seg))
         return results
@@ -565,7 +561,7 @@ def tiled_promptable_segmentation_2d(
             for task in tasks:
                 results.extend(task.result())
 
-    # Sorted, so that the halo fill in '_stitch_tiles' does not depend on the worker order.
+    # Sort the results, so that the halo fill does not depend on the order of the workers.
     tile_segs = {
         tile_id: np.asarray(tile_seg).astype("uint32")
         for tile_id, tile_seg in sorted(results, key=lambda result: result[0]) if tile_seg is not None
