@@ -32,6 +32,7 @@ jobs:
 
       - name: Setup micromamba
         uses: mamba-org/setup-micromamba@v1
+        # The macOS tests are about 3x slower with threadpoolctl 3.8 (2026-11-11), so pin it to 3.7.
         # Build pip packages on the main disk: the /tmp of ubuntu-latest is too small for the torch wheels.
         env:
           TMPDIR: ${{ runner.temp }}
@@ -39,6 +40,7 @@ jobs:
           environment-file: "environment.yaml"
           create-args: >-
             python=${{ matrix.python-version }}
+            threadpoolctl=3.7
             ${{ runner.os == 'Linux' && 'qt6-wayland' || '' }}
 
       # Setup Qt libraries for GUI testing on Linux
@@ -48,12 +50,32 @@ jobs:
         shell: bash -l {0}
         run: python -m pip install -r requirements-dev.txt
 
-      # Test: elf with the thread limits set once per thread pool (constantinpape/elf#150), with threadpoolctl 3.8.
-      - name: Install elf from the threadpool fix
+      # Test: time the threadpool limits with threadpoolctl 3.7 and 3.8 on macOS, with torch loaded.
+      - name: Time threadpoolctl 3.7 and 3.8
+        if: runner.os == 'macOS'
+        continue-on-error: true
         shell: bash -l {0}
         run: |
-          python -m pip install --no-deps --force-reinstall "python-elf @ git+https://github.com/anwai98/elf.git@threadpool-limits-once"
-          python -c "import elf, threadpoolctl; print('elf', elf.__file__, 'threadpoolctl', threadpoolctl.__version__)"
+          python -m pip install --no-deps --target "$RUNNER_TEMP/tpc38" threadpoolctl==3.8.0
+          cat > "$RUNNER_TEMP/time_tpc.py" << 'EOF'
+          import time
+          import numpy, scipy.linalg, sklearn, torch  # noqa: F401
+          import threadpoolctl
+          from threadpoolctl import threadpool_info, threadpool_limits
+          t0 = time.perf_counter()
+          info = threadpool_info()
+          t_info = time.perf_counter() - t0
+          t0 = time.perf_counter()
+          for _ in range(20):
+              with threadpool_limits(limits=1):
+                  pass
+          t_limits = (time.perf_counter() - t0) / 20
+          print(f"threadpoolctl {threadpoolctl.__version__}: threadpool_info {t_info:.3f} s, threadpool_limits {t_limits:.3f} s per call")
+          for lib in info:
+              print("  ", lib["internal_api"], lib["num_threads"], lib["filepath"])
+          EOF
+          python "$RUNNER_TEMP/time_tpc.py"
+          PYTHONPATH="$RUNNER_TEMP/tpc38" python "$RUNNER_TEMP/time_tpc.py"
 
       - name: Install micro-sam
         id: install
