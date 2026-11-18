@@ -23,6 +23,7 @@ You can install `micro_sam` via conda:
 conda install -c conda-forge micro_sam
 ```
 For more details on the available installation options, check out [the installation section](#installation).
+Version 2.0 is not released on conda and pip yet, so this command installs the previous version 1.x. To use the current pre-release, [install it from source](#from-source).
 
 After installing `micro_sam`, you can start napari from within your environment using
 

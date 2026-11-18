@@ -8,6 +8,8 @@ There are four ways to install `micro_sam`:
 
 You can find more information on the installation and how to troubleshoot it in [the FAQ section](#installation-questions).
 
+**IMPORTANT**: Version 2.0 (`micro-sam2`) is not released on pip and conda yet, so these install the previous version 1.x. To use the current pre-release, [install from source](#from-source) and check out the `v2.0.0a1` tag after cloning the repository (`git checkout v2.0.0a1`).
+
 ## From pip
 
 `pip` is the default python package manager. You can install `micro_sam` via pip with the command:
