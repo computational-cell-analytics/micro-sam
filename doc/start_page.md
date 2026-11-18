@@ -1,6 +1,6 @@
 # Segment Anything for Microscopy
 
-Segment Anything for Microscopy implements automatic and interactive annotation for microscopy data. It is built on top of [Segment Anything 2 (SAM2)](https://ai.meta.com/sam2/) by Meta AI and specializes it for microscopy and other biomedical imaging data.
+Segment Anything for Microscopy implements automatic and interactive annotation for microscopy data. It is built on [Segment Anything 2 (SAM2)](https://ai.meta.com/sam2/) by Meta AI and specializes it for microscopy and other biomedical imaging data.
 Its core components are:
 - The `micro_sam` tools for interactive data annotation, built as [napari](https://napari.org/stable/) plugin.
 - The `micro_sam` library to apply SAM2 to 2d and 3d data, to track objects over time, and to finetune it on your data.
@@ -12,7 +12,7 @@ Based on these components `micro_sam` enables fast interactive and automatic ann
 
 The current version of `micro_sam` (micro-sam2) is based on SAM2. The functionality of the previous version, based on the original Segment Anything model (SAM1), is still available in the `micro_sam.v1` subpackage and in the `micro_sam v1` command line tools.
 
-If you run into any problems or have questions please [open an issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam`.
+If you run into any problems or have questions, please [open an issue](https://github.com/computational-cell-analytics/micro-sam/issues/new) or contact us via [image.sc](https://forum.image.sc/) using the tag `micro-sam`.
 You can follow recent updates on `micro_sam` in our [news feed](https://forum.image.sc/t/microsam-news-feed).
 
 
@@ -56,10 +56,10 @@ You can also train models on your own data, see [here for details](#training-you
 
 ## Citation
 
-If you are using `micro_sam` in your research please cite
-- our [μSAM2 paper](https://doi.org/10.64898/2026.11.12.766082) (preprint on bioRxiv)
-- our [original μSAM paper](https://www.nature.com/articles/s41592-024-02580-4) (published in Nature Methods)
+If you use `micro_sam` in your research, please cite
+- our [μSAM2 preprint](https://doi.org/10.64898/2026.11.12.766082)
+- our [μSAM publication](https://www.nature.com/articles/s41592-024-02580-4) (published in Nature Methods)
 - and the [Segment Anything 2 publication](https://arxiv.org/abs/2408.00714).
 - If you use automatic tracking, please also cite [Trackastra](https://arxiv.org/abs/2405.15700).
 - If you use automatic prompt generation (APG), please also cite [our APG paper](https://openreview.net/forum?id=xFO3DFZN45).
-- If you use the SAM1 functionality in `micro_sam.v1`, please also cite the [original Segment Anything publication](https://arxiv.org/abs/2304.02643), and [Mobile SAM](https://arxiv.org/abs/2306.14289) if you use a `vit_t` model.
+- If you use the SAM1 functionality in `micro_sam.v1`, please also cite the [Segment Anything publication](https://arxiv.org/abs/2304.02643), and [MobileSAM](https://arxiv.org/abs/2306.14289) if you use a `vit_t` model.

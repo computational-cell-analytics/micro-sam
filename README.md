@@ -5,12 +5,12 @@
 [![Image.sc forum][imagesc-img]][imagesc-url]
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.7919746-blue.svg)](https://doi.org/10.5281/zenodo.7919746)
 
-# Segment Anything for Microscopy
+# Segment Anything for Microscopy 2
 
 <a href="https://github.com/computational-cell-analytics/micro-sam"><img src="https://github.com/computational-cell-analytics/micro-sam/blob/main/doc/logo/logo_and_text.png" width="300" align="right">
 
-Tools for segmentation, tracking and classification in microscopy built on top of [Segment Anything 2 (SAM2)](https://ai.meta.com/sam2/).
-Segment, track and classify objects in microscopy images interactively with a few clicks, or automatically!
+Tools for segmentation, tracking and classification in microscopy built on [Segment Anything 2 (SAM2)](https://ai.meta.com/sam2/).
+Segment, track and classify objects in microscopy images interactively with a few clicks, or automatically.
 
 We implement napari applications for:
 - interactive and automatic segmentation of 2d images and 3d volumes (Left: interactive cell segmentation, Middle: interactive mitochondria segmentation in EM)
@@ -26,7 +26,7 @@ The functionality of the previous version, based on the original [Segment Anythi
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/dfca3d9b-dba5-440b-b0f9-72a0683ac410" width="256">
 <img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/aefbf99f-e73a-4125-bb49-2e6592367a64" width="256">
 
-If you run into any problems or have questions regarding our tool please open an [issue](https://github.com/computational-cell-analytics/micro-sam/issues/new/choose) on Github or reach out via [image.sc](https://forum.image.sc/) using the tag `micro-sam`, and tagging [@constantinpape](https://forum.image.sc/u/constantinpape/summary) and [@anwai98](https://forum.image.sc/u/anwai98/summary).
+If you run into any problems or have questions about our tool, please open an [issue](https://github.com/computational-cell-analytics/micro-sam/issues/new/choose) on GitHub or contact us via [image.sc](https://forum.image.sc/) using the tag `micro-sam`, and tagging [@anwai98](https://forum.image.sc/u/anwai98/summary) and [@constantinpape](https://forum.image.sc/u/constantinpape/summary).
 You can follow recent updates on `micro_sam` in our [news feed](https://forum.image.sc/t/microsam-news-feed).
 
 ## Installation and Usage
@@ -48,29 +48,27 @@ Everyone participating in this project is expected to follow our [Code of Conduc
 
 ## Citation
 
-If you are using this repository in your research please cite
-- our [μSAM2 paper](https://doi.org/10.64898/2026.11.12.766082) (preprint on bioRxiv)
-- our [original μSAM paper](https://www.nature.com/articles/s41592-024-02580-4) (published in Nature Methods)
+If you use this repository in your research, please cite
+- our [μSAM2 preprint](https://doi.org/10.64898/2026.11.12.766082)
+- our [μSAM publication](https://www.nature.com/articles/s41592-024-02580-4) (published in Nature Methods)
 - and the [Segment Anything 2 publication](https://arxiv.org/abs/2408.00714).
 - If you use automatic tracking, please also cite [Trackastra](https://arxiv.org/abs/2405.15700).
 - If you use automatic prompt generation (APG), please also cite [our APG paper](https://openreview.net/forum?id=xFO3DFZN45).
-- If you use the SAM1 functionality in `micro_sam.v1`, please also cite the [original Segment Anything publication](https://arxiv.org/abs/2304.02643), and [Mobile SAM](https://arxiv.org/abs/2306.14289) if you use a `vit_t` model.
+- If you use the SAM1 functionality in `micro_sam.v1`, please also cite the [Segment Anything publication](https://arxiv.org/abs/2304.02643), and [MobileSAM](https://arxiv.org/abs/2306.14289) if you use a `vit_t` model.
 
 
 ## Related Projects
 
-There are a few other napari plugins build around Segment Anything:
-- https://github.com/MIC-DKFZ/napari-sam (2d and 3d support)
-- https://github.com/royerlab/napari-segment-anything (only 2d support)
-- https://github.com/hiroalchem/napari-SAM4IS
+There is one other napari plugin built around Segment Anything 2:
+- https://github.com/royerlab/napari-segment-anything-2 (2d and video support)
 
-Compared to these we support more applications (2d, 3d, tracking and classification), and provide finetuning methods and finetuned models for microscopy data.
-[WebKnossos](https://webknossos.org/) and [QuPath](https://qupath.github.io/) also offer integration of Segment Anything for interactive segmentation.
+Compared to this plugin we support more applications (2d, 3d, tracking and classification), and provide finetuning methods and finetuned models for microscopy data.
+[WebKnossos](https://webknossos.org/), [QuPath](https://github.com/ksugar/qupath-extension-sam) and [Fiji](https://github.com/segment-anything-models-java/SAMJ-IJ) also integrate Segment Anything 2 for interactive segmentation, mainly in 2d.
 
 We have also built follow-up work that is based on `micro_sam`:
 - https://github.com/computational-cell-analytics/patho-sam - improves SAM for histopathology.
 - https://github.com/computational-cell-analytics/medico-sam - improves SAM for medical imaging.
-- https://github.com/computational-cell-analytics/peft-sam - studies parameter efficient fine-tuning for SAM.
+- https://github.com/computational-cell-analytics/peft-sam - studies parameter-efficient finetuning for SAM.
 
 ## Release Overview
 

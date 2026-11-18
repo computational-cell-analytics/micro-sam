@@ -27,7 +27,7 @@ As a rule of thumb:
 ## Models of the Previous Version
 
 The SAM1 models of the previous version of `micro_sam` are still available in the `micro_sam.v1` subpackage and the `micro_sam v1` command line tools:
-- The original Segment Anything models: `vit_h`, `vit_l`, `vit_b` and `vit_t` (from [Mobile SAM](https://arxiv.org/abs/2306.14289)).
+- The original Segment Anything models: `vit_h`, `vit_l`, `vit_b` and `vit_t` (from [MobileSAM](https://arxiv.org/abs/2306.14289)).
 - The light microscopy models from [Segment Anything for Microscopy](https://www.nature.com/articles/s41592-024-02580-4): `vit_l_lm`, `vit_b_lm` and `vit_t_lm`.
 - The electron microscopy models: `vit_l_em_organelles`, `vit_b_em_organelles` and `vit_t_em_organelles`.
 - The medical imaging model from [MedicoSAM](https://arxiv.org/abs/2501.11734): `vit_b_medical_imaging`.
