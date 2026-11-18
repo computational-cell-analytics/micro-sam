@@ -12,14 +12,15 @@
 Tools for segmentation, tracking and classification in microscopy built on [Segment Anything 2 (SAM2)](https://ai.meta.com/sam2/).
 Segment, track and classify objects in microscopy images interactively with a few clicks, or automatically.
 
-We implement napari applications for:
+We implement a napari plugin for:
 - interactive and automatic segmentation of 2d images and 3d volumes
 - interactive and automatic tracking of cells in 2d timeseries
 - classification of segmented objects, for example into cell types
 - pixel classification, for example for tissue or region segmentation
 - batch annotation of all images in a folder with any of these tools
 
-We also provide the `micro-sam2` models, which are finetuned on microscopy data, and the `micro_sam` python library to apply them to your data and to finetune them.
+This functionality is powered by the `micro-sam2` models, which are trained on microscopy data, and the `micro_sam` python library which enables application to large datasets and finetuning on your data.
+
 The functionality of the previous version, based on the original [Segment Anything](https://segment-anything.com/) (SAM1), is still available in the `micro_sam.v1` subpackage and in the `micro_sam v1` command line tools.
 
 <table>
@@ -45,7 +46,9 @@ You can follow recent updates on `micro_sam` in our [news feed](https://forum.im
 
 Please check [the documentation](https://computational-cell-analytics.github.io/micro-sam/) for details on how to install and use `micro_sam`. You can also watch [the quickstart video](https://youtu.be/gcv0fa84mCc), [our virtual I2K workshop video](https://www.youtube.com/watch?v=dxjU4W7bCis&list=PLdA9Vgd1gxTbvxmtk9CASftUOl_XItjDN&index=33) or [all video tutorials](https://youtube.com/playlist?list=PLwYZXQJ3f36GQPpKCrSbHjGiH39X4XjSO&si=qNbB8IFXqAX33r_Z). The videos show the previous version, so the user interface differs from the current one.
 
-`micro_sam` works best with a GPU or on a Mac with an M-series chip. On a CPU it is slow, in particular for 3d segmentation.
+`micro_sam` works best on a computer with a GPU. It can be used on a normal laptop with a CPU, but will be slow for applications in 3D or for large images.
+Note: we are working on improving performance on Macbook with an M-series chip;
+it will be much faster there soon!
 
 
 ## Contributing
@@ -61,12 +64,15 @@ Everyone participating in this project is expected to follow our [Code of Conduc
 ## Citation
 
 If you use this repository in your research, please cite
-- our [μSAM2 preprint](https://doi.org/10.64898/2026.11.12.766082)
-- our [μSAM publication](https://www.nature.com/articles/s41592-024-02580-4) (published in Nature Methods)
-- and the [Segment Anything 2 publication](https://arxiv.org/abs/2408.00714).
+- our [μSAM2 preprint](https://doi.org/10.64898/2026.11.12.766082) (if you use μSAM2)
+- our [μSAM publication](https://www.nature.com/articles/s41592-024-02580-4) (μSAM1)
 - If you use automatic tracking, please also cite [Trackastra](https://arxiv.org/abs/2405.15700).
-- If you use automatic prompt generation (APG), please also cite [our μSAM++ paper](https://openreview.net/forum?id=xFO3DFZN45).
-- If you use the SAM1 functionality in `micro_sam.v1`, please also cite the [Segment Anything publication](https://arxiv.org/abs/2304.02643), and [MobileSAM](https://arxiv.org/abs/2306.14289) if you use a `vit_t` model.
+
+Other publications relevant for specific aspects:
+- The [SAM](https://arxiv.org/abs/2304.02643) and [SAM2](https://arxiv.org/abs/2408.00714) publications that describe the models we buid on for μSAM1 / μSAM2.
+- Our publication on the [Automatic Prompt Generation (APG)](https://openreview.net/forum?id=xFO3DFZN45) segmentation mode.
+- Our publication on interactive object and pixel classification: [μClass](https://arxiv.org/abs/2603.19802)
+- Our previous special-purpose models for [histopathology](https://arxiv.org/abs/2502.00408) and [medical imaging](https://ieeexplore.ieee.org/abstract/document/11303368).
 
 
 ## Related Projects

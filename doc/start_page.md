@@ -1,12 +1,12 @@
 # Segment Anything for Microscopy
 
-Segment Anything for Microscopy implements automatic and interactive annotation for microscopy data. It is built on [Segment Anything 2 (SAM2)](https://ai.meta.com/sam2/) by Meta AI and specializes it for microscopy and other biomedical imaging data.
+Segment Anything for Microscopy implements automatic and interactive analysis for microscopy data. It is built on [Segment Anything 2 (SAM2)](https://ai.meta.com/sam2/) by Meta AI and specializes it for microscopy and other biomedical imaging data.
 Its core components are:
-- The `micro_sam` tools for interactive data annotation, built as [napari](https://napari.org/stable/) plugin.
-- The `micro_sam` library to apply SAM2 to 2d and 3d data, to track objects over time, and to finetune it on your data.
-- The `micro-sam2` models, which are finetuned on publicly available microscopy data.
+- The `micro_sam` tools for interactive image analysis, built as [napari](https://napari.org/stable/) plugin.
+- The `micro-sam2` models, which are trained on publicly available microscopy data.
+- The `micro_sam` library to apply μSAM2 to 2d and 3d data, to track objects over time, and to finetune it on your data.
 
-Based on these components `micro_sam` enables fast interactive and automatic annotation for microscopy data, like interactive cell segmentation from bounding boxes:
+Based on these components `micro_sam` enables interactive and automatic segmentation, classification, and tracking in microscopy. Such as interactive cell segmentation from bounding boxes:
 
 ![box-prompts](https://github.com/computational-cell-analytics/micro-sam/assets/4263537/d04cb158-9f5b-4460-98cd-023c4f19cccd)
 
@@ -23,7 +23,6 @@ You can install `micro_sam` via conda:
 conda install -c conda-forge micro_sam
 ```
 For more details on the available installation options, check out [the installation section](#installation).
-Version 2.0 is not released on conda and pip yet, so this command installs the previous version 1.x. To use the current pre-release, [install it from source](#from-source).
 
 After installing `micro_sam`, you can start napari from within your environment using
 
@@ -56,10 +55,4 @@ You can also train models on your own data, see [here for details](#training-you
 
 ## Citation
 
-If you use `micro_sam` in your research, please cite
-- our [μSAM2 preprint](https://doi.org/10.64898/2026.11.12.766082)
-- our [μSAM publication](https://www.nature.com/articles/s41592-024-02580-4) (published in Nature Methods)
-- and the [Segment Anything 2 publication](https://arxiv.org/abs/2408.00714).
-- If you use automatic tracking, please also cite [Trackastra](https://arxiv.org/abs/2405.15700).
-- If you use automatic prompt generation (APG), please also cite [our μSAM++ paper](https://openreview.net/forum?id=xFO3DFZN45).
-- If you use the SAM1 functionality in `micro_sam.v1`, please also cite the [Segment Anything publication](https://arxiv.org/abs/2304.02643), and [MobileSAM](https://arxiv.org/abs/2306.14289) if you use a `vit_t` model.
+Please refer to [the citation section of our README](https://github.com/computational-cell-analytics/micro-sam#citation) for the up-to-date citation guidelines.
