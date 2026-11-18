@@ -960,7 +960,14 @@ class PromptableSegmentation3D:
                 )
 
     def _propagate_in_direction(
-        self, reverse, update_progress=None, early_stop_patience=None, z_range=None, seen_frames=None
+        self,
+        reverse,
+        update_progress=None,
+        early_stop_patience=None,
+        z_range=None,
+        seen_frames=None,
+        mask_threshold=0.0,
+        return_logits=False,
     ):
         """Run SAM2 propagation in one temporal direction, optionally stopping early.
 
@@ -981,9 +988,11 @@ class PromptableSegmentation3D:
                 to the end of the volume.
             seen_frames: Optional set of already-counted frame indices, shared across both directions,
                 so a frame processed in both (the conditioning frame) advances 'update_progress' once.
+            mask_threshold: The logit threshold that binarizes the masks. Early stopping uses it too.
+            return_logits: Return the float32 mask logits instead of the boolean masks.
 
         Returns:
-            Mapping from frame index to per-object boolean masks, in the order frames were yielded.
+            Mapping from frame index to per-object boolean masks (or logits), in the order frames were yielded.
         """
         video_segments = {}
         consecutive_empty = 0
@@ -995,9 +1004,13 @@ class PromptableSegmentation3D:
                 break
 
             # One transfer for the whole frame, rather than a host round trip per object.
-            binary = (out_mask_logits > 0.0).cpu().numpy()
-            per_object = {out_obj_id: binary[i] for i, out_obj_id in enumerate(out_obj_ids)}
-            video_segments[out_frame_idx] = per_object
+            if return_logits:
+                logits = out_mask_logits.float().cpu().numpy()
+                binary = logits > mask_threshold
+            else:
+                binary = (out_mask_logits > mask_threshold).cpu().numpy()
+            frame_output = logits if return_logits else binary
+            video_segments[out_frame_idx] = {obj_id: frame_output[i] for i, obj_id in enumerate(out_obj_ids)}
             # Counted once across both directions, which both yield the conditioning frame.
             if update_progress is not None and (seen_frames is None or out_frame_idx not in seen_frames):
                 update_progress(1)
@@ -1006,7 +1019,7 @@ class PromptableSegmentation3D:
 
             # A run of empty frames, not one: SAM2 can drop a mask momentarily and recover it.
             if early_stop_patience is not None:
-                frame_is_empty = not any(mask.any() for mask in per_object.values())
+                frame_is_empty = not binary.any()
                 consecutive_empty = consecutive_empty + 1 if frame_is_empty else 0
                 if consecutive_empty >= early_stop_patience:
                     break
@@ -1017,7 +1030,9 @@ class PromptableSegmentation3D:
 
         return video_segments
 
-    def propagate_prompts(self, update_progress=None, early_stop_patience=None, z_range=None):
+    def propagate_prompts(
+        self, update_progress=None, early_stop_patience=None, z_range=None, mask_threshold=0.0, return_logits=False
+    ):
         """Propagate the pushed prompts through the volume, one pass per conditioned slice.
 
         SAM2 propagates every object of a state from the earliest slice any of them is conditioned on,
@@ -1025,12 +1040,34 @@ class PromptableSegmentation3D:
         tracked - and have those results written into their memory - before they are conditioned, and
         would never be propagated backwards at all. So objects that share an anchor are propagated
         together and the rest get a state of their own.
+
+        SAM2 builds its memory from the sigmoid of the logits, not from the thresholded masks. So
+        thresholding the returned logits at 't' gives the masks of 'mask_threshold=t', except on the
+        slices that early stopping skipped. SAM2 sets all logits of a slice to -1024 where it predicts
+        that the object is absent, so a negative threshold does not recover such slices.
+
+        Args:
+            update_progress: Optional callback invoked with the number of newly processed slices.
+            early_stop_patience: Stop a direction after this many consecutive empty slices.
+                'None' propagates to the end of the volume.
+            z_range: An optional inclusive '(z_min, z_max)' bound on the propagated slices.
+            mask_threshold: The logit threshold that binarizes the masks. Early stopping uses it too.
+            return_logits: Return the float32 mask logits instead of the boolean masks. This keeps
+                4 bytes per pixel, object and slice, so use it only for a few objects.
+
+        Returns:
+            Mapping from slice index to {object id: mask (1, H, W)}. The video predictor pads non-square
+            slices to a square, so crop each mask to '[:, :H, :W]' of the original slice shape.
         """
+        propagate_kwargs = dict(
+            update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
+            mask_threshold=mask_threshold, return_logits=return_logits,
+        )
         groups = {}
         for object_id, frame in self._anchor_per_object().items():
             groups.setdefault(frame, []).append(object_id)
         if len(groups) <= 1:
-            return self._propagate_both_directions(update_progress, early_stop_patience, z_range)
+            return self._propagate_both_directions(**propagate_kwargs)
 
         # The active maps intentionally omit replaced prompts. Reconstruct from successful calls so
         # point batches, replacement boundaries and the previous-logit chain stay unchanged.
@@ -1039,28 +1076,24 @@ class PromptableSegmentation3D:
         video_segments = {}
         for object_ids in groups.values():
             self._replay_prompts(snapshot, set(object_ids))
-            for frame, per_object in self._propagate_both_directions(
-                update_progress, early_stop_patience, z_range
-            ).items():
+            for frame, per_object in self._propagate_both_directions(**propagate_kwargs).items():
                 video_segments.setdefault(frame, {}).update(per_object)
 
         self._replay_prompts(snapshot, set().union(*groups.values()))
         self._prompt_signatures = prompt_signatures
         return video_segments
 
-    def _propagate_both_directions(self, update_progress=None, early_stop_patience=None, z_range=None):
+    def _propagate_both_directions(self, **propagate_kwargs):
         # Shared across both directions, so the conditioning frame is counted once.
         seen_frames = set()
         forward_video_segments = self._propagate_in_direction(
-            reverse=False, update_progress=update_progress, early_stop_patience=early_stop_patience,
-            z_range=z_range, seen_frames=seen_frames,
+            reverse=False, seen_frames=seen_frames, **propagate_kwargs
         )
 
         reverse_video_segments = {}
         if len(forward_video_segments) < self.volume.shape[0]:  # Only if the forward pass fell short.
             reverse_video_segments = self._propagate_in_direction(
-                reverse=True, update_progress=update_progress, early_stop_patience=early_stop_patience,
-                z_range=z_range, seen_frames=seen_frames,
+                reverse=True, seen_frames=seen_frames, **propagate_kwargs
             )
             # Reversed, so it stitches onto the forward propagation.
             reverse_video_segments = dict(reversed(list(reverse_video_segments.items())))
@@ -1202,9 +1235,24 @@ class PromptableSegmentation3D:
 
         return seg
 
-    def predict(self, update_progress=None, early_stop_patience=None, z_range=None):
+    def predict(self, update_progress=None, early_stop_patience=None, z_range=None, mask_threshold=0.0):
+        """Propagate the pushed prompts and paint the objects into one label volume.
+
+        Where objects overlap, the object with the higher id wins.
+
+        Args:
+            update_progress: Optional callback invoked with the number of newly processed slices.
+            early_stop_patience: Stop a direction after this many consecutive empty slices.
+                'None' propagates to the end of the volume.
+            z_range: An optional inclusive '(z_min, z_max)' bound on the propagated slices.
+            mask_threshold: The logit threshold that binarizes the masks.
+
+        Returns:
+            The label volume, with the shape of the input volume.
+        """
         video_segments = self.propagate_prompts(
             update_progress=update_progress, early_stop_patience=early_stop_patience, z_range=z_range,
+            mask_threshold=mask_threshold,
         )
 
         # Indexed by slice id, so the frames early stopping skipped stay background rather than
@@ -1695,17 +1743,19 @@ class TiledPromptableSegmentation3D:
                     object_id=obj_id, refine=refine,
                 )
 
-    def predict(self, update_progress=None, early_stop_patience=None, z_range=None):
+    def predict(self, update_progress=None, early_stop_patience=None, z_range=None, mask_threshold=0.0):
         """Propagate the prompts in every active tile and stitch the results into the full volume.
 
         Object ids are preserved across tiles (the inner blocks are disjoint), so an object that was
         prompted in several tiles keeps one id and is merged across the tile boundaries.
+        'mask_threshold' is the logit threshold that binarizes the masks.
         """
         segmentation = np.zeros(self.shape, dtype="uint64")
 
         def predict_tile(tile_id, tile_update=None):
             return self._get_segmenter(tile_id).predict(
                 update_progress=tile_update, early_stop_patience=early_stop_patience, z_range=z_range,
+                mask_threshold=mask_threshold,
             )
 
         for tile_id, tile_seg in self.map_tiles(
