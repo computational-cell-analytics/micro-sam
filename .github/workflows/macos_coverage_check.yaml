@@ -1,0 +1,75 @@
+name: macos-coverage-check
+
+on:
+  push:
+    branches:
+      - ci-macos-diagnostics
+  workflow_dispatch:
+
+jobs:
+  coverage-check:
+    name: macos sample ${{ matrix.sample }}
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: [1, 2]
+    env:
+      TEST: "test/test_automatic_segmentation.py::TestAutomaticSegmentation::test_instance_segmentation_with_decoder_3d"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v1
+        env:
+          TMPDIR: ${{ runner.temp }}
+        with:
+          environment-file: "environment.yaml"
+          create-args: >-
+            python=3.12
+
+      - name: Install additional dev requirements
+        shell: bash -l {0}
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Install micro-sam
+        shell: bash -l {0}
+        run: pip install --no-deps -e .
+
+      - name: Runner hardware
+        run: |
+          sysctl hw.ncpu hw.memsize machdep.cpu.brand_string
+          memory_pressure | tail -3
+
+      - name: Coverage version and tracer
+        shell: bash -l {0}
+        run: |
+          python -m coverage --version
+          python -c "import coverage.tracer; print('C tracer available')" || echo "no C tracer"
+
+      - name: Without coverage
+        shell: bash -l {0}
+        run: pytest -o addopts="" -v --durations=1 "$TEST"
+
+      - name: With coverage
+        shell: bash -l {0}
+        run: pytest -v --durations=1 "$TEST"
+
+      - name: With coverage and the sys.monitoring core
+        shell: bash -l {0}
+        env:
+          COVERAGE_CORE: sysmon
+        run: pytest -v --durations=1 "$TEST"
+
+      - name: Without coverage again
+        shell: bash -l {0}
+        run: pytest -o addopts="" -v --durations=1 "$TEST"
+
+      - name: Memory pressure after the tests
+        if: always()
+        run: |
+          memory_pressure | tail -3
+          vm_stat | grep -E "compress|Swap|free"
