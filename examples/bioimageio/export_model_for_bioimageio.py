@@ -23,10 +23,11 @@ def export_micro_sam2_model():
 
 
 def export_own_micro_sam2_model():
-    """Export your own micro-sam2 model, for example the result of 'micro_sam train'."""
+    """Export your own micro-sam2 model from joint training."""
     from micro_sam.v2.bioimageio import export_sam2_model
 
-    # The checkpoint of joint or automatic training holds the model and the decoder.
+    # Use a joint-training checkpoint with full SAM2 weights and a UniSAM2 decoder.
+    # Automatic-training checkpoints lack the full SAM2 weights and are not supported.
     checkpoint_path = "./checkpoints/my_model/best.pt"
     if not os.path.exists(checkpoint_path):
         print(f"Train a model first, '{checkpoint_path}' does not exist.")

@@ -140,10 +140,13 @@ def annotator_devel():
     image, segmentation, annotations, model_type, embedding_path, tile_shape, halo = _get_3d_tiled_data()
 
     # 1. Get the micro-sam2 model.
-    predictor = get_sam2_image_predictor(get_sam2_model(model_type))
+    ndim = segmentation.ndim
+    predictor = get_sam2_model(model_type)
+    if ndim == 2:
+        predictor = get_sam2_image_predictor(predictor)
     # 2. Precompute the image embeddings.
     image_embeddings = precompute_image_embeddings(
-        predictor, image, save_path=embedding_path, tile_shape=tile_shape, halo=halo
+        predictor, image, save_path=embedding_path, ndim=ndim, tile_shape=tile_shape, halo=halo
     )
     # 3. Get the segmentation ids and the extracted features for the segmentations.
     seg_ids, features = core_clf.compute_object_features(image_embeddings, segmentation)
