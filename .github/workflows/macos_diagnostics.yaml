@@ -8,19 +8,29 @@ on:
 
 jobs:
   diagnostics:
-    name: ${{ matrix.os }} sample ${{ matrix.sample }}
-    runs-on: ${{ matrix.os }}
+    name: macos spotlight-${{ matrix.spotlight }} sample ${{ matrix.sample }}
+    runs-on: macos-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest]
-        sample: [1, 2, 3]
-        include:
-          - os: ubuntu-latest
-            sample: 1
+        spotlight: [on, off]
+        sample: [1, 2]
 
     steps:
+      - name: Disable Spotlight indexing
+        if: matrix.spotlight == 'off'
+        run: sudo mdutil -a -i off || true
+
+      - name: Start the resource sampler
+        run: |
+          nohup bash -c 'while true; do
+            echo "=== $(date +%H:%M:%S) $(uptime | sed "s/.*load/load/")"
+            sysctl -n vm.swapusage
+            ps -Ao pcpu,rss,comm -r | head -6 | sed "s|/.*/||"
+            sleep 60
+          done' > "$RUNNER_TEMP/sampler.log" 2>&1 &
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -41,48 +51,12 @@ jobs:
         shell: bash -l {0}
         run: pip install --no-deps -e .
 
-      - name: Runner hardware
-        shell: bash -l {0}
-        run: |
-          uptime
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            sysctl hw.ncpu hw.physicalcpu hw.logicalcpu hw.memsize machdep.cpu.brand_string
-            sysctl -a | grep -E "hw.perflevel[0-9].(name|physicalcpu|logicalcpu)" || true
-          else
-            nproc
-            lscpu | head -20
-          fi
+      - name: Run v1 tests
+        uses: aganders3/headless-gui@v2
+        with:
+          shell: bash -l {0}
+          run: pytest -m "v1" --durations=30
 
-      - name: Benchmark with the default OpenMP wait policy
-        shell: bash -l {0}
-        run: python .github/scripts/macos_diagnostics.py
-
-      - name: Benchmark with OMP_WAIT_POLICY=PASSIVE
-        shell: bash -l {0}
-        env:
-          OMP_WAIT_POLICY: PASSIVE
-        run: python .github/scripts/macos_diagnostics.py
-
-      - name: Benchmark with KMP_BLOCKTIME=0
-        shell: bash -l {0}
-        env:
-          KMP_BLOCKTIME: "0"
-        run: python .github/scripts/macos_diagnostics.py
-
-      - name: Slow v1 test with the default OpenMP wait policy
-        shell: bash -l {0}
-        run: |
-          pytest -o addopts="" -v --durations=0 \
-            "test/test_automatic_segmentation.py::TestAutomaticSegmentation::test_instance_segmentation_with_decoder_3d"
-
-      - name: Slow v1 test with OMP_WAIT_POLICY=PASSIVE
-        shell: bash -l {0}
-        env:
-          OMP_WAIT_POLICY: PASSIVE
-        run: |
-          pytest -o addopts="" -v --durations=0 \
-            "test/test_automatic_segmentation.py::TestAutomaticSegmentation::test_instance_segmentation_with_decoder_3d"
-
-      - name: Runner load after the benchmarks
-        shell: bash -l {0}
-        run: uptime
+      - name: Print the resource sampler log
+        if: always()
+        run: cat "$RUNNER_TEMP/sampler.log"
