@@ -8,7 +8,7 @@ dependencies:
     - click
     - imagecodecs
     - magicgui
-    - napari >=0.7.1,<0.10
+    - napari >=0.7.1,<0.11
     - natsort
     - pip
     - pooch
