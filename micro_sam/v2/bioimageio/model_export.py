@@ -33,6 +33,9 @@ DEFAULTS = {
     "description": "Segment Anything 2 for Microscopy (micro-sam2), for interactive and automatic segmentation",
     "cite": [
         spec.CiteEntry(
+            text="Archit et al. Segment Anything for Microscopy 2", doi=spec.Doi("10.64898/2026.11.12.766082"),
+        ),
+        spec.CiteEntry(
             text="Archit et al. Segment Anything for Microscopy", doi=spec.Doi("10.1038/s41592-024-02580-4"),
         ),
     ],

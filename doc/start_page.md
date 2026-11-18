@@ -57,7 +57,8 @@ You can also train models on your own data, see [here for details](#training-you
 ## Citation
 
 If you are using `micro_sam` in your research please cite
-- our [paper](https://www.nature.com/articles/s41592-024-02580-4) (published in Nature Methods)
+- our [μSAM2 paper](https://doi.org/10.64898/2026.11.12.766082) (preprint on bioRxiv)
+- our [original μSAM paper](https://www.nature.com/articles/s41592-024-02580-4) (published in Nature Methods)
 - and the [Segment Anything 2 publication](https://arxiv.org/abs/2408.00714).
 - If you use automatic tracking, please also cite [Trackastra](https://arxiv.org/abs/2405.15700).
 - If you use automatic prompt generation (APG), please also cite [our APG paper](https://openreview.net/forum?id=xFO3DFZN45).
