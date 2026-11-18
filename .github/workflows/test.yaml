@@ -29,10 +29,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup micromamba
-        uses: mamba-org/setup-micromamba@v1
+        uses: mamba-org/setup-micromamba@v3
         # The macOS tests are about 3x slower with threadpoolctl 3.8 (2026-11-11), so pin it to 3.7.
         # Build pip packages on the main disk: the /tmp of ubuntu-latest is too small for the torch wheels.
         env:
@@ -86,7 +86,9 @@ jobs:
       # The tests run in two parts: the SAM1 tests (vit_t / vit_t_lm), marked with 'pytest.mark.v1',
       # and everything else, i.e. the SAM2 tests (hvit_t / hvit_t_cells) and the annotator.
       # The v2 part also runs when the v1 part fails, and appends to the v1 coverage.
+      # macOS skips the v1 part: its CPU torch has no MKLDNN, so the v1 decoder tests take ~30 min there.
       - name: Run v1 tests
+        if: runner.os != 'macOS'
         uses: aganders3/headless-gui@v2
         with:
           shell: bash -l {0}
@@ -100,9 +102,9 @@ jobs:
           run: pytest -m "not v1" --cov-append
 
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v3
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          file: ./coverage.xml
+          files: ./coverage.xml
           verbose: false
           fail_ci_if_error: false

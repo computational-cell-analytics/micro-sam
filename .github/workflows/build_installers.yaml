@@ -28,7 +28,7 @@ jobs:
 
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
       # - name: lint check
@@ -40,10 +40,10 @@ jobs:
 
       - name: setup conda
         if: matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest'
-        uses: conda-incubator/setup-miniconda@v2
+        uses: conda-incubator/setup-miniconda@v4
         with:
           miniconda-version: "latest"
-          auto-activate-base: true
+          auto-activate: true
           activate-environment: ""
           channels: conda-forge
           mamba-version: "*"
@@ -91,7 +91,7 @@ jobs:
           constructor --conda-exe=$(which mamba) --output-dir ./${{ matrix.os }}_x86_64 .
 
       - name: upload installer
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.os }}_x86_64
           path: ./deployment/${{ matrix.os }}_x86_64
