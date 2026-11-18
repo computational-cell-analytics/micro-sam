@@ -122,6 +122,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         self.assertEqual(mask.shape, instances.shape)
         self.assertGreater(instances.max(), 0)
 
+    @pytest.mark.slow
     def test_tiled_instance_segmentation_with_decoder_2d(self):
         from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 
@@ -179,6 +180,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         self.assertEqual(labels.shape, instances.shape)
         self.assertGreater(instances.max(), 0)
 
+    @pytest.mark.slow
     @unittest.skipUnless(WITH_TRACKASTRA, "Needs trackastra")
     def test_automatic_tracking(self):
         from micro_sam.v1.automatic_segmentation import automatic_tracking, get_predictor_and_segmenter
@@ -191,6 +193,7 @@ class TestAutomaticSegmentation(unittest.TestCase):
         self.assertEqual(labels.shape, instances.shape)
         self.assertGreater(instances.max(), 0)
 
+    @pytest.mark.slow
     def test_tiled_instance_segmentation_with_decoder_3d(self):
         from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
 

@@ -133,6 +133,7 @@ class TestInstanceSegmentation(unittest.TestCase):
             InstanceSegmentationWithDecoder, generate_kwargs=generate_kwargs, with_decoder=True
         )
 
+    @pytest.mark.slow
     def test_tiled_instance_segmentation_with_decoder(self):
         from micro_sam.v1.instance_segmentation import TiledInstanceSegmentationWithDecoder
         generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
@@ -145,6 +146,7 @@ class TestInstanceSegmentation(unittest.TestCase):
         generate_kwargs = dict(foreground_threshold=0.8, min_size=100)
         self._test_instance_segmentation(AutomaticPromptGenerator, generate_kwargs=generate_kwargs, with_decoder=True)
 
+    @pytest.mark.slow
     def test_tiled_automatic_prompt_generator(self):
         from micro_sam.v1.instance_segmentation import TiledAutomaticPromptGenerator
         generate_kwargs = dict(foreground_threshold=0.8, min_size=100)

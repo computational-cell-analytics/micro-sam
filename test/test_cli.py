@@ -84,6 +84,7 @@ class TestCLI(unittest.TestCase):
         for i in range(n_images):
             self.assertTrue(os.path.exists(os.path.join(emb_path3, f"image-{i}.zarr")))
 
+    @pytest.mark.slow
     @pytest.mark.v1
     @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
     def test_v1_automatic_segmentation(self):
@@ -141,6 +142,7 @@ class TestCLI(unittest.TestCase):
             self.assertEqual(_parse_shape(value), (0, 0))
         self.assertEqual(_parse_shape("none", ndim=3), (0, 0, 0))
 
+    @pytest.mark.slow
     def test_automatic_segmentation(self):
         # Create 1 image as testdata.
         im_path = os.path.join(self.tmp_folder, "image.tif")

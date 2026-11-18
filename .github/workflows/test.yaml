@@ -28,6 +28,22 @@ jobs:
         python-version: ["3.12"]
 
     steps:
+      # Spotlight indexes the fresh disk of a macOS runner and competes with the tests for the CPU.
+      - name: Disable Spotlight indexing
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off || true
+
+      # Test: sample the load of the macOS runner every minute, to see what competes with the tests.
+      - name: Start the resource sampler
+        if: runner.os == 'macOS'
+        run: |
+          nohup bash -c 'while true; do
+            echo "=== $(date +%H:%M:%S) $(uptime | sed "s/.*load/load/")"
+            sysctl -n vm.swapusage
+            ps -Ao pcpu,rss,comm -r | head -6 | sed "s|/.*/||"
+            sleep 60
+          done' > "$RUNNER_TEMP/sampler.log" 2>&1 &
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -86,18 +102,23 @@ jobs:
       # The tests run in two parts: the SAM1 tests (vit_t / vit_t_lm), marked with 'pytest.mark.v1',
       # and everything else, i.e. the SAM2 tests (hvit_t / hvit_t_cells) and the annotator.
       # The v2 part also runs when the v1 part fails, and appends to the v1 coverage.
+      # The macOS runners vary up to 3x in speed, so macOS skips the slow tests. Linux and Windows run them.
       - name: Run v1 tests
         uses: aganders3/headless-gui@v2
         with:
           shell: bash -l {0}
-          run: pytest -m "v1"
+          run: pytest -m "v1${{ runner.os == 'macOS' && ' and not slow' || '' }}"
 
       - name: Run v2 tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         uses: aganders3/headless-gui@v2
         with:
           shell: bash -l {0}
-          run: pytest -m "not v1" --cov-append
+          run: pytest -m "not v1${{ runner.os == 'macOS' && ' and not slow' || '' }}" --cov-append
+
+      - name: Print the resource sampler log
+        if: ${{ always() && runner.os == 'macOS' }}
+        run: cat "$RUNNER_TEMP/sampler.log"
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v3

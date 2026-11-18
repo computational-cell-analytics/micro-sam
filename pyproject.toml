@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [tool.pytest.ini_options]
 addopts = "-v --durations=10 --cov=micro_sam --cov-report xml:coverage.xml --cov-report term-missing"
 markers = [
-    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "slow: marks slow tests that the macOS CI deselects, they still run on Linux and Windows",
     "gui: marks GUI tests (deselect with '-m \"not gui\"')",
     "v1: marks SAM1 tests (vit_*), run in the 'v1' CI suite; everything else runs in the 'v2' suite with '-m \"not v1\"'",
 ]
