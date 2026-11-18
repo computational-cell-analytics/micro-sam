@@ -74,11 +74,6 @@ There is one other napari plugin built around Segment Anything 2:
 Compared to this plugin we support more applications (2d, 3d, tracking and classification), and provide finetuning methods and finetuned models for microscopy data.
 [WebKnossos](https://webknossos.org/), [QuPath](https://github.com/ksugar/qupath-extension-sam) and [Fiji](https://github.com/segment-anything-models-java/SAMJ-IJ) also integrate Segment Anything 2 for interactive segmentation, mainly in 2d.
 
-We have also built follow-up work that is based on `micro_sam`:
-- https://github.com/computational-cell-analytics/patho-sam - improves SAM for histopathology.
-- https://github.com/computational-cell-analytics/medico-sam - improves SAM for medical imaging.
-- https://github.com/computational-cell-analytics/peft-sam - studies parameter-efficient finetuning for SAM.
-
 ## Release Overview
 
 You can find an overview of changes introduced in previous releases [here](https://github.com/computational-cell-analytics/micro-sam/blob/main/RELEASE_OVERVIEW.md).
