@@ -82,12 +82,13 @@ class Recorder:
 
     def save(self, path, out_size=400):
         frames = [f.resize((out_size, out_size), Image.LANCZOS) for f in self.frames]
-        # A shared palette from frames across the whole recording avoids the flicker of per-frame palettes.
-        picks = [frames[i] for i in np.linspace(0, len(frames) - 1, 8).astype(int)]
-        mosaic = Image.new("RGB", (out_size * len(picks), out_size))
-        for i, f in enumerate(picks):
+        # A shared palette from all frames avoids the flicker of per-frame palettes.
+        # Use octree, not median cut: median cut spends the palette on the gray image texture,
+        # so rare label colors (e.g. a dark brown object) map to wrong colors and show specks.
+        mosaic = Image.new("RGB", (out_size * len(frames), out_size))
+        for i, f in enumerate(frames):
             mosaic.paste(f, (i * out_size, 0))
-        palette_src = mosaic.quantize(colors=255, method=Image.MEDIANCUT)
+        palette_src = mosaic.quantize(colors=255, method=Image.FASTOCTREE)
         frames = [f.quantize(palette=palette_src, dither=Image.NONE) for f in frames]
         frames[0].save(
             path, save_all=True, append_images=frames[1:], duration=self.durations, loop=0, optimize=True,

@@ -13,8 +13,8 @@ Tools for segmentation, tracking and classification in microscopy built on [Segm
 Segment, track and classify objects in microscopy images interactively with a few clicks, or automatically.
 
 We implement napari applications for:
-- interactive and automatic segmentation of 2d images and 3d volumes (Left: interactive cell segmentation, Middle: interactive mitochondria segmentation in EM)
-- interactive and automatic tracking of cells in 2d timeseries (Right: interactive cell tracking)
+- interactive and automatic segmentation of 2d images and 3d volumes
+- interactive and automatic tracking of cells in 2d timeseries
 - classification of segmented objects, for example into cell types
 - pixel classification, for example for tissue or region segmentation
 - batch annotation of all images in a folder with any of these tools
@@ -22,9 +22,20 @@ We implement napari applications for:
 We also provide the `micro-sam2` models, which are finetuned on microscopy data, and the `micro_sam` python library to apply them to your data and to finetune them.
 The functionality of the previous version, based on the original [Segment Anything](https://segment-anything.com/) (SAM1), is still available in the `micro_sam.v1` subpackage and in the `micro_sam v1` command line tools.
 
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/d04cb158-9f5b-4460-98cd-023c4f19cccd" width="256">
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/dfca3d9b-dba5-440b-b0f9-72a0683ac410" width="256">
-<img src="https://github.com/computational-cell-analytics/micro-sam/assets/4263537/aefbf99f-e73a-4125-bb49-2e6592367a64" width="256">
+<table>
+<tr>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/dev/doc/gifs/interactive_2d.gif" width="256"><br>Interactive cell segmentation with box prompts</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/dev/doc/gifs/interactive_3d.gif" width="256"><br>Interactive mitochondria segmentation in a 3d EM volume</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/dev/doc/gifs/interactive_tracking.gif" width="256"><br>Interactive tracking of a dividing cell</td>
+</tr>
+<tr>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/dev/doc/gifs/object_classification.gif" width="256"><br>Object classification of round and elongated cells, with corrections</td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/dev/doc/gifs/pixel_classification.gif" width="256"><br>Pixel classification of tissue in histopathology, with corrections</td>
+<td></td>
+</tr>
+</table>
+
+The GIFs are recorded with [scripts/readme_gifs/make_gifs.py](scripts/readme_gifs/make_gifs.py).
 
 If you run into any problems or have questions about our tool, please open an [issue](https://github.com/computational-cell-analytics/micro-sam/issues/new/choose) on GitHub or contact us via [image.sc](https://forum.image.sc/) using the tag `micro-sam`, and tagging [@anwai98](https://forum.image.sc/u/anwai98/summary) and [@constantinpape](https://forum.image.sc/u/constantinpape/summary).
 You can follow recent updates on `micro_sam` in our [news feed](https://forum.image.sc/t/microsam-news-feed).
