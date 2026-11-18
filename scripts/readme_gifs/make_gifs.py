@@ -1,21 +1,23 @@
 """Record the demo GIFs of the README with the napari annotation tools.
 
-Usage: python make_gifs.py 2d 3d tracking objects pixels
+Usage: python make_gifs.py 2d 3d tracking objects pixels batch
 
 Run each GIF in its own process, so that each tool starts with a fresh state.
 The script needs a display and a GPU.
-The pixel classification GIF needs your own HuggingFace access to UNI2-h and the BCSS data in BCSS_ROOT.
+The pixel classification GIF needs your own HuggingFace access to UNI2-h.
+The pixel and batch classification GIFs need the BCSS and PUMA data.
 """
 import io
 import os
 import sys
 import zipfile
 
+import h5py
 import numpy as np
 import imageio.v3 as imageio
 from skimage.draw import disk
-from PIL import Image, ImageDraw
 from skimage.transform import resize
+from PIL import Image, ImageDraw, ImageFont
 from scipy.ndimage import distance_transform_edt
 from skimage.measure import label as connected_components, regionprops
 
@@ -25,10 +27,11 @@ from qtpy.QtWidgets import QApplication
 from elf.io import open_file
 
 import micro_sam.util as util
+from micro_sam.classical_features import OBJECT_FEATURES
 from micro_sam.sam_annotator._state import AnnotatorState
 from micro_sam.sam_annotator import annotator, annotator_tracking
 from micro_sam.sam_annotator.pixel_classifier import pixel_classifier
-from micro_sam.sam_annotator.object_classifier import object_classifier
+from micro_sam.sam_annotator.object_classifier import object_classifier, batch_object_classifier
 from micro_sam.v2.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 from micro_sam.sample_data import (
     fetch_3d_example_data, fetch_hela_2d_example_data, fetch_livecell_example_data, fetch_tracking_example_data
@@ -50,6 +53,12 @@ BCSS_WINDOW = (3072, 2048, 1024)  # y, x, size
 # The BCSS classes in the groups of Figure 4: 1 = tumor, 2 = stroma, 3 = inflammatory infiltrate, 4 = necrosis.
 BCSS_GROUPS = {1: 1, 19: 1, 20: 1, 2: 2, 3: 3, 10: 3, 11: 3, 4: 4}
 
+# 4 tiles (512 x 512 pixels at 40x) of one metastatic melanoma ROI of PUMA, with its nucleus classes.
+PUMA_TILES = "/mnt/lustre-grete/usr/u12090/few_shot_sam/data/puma/train.h5"
+PUMA_NAMES = [f"training_set_metastatic_roi_047_{y}_{x}" for y, x in [(0, 0), (0, 1), (1, 0), (1, 1)]]
+# The PUMA classes stroma (1), tumor (2) and lymphocyte (5). Class 1 is the lymphocytes, class 2 the other nuclei.
+PUMA_GROUPS = {5: 1, 1: 2, 2: 2}
+
 # The arrow cursor as a polygon in pixels, with the tip at (0, 0).
 CURSOR = [(0, 0), (0, 17), (4, 13), (7, 20), (10, 19), (7, 12), (12, 12)]
 
@@ -67,6 +76,9 @@ class Recorder:
         self.size = size
         self.frames, self.durations = [], []
         self.cursor = None
+        # An optional text in the top left corner of the frames.
+        self.label = None
+        self.font = ImageFont.load_default(size=28)
         # A hidden viewer renders a black canvas.
         viewer.show()
         viewer.window._qt_window.resize(size + 700, size + 300)
@@ -111,7 +123,12 @@ class Recorder:
             px, py = self.to_screen(self.cursor, shot.shape)
             poly = [(px + dx, py + dy) for dx, dy in CURSOR]
             ImageDraw.Draw(img).polygon(poly, fill=(255, 255, 255), outline=(0, 0, 0))
-        self.frames.append(img.crop((x0, y0, x0 + s, y0 + s)))
+        img = img.crop((x0, y0, x0 + s, y0 + s))
+        if self.label is not None:
+            ImageDraw.Draw(img).text(
+                (14, 10), self.label, font=self.font, fill=(255, 255, 255), stroke_width=3, stroke_fill=(0, 0, 0)
+            )
+        self.frames.append(img)
         self.durations.append(duration)
 
     def hold(self, duration):
@@ -566,12 +583,91 @@ def gif_pixel_classifier():
     viewer.close()
 
 
+def load_puma_tile(f, name):
+    """Load a PUMA tile with the nuclei of PUMA_GROUPS, and the reference class of each nucleus."""
+    image, instances, semantic = f[name]["raw"][:], f[name]["instances"][:], f[name]["semantic"][:]
+    seg, reference = np.zeros_like(instances), {}
+    for p in regionprops(instances):
+        value = int(np.bincount(semantic[p.coords[:, 0], p.coords[:, 1]]).argmax())
+        if value in PUMA_GROUPS:
+            seg[p.coords[:, 0], p.coords[:, 1]] = p.label
+            reference[p.label] = PUMA_GROUPS[value]
+    return image, seg, reference
+
+
+def gif_batch_nuclei():
+    with h5py.File(PUMA_TILES, "r") as f:
+        images, segmentations, references = zip(*[load_puma_tile(f, name) for name in PUMA_NAMES])
+    n_images, n_classes = len(images), 2
+
+    viewer = napari.Viewer(show=False)
+    output_folder = os.path.join(EMB_DIR, "batch-nuclei")
+    embedding_paths = [os.path.join(EMB_DIR, f"puma-{name}-{CELL_MODEL}.zarr") for name in PUMA_NAMES]
+    batch_object_classifier(
+        list(images), list(segmentations), output_folder, embedding_paths=embedding_paths, model_type=CELL_MODEL,
+        viewer=viewer, return_viewer=True,
+    )
+    state = AnnotatorState()
+    # The size, the intensity and the shape of a nucleus tell the lymphocytes apart from the other nuclei.
+    state.annotator._set_options(False, None, False, classical_features_val=list(OBJECT_FEATURES))
+    rec = Recorder(viewer)
+    rec.fit(images[0].shape[:2])
+    annotations = viewer.layers["annotations"]
+
+    def click(index, label, value):
+        pos = inner_point(segmentations[index] == label)[0]
+        rec.move(pos, steps=5)
+        paint_disc(annotations, pos, value, radius=5)
+        rec.snap(250)
+
+    def mistakes(index):
+        seg, prediction = segmentations[index], viewer.layers["prediction"].data
+        wrong = [
+            p for p in regionprops(seg)
+            if np.median(prediction[p.coords[:, 0], p.coords[:, 1]]) != references[index][p.label]
+        ]
+        accuracy = 1 - len(wrong) / len(references[index])
+        print("Image", index + 1, "accuracy:", round(accuracy, 2))
+        return wrong
+
+    def train():
+        rec.hold(200)
+        state.annotator._run_train_and_predict()
+        viewer.layers["segmentation"].visible = False
+        rec.snap(2000)
+
+    # On the first image, click 5 nuclei of each class.
+    rec.label = f"Image 1 / {n_images}"
+    rec.snap(600, cursor=(400, 80))
+    for value in range(1, n_classes + 1):
+        for label in [label for label, ref in references[0].items() if ref == value][:5]:
+            click(0, label, value)
+    train()
+    mistakes(0)
+
+    # The next images start with the prediction of the classifier, which keeps the earlier annotations.
+    for index in range(1, n_images):
+        state.widgets["batch_next"]()
+        rec.label = f"Image {index + 1} / {n_images}"
+        rec.snap(2000)
+        wrong = mistakes(index)
+        if index < n_images - 1:
+            for p in wrong[:5]:
+                click(index, p.label, references[index][p.label])
+            train()
+            mistakes(index)
+    rec.hold(1000)
+    rec.snap(100, cursor=None)
+    rec.save(os.path.join(OUT_DIR, "batch_object_classification.gif"))
+    viewer.close()
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs(EMB_DIR, exist_ok=True)
     gifs = {
         "2d": gif_2d_boxes, "3d": gif_3d_em, "tracking": gif_tracking,
-        "objects": gif_object_classifier, "pixels": gif_pixel_classifier,
+        "objects": gif_object_classifier, "pixels": gif_pixel_classifier, "batch": gif_batch_nuclei,
     }
     for name in sys.argv[1:]:
         gifs[name]()

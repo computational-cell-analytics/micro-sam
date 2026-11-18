@@ -31,7 +31,7 @@ The functionality of the previous version, based on the original [Segment Anythi
 <tr>
 <td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/object_classification.gif" width="256"><br>Object Classification with Corrections</td>
 <td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/pixel_classification.gif" width="256"><br>Pixel Classification in Histopathology</td>
-<td></td>
+<td align="center"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/gifs/batch_object_classification.gif" width="256"><br>Batch Nucleus Classification in Histopathology</td>
 </tr>
 </table>
 
