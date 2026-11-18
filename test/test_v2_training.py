@@ -642,5 +642,15 @@ def test_the_trainer_trains_in_bfloat16_without_a_scaler_on_ampere(monkeypatch):
     assert calls == [("cuda", torch.bfloat16)]
 
 
+def test_the_trainer_rejects_inputs_in_the_8bit_range():
+    trainer = _make_sam2_trainer("cpu")
+
+    assert trainer._check_input_normalization(torch.rand(1, 1, 8, 8), False) is True
+    with pytest.raises(ValueError, match=r"expects inputs in \[0, 1\]"):
+        trainer._check_input_normalization(255 * torch.rand(1, 1, 8, 8), False)
+    with pytest.warns(UserWarning, match="minimum"):
+        trainer._check_input_normalization(torch.rand(1, 1, 8, 8) - 0.5, False)
+
+
 if __name__ == "__main__":
     unittest.main()

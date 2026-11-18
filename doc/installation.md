@@ -8,6 +8,8 @@ There are four ways to install `micro_sam`:
 
 You can find more information on the installation and how to troubleshoot it in [the FAQ section](#installation-questions).
 
+**IMPORTANT**: Version 2.0 (`micro-sam2`) is not released on pip and conda yet, so these install the previous version 1.x. To use the current pre-release, [install from source](#from-source) and check out the `v2.0.0a1` tag after cloning the repository (`git checkout v2.0.0a1`).
+
 ## From pip
 
 `pip` is the default python package manager. You can install `micro_sam` via pip with the command:
@@ -17,7 +19,7 @@ pip install micro_sam
 
 Note: when using pip you have to manage your python environments yourself. For example, you could create a conda environment and install `micro_sam` via pip in there, or use `venv` for this.
 
-To use the `vit_t` (MobileSAM) model, you have to additionally install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` was installed via pip. It is not available on PyPI, so it has to be installed from GitHub:
+To use the SAM1 `vit_t` (MobileSAM) model of the previous version (`micro_sam.v1`), you have to additionally install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` was installed via pip. It is not available on PyPI, so it has to be installed from GitHub:
 ```bash
 pip install git+https://github.com/ChaoningZhang/MobileSAM.git
 ```

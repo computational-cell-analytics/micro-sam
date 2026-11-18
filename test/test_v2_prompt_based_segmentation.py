@@ -601,6 +601,75 @@ def test_early_stopping_tolerates_a_single_dropped_mask():
     assert segments[3][1].any() and segments[4][1].any()
 
 
+class LogitPropagationPredictor:
+    """A stand-in predictor whose propagation yields fixed per-frame logits for two objects."""
+
+    def __init__(self, logits):
+        self.logits = logits  # (Z, n_objects, 1, H, W)
+
+    def propagate_in_video(self, inference_state, reverse=False, release_stale_mask_memory=False):
+        frames = range(len(self.logits))
+        for frame_idx in (reversed(frames) if reverse else frames):
+            yield frame_idx, [1, 2], torch.as_tensor(self.logits[frame_idx])
+
+
+def _logit_segmenter(logits, shape):
+    segmenter = PromptableSegmentation3D.__new__(PromptableSegmentation3D)
+    segmenter.predictor = LogitPropagationPredictor(logits)
+    segmenter.inference_state = {}
+    segmenter.volume = np.zeros(shape, dtype="uint8")
+    segmenter._anchor_per_object = lambda: {1: 0, 2: 0}
+    return segmenter
+
+
+def _random_logits(n_frames=5, size=8):
+    return np.random.default_rng(0).normal(size=(n_frames, 2, 1, size, size)).astype("float32")
+
+
+def test_propagate_prompts_returns_the_logits():
+    logits = _random_logits()
+    segments = _logit_segmenter(logits, (5, 8, 8)).propagate_prompts(return_logits=True)
+
+    assert sorted(segments) == list(range(5))
+    for frame, per_object in segments.items():
+        assert sorted(per_object) == [1, 2]
+        for i, object_id in enumerate([1, 2]):
+            assert per_object[object_id].dtype == np.float32
+            np.testing.assert_array_equal(per_object[object_id], logits[frame, i])
+
+
+@pytest.mark.parametrize("threshold", [-0.5, 0.0, 0.7])
+def test_predict_threshold_matches_thresholded_logits(threshold):
+    # The volume is not square, so the predictor's square output is cropped to (6, 8).
+    logits = _random_logits()
+    shape = (5, 6, 8)
+    seg = _logit_segmenter(logits, shape).predict(mask_threshold=threshold)
+
+    segments = _logit_segmenter(logits, shape).propagate_prompts(return_logits=True)
+    expected = np.zeros(shape, dtype="uint64")
+    for frame, per_object in segments.items():
+        for object_id, object_logits in per_object.items():
+            expected[frame][object_logits[0, :6, :8] > threshold] = object_id
+
+    np.testing.assert_array_equal(seg, expected)
+    assert seg.any()
+
+
+def test_early_stopping_uses_the_mask_threshold():
+    # Logits of 1.0 on every frame: empty above a threshold of 1.0, so a patience of 2 stops on frame 1.
+    segmenter = PromptableSegmentation3D.__new__(PromptableSegmentation3D)
+    segmenter.predictor = TrackingPropagationPredictor([True] * 6)
+    segmenter.inference_state = {}
+
+    kept = segmenter._propagate_in_direction(reverse=False, early_stop_patience=2, mask_threshold=0.5)
+    stopped = segmenter._propagate_in_direction(
+        reverse=False, early_stop_patience=2, mask_threshold=1.0, return_logits=True
+    )
+
+    assert sorted(kept) == list(range(6))
+    assert sorted(stopped) == [0, 1]
+
+
 def test_volume_early_stop_patience_defaults_to_two():
     # Adopted in evaluation/optimization/notes/APG_3D_OPTIMIZATION.md experiment 5; the annotator already used it.
     from micro_sam.v2.automatic_prompt_generation import DEFAULT_PROMPT_GENERATION

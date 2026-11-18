@@ -6,52 +6,80 @@ The python library can be imported via
 import micro_sam
 ```
 
-> **Migration note:** The SAM1 (Segment Anything v1) functionality has moved into the `micro_sam.v1` subpackage. Update imports such as `micro_sam.instance_segmentation`, `micro_sam.training`, `micro_sam.evaluation`, etc. to `micro_sam.v1.*` (e.g. `from micro_sam.v1.instance_segmentation import ...`). The old top-level import paths have been removed. CLI command names (e.g. `micro_sam.automatic_segmentation`, `micro_sam.train`) are unchanged.
+The functionality for SAM2 and the `micro-sam2` models is in the `micro_sam.v2` subpackage:
+- `micro_sam.v2.util` loads the models (`get_sam2_model`, `get_sam2_image_predictor`) and computes the image embeddings (`precompute_image_embeddings`).
+- `micro_sam.v2.prompt_based_segmentation` segments objects from point, box and mask prompts in 2d and 3d.
+- `micro_sam.v2.automatic_segmentation` runs automatic instance segmentation (`get_predictor_and_segmenter`, `automatic_instance_segmentation`) and automatic tracking (`automatic_tracking`). See [APG](#apg) for the available methods.
+- `micro_sam.v2.semantic_segmentation` applies a model trained for semantic segmentation.
+- `micro_sam.v2.training` trains models on your own data, see below.
+- `micro_sam.v2.evaluation` evaluates the interactive and automatic segmentation.
 
-This library extends the [Segment Anything library](https://github.com/facebookresearch/segment-anything) and
+`micro_sam.object_classification` and `micro_sam.pixel_classification` implement the object and pixel classifiers, and `micro_sam.sam_annotator` implements the [annotation tools](#annotation-tools), which can also be started from python.
 
-- implements functions to apply Segment Anything to 2d and 3d data in `micro_sam.v1.prompt_based_segmentation`.
-- provides improved automatic instance segmentation functionality in `micro_sam.v1.instance_segmentation`.
-- implements training functionality that can be used for finetuning Segment Anything on your own data in `micro_sam.v1.training`.
-- provides functionality for quantitative and qualitative evaluation of Segment Anything models in `micro_sam.v1.evaluation`.
-
-You can import these sub-modules via
-
+For example, automatic segmentation of an image with the `micro-sam2` model for cells:
 ```python
-import micro_sam.v1.prompt_based_segmentation
-import micro_sam.v1.instance_segmentation
-# etc.
+from micro_sam.v2.automatic_segmentation import automatic_instance_segmentation, get_predictor_and_segmenter
+
+predictor, segmenter = get_predictor_and_segmenter(model_type="hvit_t_cells", segmentation_mode="ais")
+segmentation = automatic_instance_segmentation(predictor, segmenter, input_path="image.tif")
 ```
 
-This functionality is used to implement the interactive annotation tools in `micro_sam.sam_annotator` and can be used as a standalone python library.
-We provide jupyter notebooks that demonstrate how to use it [here](https://github.com/computational-cell-analytics/micro-sam/tree/main/notebooks). You can find the full library documentation by scrolling to the end of this page. 
+The functionality of the previous version for SAM1 models is in the `micro_sam.v1` subpackage, for example `micro_sam.v1.instance_segmentation` and `micro_sam.v1.training`.
+
+We provide jupyter notebooks that demonstrate how to use the library [here](https://github.com/computational-cell-analytics/micro-sam/tree/main/notebooks), and example scripts [here](https://github.com/computational-cell-analytics/micro-sam/tree/main/examples). You can find the full library documentation by scrolling to the end of this page.
 
 ## Training your Own Model
 
-We reimplement the training logic described in the [Segment Anything publication](https://arxiv.org/abs/2304.02643) to enable finetuning on custom data.
-We use this functionality to provide the [finetuned microscopy models](#finetuned-models) and it can also be used to train models on your own data.
-In fact the best results can be expected when finetuning on your own data, and we found that it does not require much annotated training data to get significant improvements in model performance.
-So a good strategy is to annotate a few images with one of the provided models using our interactive annotation tools and, if the model is not working as good as required for your use-case, finetune on the annotated data.
-We recommend checking out our [paper](https://www.nature.com/articles/s41592-024-02580-4) for details on the results on how much data is required for finetuning Segment Anything.
+You can finetune the `micro-sam2` models, or the SAM2 models, on your own data.
+We use this functionality to train the [finetuned microscopy models](#finetuned-models).
+In fact the best results can be expected when finetuning on your own data, and it does not require much annotated training data to get significant improvements in model performance.
+So a good strategy is to annotate a few images with one of the provided models using our interactive annotation tools and, if the model does not work as well as required for your use-case, finetune it on the annotated data.
 
-The training logic is implemented in `micro_sam.v1.training` and is based on [torch-em](https://github.com/constantinpape/torch-em). Check out [the finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) to see how to use it, or the training CLI (`micro_sam.train`), see `micro_sam.train -h` for details on how to use it.
-We also support training an additional decoder for automatic instance segmentation. This yields better results than the automatic mask generation of segment anything and is significantly faster.
-The notebook explains how to train it together with the rest of SAM and how to then use it.
+You need images and the corresponding label images, for example annotations created with the `micro_sam` annotation tools. The data can be:
+- image files, such as tif or png, given as single files, lists of files, or a folder and a pattern like `*.tif`.
+- container files, such as hdf5, zarr, n5 or OME-Zarr, given as the file path and the key of the data in the file.
 
-More advanced examples, including quantitative and qualitative evaluation, can be found in [the finetuning directory](https://github.com/computational-cell-analytics/micro-sam/tree/main/finetuning), which contains the code for training and evaluating [our models](finetuned-models). You can find further information on model training in the [FAQ section](fine-tuning-questions).
+The data can be 2d or 3d. The labels are instance segmentations, where each object has its own id, or class labels for semantic segmentation.
 
-Here is a list of resources, together with their recommended training settings, for which we have tested model finetuning:
+There are four training modes:
+- `interactive`: train for interactive segmentation (`micro_sam.v2.training.train_sam2`).
+- `automatic`: train the decoder for automatic segmentation (AIS, APG) together with the image encoder (`micro_sam.v2.training.train_automatic`).
+- `joint`: train for both interactive and automatic segmentation (`micro_sam.v2.training.train_joint_sam2`).
+- `semantic`: train for semantic segmentation into a given number of classes (`micro_sam.v2.training.train_semantic`).
 
-| Resource Name               | Capacity | Model Type | Batch Size | Finetuned Parts              | Number of Objects|
-|-----------------------------|----------|------------|------------|------------------------------|------------------|
-| CPU                         | 32GB     | ViT Base   | 1          | *all*                        | 10               |
-| CPU                         | 64GB     | ViT Base   | 1          | *all*                        | 15               |
-| GPU (NVIDIA GTX 1080Ti)     | 8GB      | ViT Base   | 1          | Mask Decoder, Prompt Encoder | 10               |
-| GPU (NVIDIA Quadro RTX5000) | 16GB     | ViT Base   | 1          | *all*                        | 10               |
-| GPU (Tesla V100)            | 32GB     | ViT Base   | 1          | *all*                        | 10               |
-| GPU (NVIDIA A100)           | 80GB     | ViT Tiny   | 2          | *all*                        | 50               |
-| GPU (NVIDIA A100)           | 80GB     | ViT Base   | 2          | *all*                        | 40               |
-| GPU (NVIDIA A100)           | 80GB     | ViT Large  | 2          | *all*                        | 30               |
-| GPU (NVIDIA A100)           | 80GB     | ViT Huge   | 2          | *all*                        | 25               |
+When you start from a `micro-sam2` model, for example `hvit_t_cells`, the training starts from its image encoder and its decoder. For semantic segmentation, only the output layer for the classes is new.
+A model trained in the `interactive` mode has no decoder, so it cannot be used for automatic segmentation.
 
-> NOTE: If you use the [finetuning UI](#finetuning-ui) or the training CLI (`micro_sam.train`) or `micro_sam.v1.training.training.train_sam_for_configuration`, you can specify the hardware configuration and the best settings for it will be set automatically. If your hardware is not in the settings we have tested choose the closest match. You can set the training parameters yourself when using `micro_sam.v1.training.training.train_sam`. Be aware that the choice for the number of objects per image, the batch size, and the type of model have a strong impact on the VRAM needed for training and the duration of training. See the [finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) for an overview of these parameters.
+`micro_sam.v2.training.default_sam2_loader` creates the data loaders for all modes. For example, to train for interactive and automatic segmentation on tif images:
+```python
+from micro_sam.v2.training import default_sam2_loader, train_joint_sam2
+
+loader_kwargs = dict(patch_shape=(512, 512), mode="joint", batch_size=1)
+train_loader = default_sam2_loader("train/images", "*.tif", "train/labels", "*.tif", **loader_kwargs)
+val_loader = default_sam2_loader("val/images", "*.tif", "val/labels", "*.tif", is_train=False, **loader_kwargs)
+train_joint_sam2("my_model", "hvit_t_cells", train_loader=train_loader, val_loader=val_loader)
+```
+
+For a container file, pass the file path and the key, for example `default_sam2_loader("data.h5", "raw", "data.h5", "labels", ...)`.
+For 3d training, pass a 3d `patch_shape`, for example `(8, 512, 512)`.
+
+The same is available in the command line with `micro_sam train`. For example:
+```bash
+# Train for interactive and automatic segmentation, with 10% of the files split off for validation.
+micro_sam train -i images/ --image_key '*.tif' -l labels/ --label_key '*.tif' --mode joint
+
+# Train for automatic segmentation on 3d data in hdf5 files.
+micro_sam train -i train.h5 --image_key raw -l train.h5 --label_key labels \
+    --val_images val.h5 --val_labels val.h5 --mode automatic --patch_shape 8,512,512
+
+# Train for semantic segmentation into three classes.
+micro_sam train -i images/ --image_key '*.png' -l labels/ --label_key '*.png' --mode semantic --num_classes 3
+```
+Run `micro_sam train --help` for all options.
+
+The trained model is saved as `checkpoints/<NAME>/best.pt`. You can use it in the annotation tools and the automatic segmentation with the `checkpoint_path` argument in python, or with `-c` in the command line. The model size is read from the checkpoint.
+
+To share your model, export it to the [BioImage.IO](https://bioimage.io) model format with `micro_sam.v2.bioimageio.export_sam2_model`, see [the export example](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/bioimageio/export_model_for_bioimageio.py). The exported model does interactive segmentation and, if it has a decoder, automatic segmentation.
+
+Check out [the finetuning notebook](https://github.com/computational-cell-analytics/micro-sam/blob/main/notebooks/sam_finetuning.ipynb) and [the finetuning examples](https://github.com/computational-cell-analytics/micro-sam/tree/main/examples/finetuning) for more details.
+The training needs a GPU for reasonable training times. The number of objects per image (`max_num_objects`), the batch size, the patch shape and the model size have a strong impact on the GPU memory that is needed. If the training runs out of memory, reduce them. You can find further information on model training in the [FAQ section](#fine-tuning-questions).
