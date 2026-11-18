@@ -1,0 +1,88 @@
+name: macos-diagnostics
+
+on:
+  push:
+    branches:
+      - ci-macos-diagnostics
+  workflow_dispatch:
+
+jobs:
+  diagnostics:
+    name: ${{ matrix.os }} sample ${{ matrix.sample }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest]
+        sample: [1, 2, 3]
+        include:
+          - os: ubuntu-latest
+            sample: 1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v1
+        env:
+          TMPDIR: ${{ runner.temp }}
+        with:
+          environment-file: "environment.yaml"
+          create-args: >-
+            python=3.12
+
+      - name: Install additional dev requirements
+        shell: bash -l {0}
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Install micro-sam
+        shell: bash -l {0}
+        run: pip install --no-deps -e .
+
+      - name: Runner hardware
+        shell: bash -l {0}
+        run: |
+          uptime
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            sysctl hw.ncpu hw.physicalcpu hw.logicalcpu hw.memsize machdep.cpu.brand_string
+            sysctl -a | grep -E "hw.perflevel[0-9].(name|physicalcpu|logicalcpu)" || true
+          else
+            nproc
+            lscpu | head -20
+          fi
+
+      - name: Benchmark with the default OpenMP wait policy
+        shell: bash -l {0}
+        run: python .github/scripts/macos_diagnostics.py
+
+      - name: Benchmark with OMP_WAIT_POLICY=PASSIVE
+        shell: bash -l {0}
+        env:
+          OMP_WAIT_POLICY: PASSIVE
+        run: python .github/scripts/macos_diagnostics.py
+
+      - name: Benchmark with KMP_BLOCKTIME=0
+        shell: bash -l {0}
+        env:
+          KMP_BLOCKTIME: "0"
+        run: python .github/scripts/macos_diagnostics.py
+
+      - name: Slow v1 test with the default OpenMP wait policy
+        shell: bash -l {0}
+        run: |
+          pytest -o addopts="" -v --durations=0 \
+            "test/test_automatic_segmentation.py::TestAutomaticSegmentation::test_instance_segmentation_with_decoder_3d"
+
+      - name: Slow v1 test with OMP_WAIT_POLICY=PASSIVE
+        shell: bash -l {0}
+        env:
+          OMP_WAIT_POLICY: PASSIVE
+        run: |
+          pytest -o addopts="" -v --durations=0 \
+            "test/test_automatic_segmentation.py::TestAutomaticSegmentation::test_instance_segmentation_with_decoder_3d"
+
+      - name: Runner load after the benchmarks
+        shell: bash -l {0}
+        run: uptime
