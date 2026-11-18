@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - dev
+      - v1.x
     tags:
       - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
   pull_request:  # run CI on commits to any open PR
