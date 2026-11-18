@@ -1,14 +1,12 @@
 # Installation
 
-There are four ways to install `micro_sam`:
+There are three ways to install `micro_sam`:
 - [From pip](#from-pip) to use all functionality and install via pip.
 - [From conda](#from-conda) to use all functionality and install in an encapsulated environment.
 - [From source](#from-source) for setting up a development environment to use the latest version and to change and contribute to our software.
-- [From installer](#from-installer) to install it without having to use pip or conda (supported platforms: Windows and Linux, supports only CPU, deprecated). 
 
 You can find more information on the installation and how to troubleshoot it in [the FAQ section](#installation-questions).
 
-**IMPORTANT**: Version 2.0 (`micro-sam2`) is not released on pip and conda yet, so these install the previous version 1.x. To use the current pre-release, [install from source](#from-source) and check out the `v2.0.0a1` tag after cloning the repository (`git checkout v2.0.0a1`).
 
 ## From pip
 
@@ -16,17 +14,15 @@ You can find more information on the installation and how to troubleshoot it in 
 ```bash
 pip install micro_sam
 ```
-
 Note: when using pip you have to manage your python environments yourself. For example, you could create a conda environment and install `micro_sam` via pip in there, or use `venv` for this.
-
-To use the SAM1 `vit_t` (MobileSAM) model of the previous version (`micro_sam.v1`), you have to additionally install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` was installed via pip. It is not available on PyPI, so it has to be installed from GitHub:
-```bash
-pip install git+https://github.com/ChaoningZhang/MobileSAM.git
-```
 
 The AnyUp upsampling option of the pixel and object classification tools needs [AnyUp](https://github.com/wimmerth/anyup). It is not available on PyPI or conda-forge, so it has to be installed from GitHub:
 ```bash
 pip install git+https://github.com/wimmerth/anyup
+```
+To use the SAM1 `vit_t` (MobileSAM) model of the previous version (`micro_sam.v1`), you have to additionally install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` was installed via pip. It is not available on PyPI, so it has to be installed from GitHub:
+```bash
+pip install git+https://github.com/ChaoningZhang/MobileSAM.git
 ```
 
 ## From conda
@@ -99,6 +95,8 @@ conda activate sam2
 pip install -e .
 ```
 
+<!---
+I disabled this for now. The installers are very outdated and we shouldn't advertise this feature any more.
 ## From installer
 
 **Note: The installers are not yet up-to-date with the latest version of micro-sam (v1.4.0 onwards). We recommend installing micro-sam via pip or conda instead.**
@@ -106,9 +104,7 @@ pip install -e .
 We also provide installers for Linux and Windows:
 - [Linux](https://owncloud.gwdg.de/index.php/s/Fyf57WZuiX1NyXs)
 - [Windows](https://owncloud.gwdg.de/index.php/s/ZWrY68hl7xE3kGP)
-<!---
 - [Mac](https://owncloud.gwdg.de/index.php/s/7YupGgACw9SHy2P)
--->
 
 The installers will not enable you to use a GPU, so if you have one then please consider installing `micro_sam` via [pip](#from-pip) or [conda](#from-conda) instead.
 
@@ -134,7 +130,6 @@ To use the installer:
 - After the installation you can start the annotator by double clicking on `.\micro_sam\Scripts\micro_sam.annotator.exe` or  with the command `.\micro_sam\Scripts\napari.exe` from the Command Prompt.
 - Proceed with the steps described in [Annotation Tools](#annotation-tools) 
 
-<!---
 **Mac Installer:**
 
 To use the Mac installer you will need to enable installing unsigned applications. Please follow [the instructions for 'Disabling Gatekeeper for one application only' here](https://disable-gatekeeper.github.io/).
@@ -143,8 +138,8 @@ Alternative link on how to disable gatekeeper.
 https://www.makeuseof.com/how-to-disable-gatekeeper-mac/
 
 TODO detailed instruction
--->
 
 ### Easybuild installation
 
 There is also an easy-build recipe for `micro_sam` under development. You can find more information [here](https://github.com/easybuilders/easybuild-easyconfigs/pull/20636).
+-->

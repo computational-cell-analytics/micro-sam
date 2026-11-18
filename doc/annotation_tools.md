@@ -15,9 +15,9 @@ The `micro_sam` tools mainly use the [point layer](https://napari.org/stable/how
 The plugin menu contains the following tools:
 - [Segmentation Annotator](#segmentation-annotator): interactive and automatic segmentation of 2d images and 3d volumes.
 - [Tracking Annotator](#tracking-annotator): interactive and automatic tracking of cells in a timeseries.
-- [Batch Annotator](#batch-annotator): annotation of all images in a folder, one after the other.
 - [Object Classifier](#object-classifier): classification of segmented objects.
 - [Pixel Classifier](#pixel-classifier): semantic segmentation by classifying every pixel.
+- [Batch Annotator](#batch-annotator): interactive annotation of all images in a folder with one of the tools above, one after the other.
 
 The plugin menu also contains sample data, and `Set cache directory` for choosing where the models and embeddings are stored.
 
@@ -88,17 +88,6 @@ To track a cell that divides, use point prompts:
 
 The tracking annotator only supports 2d image data with a time dimension. Volumetric data with a time dimension is not supported.
 
-## Batch Annotator
-
-The batch annotator runs one of the other tools for all images in a folder, one image after the other. This makes it convenient to annotate many images without having to restart the tool for every image. It can be started by
-- clicking `Batch Annotator` in the plugin menu after starting `napari`.
-- running `$ micro_sam annotator batch -i <FOLDER> -o <OUTPUT_FOLDER> --task <TASK>` in the command line.
-- calling `micro_sam.sam_annotator.batch_annotator` or `micro_sam.sam_annotator.image_folder_annotator` in a python script. Check out [examples/image_series_annotator.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/image_series_annotator.py) for details.
-
-You select the task (segmentation, tracking, object classification or pixel classification), the folder with your images, a pattern for selecting a subset of the images (for example `*.tif`), and the folder where the results are saved. For object classification, you can also select a folder with one segmentation per image. The other options are the settings of the embedding menu. Click `Annotate Images` to start.
-`Next Image` (or `N`) saves the result of the current image and opens the next one. The classification tasks can also go back to the previous image (`Shift + N`), and with `Keep Classifier` the classifier is trained on the annotations of all images so far.
-Images that already have a result in the output folder are skipped, so you can continue an annotation session later. For segmentation, uncheck `Continue Annotation` to start again at the first image, for example to review the results.
-
 ## Object Classifier
 
 The object classifier classifies segmented objects into the classes you choose. It can be started by:
@@ -124,6 +113,18 @@ Draw brush strokes for each class in the `annotations` layer (switch classes as 
 Optional settings add classical image features, or upsample the embeddings with [AnyUp](https://github.com/wimmerth/anyup) for finer details.
 You can export the trained classifier and apply it to other images with `micro_sam inference pixel-classification`.
 
+## Batch Annotator
+
+The batch annotator runs one of the other tools for all images in a folder, one image after the other. This makes it convenient to annotate many images without having to restart the tool for every image. It can be started by
+- clicking `Batch Annotator` in the plugin menu after starting `napari`.
+- running `$ micro_sam annotator batch -i <FOLDER> -o <OUTPUT_FOLDER> --task <TASK>` in the command line.
+- calling `micro_sam.sam_annotator.batch_annotator` or `micro_sam.sam_annotator.image_folder_annotator` in a python script. Check out [examples/image_series_annotator.py](https://github.com/computational-cell-analytics/micro-sam/blob/main/examples/image_series_annotator.py) for details.
+
+You select the task (segmentation, tracking, object classification or pixel classification), the folder with your images, a pattern for selecting a subset of the images (for example `*.tif`), and the folder where the results are saved. For object classification, you can also select a folder with one segmentation per image. The other options are the settings of the embedding menu. Click `Annotate Images` to start.
+`Next Image` (or `N`) saves the result of the current image and opens the next one. The classification tasks can also go back to the previous image (`Shift + N`), and with `Keep Classifier` the classifier is trained on the annotations of all images so far.
+Images that already have a result in the output folder are skipped, so you can continue an annotation session later. For segmentation, uncheck `Continue Annotation` to start again at the first image, for example to review the results.
+
 ## Training a Model
 
-The previous version of `micro_sam` had a graphical interface for finetuning. To train a model on your own data, use the command line (`micro_sam train`) or the python library instead, see [training your own model](#training-your-own-model).
+The previous version of `micro_sam` had a graphical interface for finetuning. We have removed this in version 2.
+To train a model on your own data, use the command line (`micro_sam train`) or the python library instead, see [training your own model](#training-your-own-model).
