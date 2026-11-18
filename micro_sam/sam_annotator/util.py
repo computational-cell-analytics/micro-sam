@@ -1,24 +1,24 @@
 import os
-import pickle
 import warnings
-import argparse
-from glob import glob
-from pathlib import Path
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-import h5py
-import napari
 import numpy as np
 from skimage import draw
-from scipy.ndimage import shift
 
-from .. import prompt_based_segmentation, util
-from .. import _model_settings as model_settings
-from ..multi_dimensional_segmentation import _validate_projection
+import napari
+
+from .. import util
 
 # Green and Red
 LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 """@private"""
+
+SCRIBBLE_SHAPE_TYPES = ("path", "line")
+"""Napari shape types interpreted as sparse scribble prompts."""
+
+SCRIBBLE_DRAW_MODES = ("add_path", "add_polyline", "add_line")
+"""Napari Shapes modes that create open scribble prompts."""
 
 
 #
@@ -26,93 +26,185 @@ LABEL_COLOR_CYCLE = ["#00FF00", "#FF0000"]
 #
 
 
-def toggle_label(prompts):
-    """@private"""
-    # get the currently selected label
-    current_properties = prompts.current_properties
-    current_label = current_properties["label"][0]
-    new_label = "negative" if current_label == "positive" else "positive"
+# The image normalization is shared with the headless entry points, so the GUI and the CLI read the
+# same array the same way. It lives in 'micro_sam.util', which does not import napari.
+prepare_annotation_image = util.prepare_annotation_image
+
+
+def _validate_sam2_model_type(model_type: str, tool: str) -> None:
+    """Check that the model is a Segment Anything 2 model.
+
+    Only the classification tools support other models.
+
+    Args:
+        model_type: The name of the model.
+        tool: The name of the annotation tool, for example 'segmentation' or 'tracking'.
+
+    Raises:
+        ValueError: If the model is not a Segment Anything 2 model.
+    """
+    if not model_type.startswith("hvit_"):
+        raise ValueError(
+            f"The {tool} annotator does not support the model '{model_type}'. Use a (µ)SAM2 model ('hvit_*')."
+        )
+
+
+def set_prompt_label(layer, new_label, relabel_selected: bool = True):
+    """Set the current prompt label and relabel selected shapes consistently.
+
+    Napari Points applies ``current_properties`` changes to selected points in all modes. Shapes,
+    however, only applies them to selected shapes in select or pan/zoom mode. Explicitly updating
+    the selected open shapes here keeps changing the prompt menu or pressing ``T`` consistent for
+    both layer types, including immediately after drawing a path, polyline or line.
+
+    Args:
+        layer: The prompt layer.
+        new_label: The label to set as the drawing default.
+        relabel_selected: Whether the layer's selected scribbles also take the new label. Pass False
+            for a layer the user is not working in: napari leaves a freshly drawn scribble selected,
+            so a polarity change aimed at another layer would otherwise silently relabel it.
+    """
+    if isinstance(layer, napari.layers.Shapes):
+        # Napari may briefly retain a selected shape index after the corresponding geometry and
+        # feature row have been removed. Setting current_properties in that state tries to update a
+        # missing pandas row. Drop these stale indices before applying the new drawing label.
+        valid_selection = {
+            index for index in layer.selected_data if 0 <= index < len(layer.data)
+        }
+        if valid_selection != layer.selected_data:
+            layer.selected_data = valid_selection
+
+    is_shapes = isinstance(layer, napari.layers.Shapes)
+    if not relabel_selected and layer.selected_data:
+        # Napari applies current_properties to the selection itself - to selected points in every mode,
+        # and to selected shapes in select and pan/zoom mode - and it selects a prompt right after it is
+        # placed. A prompt that has to keep its own label therefore cannot stay selected while the
+        # drawing default changes. Dropping the selection is right here anyway: that prompt is finished
+        # and the user has moved to the other layer.
+        layer.selected_data = set()
+
+    current_properties = layer.current_properties
     current_properties["label"] = np.array([new_label])
-    prompts.current_properties = current_properties
-    prompts.refresh()
-    prompts.refresh_colors()
+    layer.current_properties = current_properties
+
+    if relabel_selected and is_shapes and layer.selected_data:
+        properties = dict(layer.properties)
+        labels = np.asarray(properties.get("label", []), dtype=object).copy()
+        shape_types = list(layer.shape_type)
+        if len(labels) == len(shape_types):
+            for index in layer.selected_data:
+                if shape_types[index] in SCRIBBLE_SHAPE_TYPES:
+                    labels[index] = new_label
+            properties["label"] = labels
+            layer.properties = properties
+
+            # Keep the drawing default on the requested label. Updating the feature table above
+            # may infer a current value from the edited selection.
+            current_properties = layer.current_properties
+            current_properties["label"] = np.array([new_label])
+            layer.current_properties = current_properties
+
+    layer.refresh()
+    if isinstance(layer, napari.layers.Shapes):
+        # During layer reset/teardown napari can briefly clear shape geometry before shrinking the
+        # feature table. Refreshing mapped colors in that transient state raises because the color
+        # array and ShapeList have different lengths. The subsequent data/features event will
+        # refresh once they are aligned again.
+        n_shapes = len(layer.data)
+        if any(len(values) != n_shapes for values in layer.properties.values()):
+            return
+    layer.refresh_colors()
 
 
-def _initialize_parser(description, with_segmentation_result=True, with_instance_segmentation=True):
+def relabels_selection(layer, viewer) -> bool:
+    """Whether a polarity change may also relabel this layer's selected scribbles.
 
-    available_models = list(util.get_model_names())
-    available_models = ", ".join(available_models)
+    Only the layer the user is working in may: napari leaves a freshly drawn scribble selected, so a
+    polarity change aimed at another layer would otherwise reach back and relabel it. Without a viewer
+    to ask, the caller already knows which layer is active and this stays permissive.
 
-    parser = argparse.ArgumentParser(description=description)
+    Args:
+        layer: The prompt layer about to take a new label.
+        viewer: The napari viewer, or None when the active layer cannot be determined.
 
-    parser.add_argument(
-        "-i", "--input", required=True,
-        help="The filepath to the image data. Supports all data types that can be read by imageio (e.g. tif, png, ...) "
-        "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter you also need to pass the 'key' parameter."
-    )
-    parser.add_argument(
-        "-k", "--key",
-        help="The key for opening data with elf.io.open_file. This is the internal path for a hdf5 or zarr container, "
-        "for a image series it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
-    )
-    parser.add_argument(
-        "-e", "--embedding_path",
-        help="The filepath for saving/loading the pre-computed image embeddings. "
-        "It is recommended to pass this argument and store the embeddings if you want to open the annotator "
-        "multiple times for this image. Otherwise the embeddings will be recomputed every time."
-    )
+    Returns:
+        Whether the layer's selected scribbles should take the new label too.
+    """
+    if viewer is None:
+        return True
+    # Compare by name: napari hands out layers wrapped in a public-only proxy, so the active layer is
+    # not always the same object as the one in 'viewer.layers'.
+    active = viewer.layers.selection.active
+    return active is not None and layer.name == active.name
 
-    if with_segmentation_result:
-        parser.add_argument(
-            "-s", "--segmentation_result",
-            help="Optional filepath to a precomputed segmentation. If passed this will be used to initialize the "
-            "'committed_objects' layer. This can be useful if you want to correct an existing segmentation or if you "
-            "have saved intermediate results from the annotator and want to continue with your annotations. "
-            "Supports the same file formats as 'input'."
-        )
-        parser.add_argument(
-            "-sk", "--segmentation_key",
-            help="The key for opening the segmentation data. Same rules as for 'key' apply."
-        )
 
-    parser.add_argument(
-        "-m", "--model_type", default=util._DEFAULT_MODEL,
-        help=f"The segment anything model that will be used, one of {available_models}."
-    )
-    parser.add_argument(
-        "-c", "--checkpoint", default=None,
-        help="Checkpoint from which the SAM model will be loaded."
-    )
-    parser.add_argument(
-        "--decoder_path", default=None,
-        help="Optional checkpoint path to decoder-only weights to enable decoder-based instance segmentation."
-    )
-    parser.add_argument(
-        "-d", "--device", default=None,
-        help="The device to use for the predictor. Can be one of 'cuda', 'cpu' or 'mps' (only MAC)."
-        "By default the most performant available device will be selected."
-    )
-    parser.add_argument(
-        "--tile_shape", nargs="+", type=int, help="The tile shape for using tiled prediction", default=None
-    )
-    parser.add_argument(
-        "--halo", nargs="+", type=int, help="The halo for using tiled prediction", default=None
-    )
+def toggle_label(active_prompts, *linked_prompts):
+    """Toggle the positive/negative label of the active prompt layer, and follow with the linked ones.
 
-    if with_instance_segmentation:
-        parser.add_argument(
-            "--precompute_amg_state", action="store_true",
-            help="Whether to precompute the state for automatic instance segmentation. "
-            "This will lead to a longer start-up time, but the automatic instance segmentation can "
-            "be run directly once the tool has started."
-        )
-        parser.add_argument(
-            "--prefer_decoder", action="store_false",
-            help="Whether to use decoder based instance segmentation if the model "
-            "being used has an additional decoder for that purpose."
-        )
+    The polarity itself is global: it becomes the drawing default for every prompt layer, so the shared
+    prompt menu keeps describing all of them. Only the active layer also relabels its selected
+    scribbles - napari leaves a freshly drawn scribble selected, so flipping the polarity for the next
+    point would otherwise reach back and relabel it.
 
-    return parser
+    Args:
+        active_prompts: The prompt layer the toggle came from, and the source of the current label.
+        linked_prompts: The other prompt layers, which follow the new drawing default.
+    """
+    current_label = active_prompts.current_properties["label"][0]
+    new_label = "negative" if current_label == "positive" else "positive"
+    set_prompt_label(active_prompts, new_label)
+    for layer in linked_prompts:
+        set_prompt_label(layer, new_label, relabel_selected=False)
+
+
+def normalize_prompt_shape_labels(layer_or_event):
+    """Keep closed shape prompts positive while preserving labels for open scribbles.
+
+    The shared Shapes layer uses its ``label`` property for edge coloring. Boxes and dense mask
+    shapes do not support negative semantics, so they are normalized to positive after creation.
+    The function then restores the current drawing defaults. A box that you draw does not change
+    the label for the next point or scribble. In the tracking annotator it also keeps the current
+    ``track_id``.
+    """
+    layer = layer_or_event if hasattr(layer_or_event, "shape_type") else layer_or_event.source
+    shape_types = list(layer.shape_type)
+    labels = np.asarray(layer.properties.get("label", []), dtype=object)
+    if len(shape_types) != len(labels):
+        return
+
+    normalized = labels.copy()
+    for index, shape_type in enumerate(shape_types):
+        if shape_type not in SCRIBBLE_SHAPE_TYPES:
+            normalized[index] = "positive"
+    if np.array_equal(labels, normalized):
+        return
+
+    # Save the drawing defaults first. An assignment to 'layer.properties' resets the current
+    # value of every column. This would otherwise drop the current 'track_id' on the tracking layer.
+    current_properties = dict(layer.current_properties)
+    properties = dict(layer.properties)
+    properties["label"] = normalized
+    layer.properties = properties
+    layer.current_properties = current_properties
+    layer.refresh_colors()
+
+
+def sync_prompt_shape_current_color(layer_or_event):
+    """Synchronize the Shapes drawing color with the current scribble label and tool."""
+    layer = layer_or_event if hasattr(layer_or_event, "shape_type") else layer_or_event.source
+    label = layer.current_properties.get("label", np.array(["positive"]))[0]
+    is_scribble_tool = layer.mode in SCRIBBLE_DRAW_MODES
+    color_index = 1 if is_scribble_tool and label == "negative" else 0
+    layer.current_edge_color = LABEL_COLOR_CYCLE[color_index]
+
+
+def current_slice(viewer: napari.Viewer, layer) -> int:
+    """@private
+
+    The index of the slice that the viewer shows, in the data coordinates of a layer. The viewer
+    position is in world coordinates, which differ from the index when the layer has a scale.
+    """
+    return int(round(layer.world_to_data(viewer.dims.point)[0]))
 
 
 def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
@@ -141,10 +233,12 @@ def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=T
     point_layer.remove_selected()
     point_layer.refresh()
     if "prompts" in viewer.layers:
-        prompts = viewer.layers["prompts"].data
-        prompts = [prompt for prompt in prompts if not (prompt[:, 0] == i).all()]
-        viewer.layers["prompts"].data = prompts
-        viewer.layers["prompts"].refresh()
+        prompt_layer = viewer.layers["prompts"]
+        prompt_layer.selected_data = {
+            index for index, prompt in enumerate(prompt_layer.data) if (prompt[:, 0] == i).all()
+        }
+        prompt_layer.remove_selected()
+        prompt_layer.refresh()
     if not clear_segmentations:
         return
     viewer.layers["current_object"].data[i] = 0
@@ -157,7 +251,7 @@ def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=T
 
 
 def point_layer_to_prompts(
-    layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True,
+    layer: napari.layers.Points, i=None, track_id=None, with_stop_annotation=True, exclude_states=None,
 ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
     """Extract point prompts for SAM from a napari point layer.
 
@@ -167,6 +261,8 @@ def point_layer_to_prompts(
         track_id: Id of the current track (required for tracking data).
         with_stop_annotation: Whether a single negative point will be interpreted
             as stop annotation or just returned as normal prompt.
+        exclude_states: Track-states to drop (e.g. ('division',)); such points mark a lineage
+            event rather than a segmentation prompt and must not be fed to the predictor.
 
     Returns:
         The point coordinates for the prompts.
@@ -177,12 +273,17 @@ def point_layer_to_prompts(
     labels = layer.properties["label"]
     assert len(points) == len(labels)
 
+    # Drop points tagged with an excluded track-state (division markers are not prompts).
+    keep = np.ones(len(points), dtype=bool)
+    if exclude_states is not None and "state" in layer.properties:
+        keep = ~np.isin(np.asarray(layer.properties["state"]), list(exclude_states))
+
     if i is None:
         assert points.shape[1] == 2, f"{points.shape}"
-        this_points, this_labels = points, labels
+        this_points, this_labels = points[keep], labels[keep]
     else:
         assert points.shape[1] == 3, f"{points.shape}"
-        mask = np.round(points[:, 0]) == i
+        mask = (np.round(points[:, 0]) == i) & keep
         this_points = points[mask][:, 1:]
         this_labels = labels[mask]
     assert len(this_points) == len(this_labels)
@@ -201,6 +302,439 @@ def point_layer_to_prompts(
         return None
 
     return this_points, this_labels
+
+
+def _scribble_geometry(vertices, image_shape, spacing):
+    """Return normalized stroke geometry and bend information for adaptive sampling."""
+    vertices = np.asarray(vertices, dtype="float64")
+    if vertices.ndim != 2 or vertices.shape[1] != 2 or len(vertices) == 0:
+        raise ValueError("A scribble must have shape (N, 2) with at least one vertex.")
+
+    image_shape = np.asarray(image_shape, dtype="float64")
+    if image_shape.shape != (2,) or np.any(image_shape <= 0):
+        raise ValueError(f"Invalid 2D image shape: {tuple(image_shape)}.")
+
+    # SAM2 embeds prompts in a square 1024-pixel input frame. Measuring the stroke there makes the
+    # sampling density independent of the source image resolution and aspect ratio.
+    model_vertices = vertices * (1024.0 / image_shape)
+
+    # Remove consecutive duplicate vertices before measuring length or curvature. Freehand paths
+    # may contain these when the mouse briefly stops moving.
+    if len(model_vertices) > 1:
+        keep = np.concatenate([[True], np.linalg.norm(np.diff(model_vertices, axis=0), axis=1) > 0])
+        model_vertices = model_vertices[keep]
+
+    segment_lengths = np.linalg.norm(np.diff(model_vertices, axis=0), axis=1)
+    cumulative = np.concatenate([[0.0], np.cumsum(segment_lengths)])
+    total_length = float(cumulative[-1])
+
+    # Ramer-Douglas-Peucker simplification removes freehand jitter before curvature is measured.
+    # The retained inner vertices are meaningful bends that we try to preserve in the samples.
+    bend_indices = np.empty((0,), dtype="int64")
+    bend_angles = np.empty((0,), dtype="float64")
+    if len(model_vertices) > 2 and total_length > 0:
+        tolerance = spacing / 4.0
+        retained = {0, len(model_vertices) - 1}
+        pending = [(0, len(model_vertices) - 1)]
+        while pending:
+            start, stop = pending.pop()
+            if stop <= start + 1:
+                continue
+            start_point, stop_point = model_vertices[start], model_vertices[stop]
+            direction = stop_point - start_point
+            relative = model_vertices[start + 1:stop] - start_point
+            length_squared = float(np.dot(direction, direction))
+            if length_squared == 0:
+                distances = np.linalg.norm(relative, axis=1)
+            else:
+                fractions = np.clip(relative @ direction / length_squared, 0.0, 1.0)
+                projections = start_point + fractions[:, None] * direction
+                distances = np.linalg.norm(model_vertices[start + 1:stop] - projections, axis=1)
+            split = int(np.argmax(distances)) + start + 1
+            if distances[split - start - 1] > tolerance:
+                retained.add(split)
+                pending.extend([(start, split), (split, stop)])
+
+        retained = np.asarray(sorted(retained), dtype="int64")
+        simplified = model_vertices[retained]
+        if len(simplified) > 2:
+            incoming = simplified[1:-1] - simplified[:-2]
+            outgoing = simplified[2:] - simplified[1:-1]
+            cosine = np.sum(incoming * outgoing, axis=1) / (
+                np.linalg.norm(incoming, axis=1) * np.linalg.norm(outgoing, axis=1)
+            )
+            bend_indices = retained[1:-1]
+            bend_angles = np.arccos(np.clip(cosine, -1.0, 1.0))
+
+    return model_vertices, image_shape, cumulative, total_length, bend_indices, bend_angles
+
+
+def _scribble_sample_count(vertices, image_shape, spacing):
+    """Determine the sample demand from a stroke's length and simplified curvature."""
+    geometry = _scribble_geometry(vertices, image_shape, spacing)
+    total_length, bend_angles = geometry[3], geometry[5]
+    if total_length == 0:
+        return 1, total_length
+
+    length_samples = max(2, int(np.ceil(total_length / spacing)) + 1)
+    # Add one sample per 90 degrees of accumulated, de-jittered turning. This gives compact curved
+    # strokes more representation without letting every raw freehand vertex consume the budget.
+    curvature_samples = int(np.ceil(bend_angles.sum() / (np.pi / 2.0))) if len(bend_angles) else 0
+    return length_samples + curvature_samples, total_length
+
+
+def _allocate_scribble_samples(desired_counts, lengths, max_points):
+    """Share a global sample budget fairly, favouring strokes with greater demand."""
+    desired_counts = np.asarray(desired_counts, dtype="int64")
+    lengths = np.asarray(lengths, dtype="float64")
+    if len(desired_counts) == 0:
+        return desired_counts
+
+    # Every stroke must influence the prediction. If there are more strokes than the configured
+    # budget, expand it just enough to retain one representative point from each instead of
+    # silently dropping annotations.
+    budget = max(int(max_points), len(desired_counts))
+    if desired_counts.sum() <= budget:
+        return desired_counts
+
+    allocated = np.ones_like(desired_counts)
+    remaining = budget - len(allocated)
+
+    # Preserve both endpoints where the budget permits, prioritizing longer strokes if it does not.
+    endpoint_candidates = np.flatnonzero(desired_counts > 1)
+    endpoint_candidates = endpoint_candidates[np.argsort(-lengths[endpoint_candidates], kind="stable")]
+    n_endpoints = min(remaining, len(endpoint_candidates))
+    allocated[endpoint_candidates[:n_endpoints]] += 1
+    remaining -= n_endpoints
+    if remaining == 0:
+        return allocated
+
+    # Allocate the rest proportionally to each stroke's unmet length/curvature demand. Largest
+    # remainders make the result deterministic while using the complete budget.
+    demand = desired_counts - allocated
+    quotas = remaining * demand / demand.sum()
+    additions = np.floor(quotas).astype("int64")
+    allocated += additions
+    remaining -= int(additions.sum())
+    if remaining:
+        residual = quotas - additions
+        candidates = np.flatnonzero(demand > additions)
+        candidates = candidates[np.argsort(-residual[candidates], kind="stable")]
+        allocated[candidates[:remaining]] += 1
+    return allocated
+
+
+def _resample_scribble(vertices, image_shape, spacing, n_points):
+    """Resample one stroke while preserving endpoints and its strongest bends."""
+    model_vertices, image_shape, cumulative, total_length, bend_indices, bend_angles = (
+        _scribble_geometry(vertices, image_shape, spacing)
+    )
+    if total_length == 0:
+        return model_vertices[:1] * (image_shape / 1024.0)
+    if n_points == 1:
+        sample_distances = np.array([total_length / 2.0])
+    else:
+        n_bends = min(max(0, n_points - 2), len(bend_indices))
+        if n_bends:
+            strongest = np.argsort(-bend_angles, kind="stable")[:n_bends]
+            mandatory = np.concatenate([[0.0], cumulative[bend_indices[strongest]], [total_length]])
+            mandatory = np.unique(mandatory)
+        else:
+            mandatory = np.array([0.0, total_length])
+
+        n_extra = n_points - len(mandatory)
+        if n_extra > 0:
+            interval_lengths = np.diff(mandatory)
+            quotas = n_extra * interval_lengths / total_length
+            per_interval = np.floor(quotas).astype("int64")
+            remainder = n_extra - int(per_interval.sum())
+            if remainder:
+                order = np.argsort(-(quotas - per_interval), kind="stable")
+                per_interval[order[:remainder]] += 1
+
+            extra_distances = []
+            for start, stop, count in zip(mandatory[:-1], mandatory[1:], per_interval):
+                if count:
+                    extra_distances.extend(np.linspace(start, stop, count + 2)[1:-1])
+            sample_distances = np.sort(np.concatenate([mandatory, extra_distances]))
+        else:
+            sample_distances = mandatory
+
+    segment_ids = np.searchsorted(cumulative, sample_distances, side="right") - 1
+    segment_ids = np.clip(segment_ids, 0, len(model_vertices) - 2)
+
+    local_lengths = sample_distances - cumulative[segment_ids]
+    segment_lengths = np.diff(cumulative)
+    fractions = np.divide(
+        local_lengths,
+        segment_lengths[segment_ids],
+        out=np.zeros_like(local_lengths),
+        where=segment_lengths[segment_ids] > 0,
+    )
+    sampled_model = model_vertices[segment_ids] + fractions[:, None] * (
+        model_vertices[segment_ids + 1] - model_vertices[segment_ids]
+    )
+    return sampled_model * (image_shape / 1024.0)
+
+
+def scribble_layer_to_prompts(
+    layer: napari.layers.Shapes,
+    image_shape: Tuple[int, int],
+    i=None,
+    spacing: float = 32.0,
+    max_points_per_stroke: Optional[int] = None,
+    max_points: int = 64,
+    deduplication_distance: float = 4.0,
+    track_id=None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Convert positive/negative open strokes into sparse SAM point prompts.
+
+    Napari stores both its freehand path and click-defined polyline tools as ``path`` shapes; a
+    two-vertex stroke is stored as ``line``. Each accepted stroke is resampled uniformly by arc
+    length in SAM's normalized 1024-pixel input space. A global prompt budget is shared according
+    to stroke length and simplified curvature, and nearby same-label samples from overlapping
+    strokes are collapsed. This keeps prompt density stable across source resolutions without
+    undersampling every long stroke at the same per-stroke cutoff.
+
+    Args:
+        layer: The shared ``prompts`` Shapes layer. Non-scribble shapes are ignored.
+        image_shape: The ``(height, width)`` of the image or volume slice.
+        i: Slice index for a 3D layer. Must be omitted for a 2D layer.
+        spacing: Approximate spacing between samples in SAM's 1024-pixel input space.
+        max_points_per_stroke: Optional compatibility cap for each stroke. By default there is no
+            per-stroke cap and ``max_points`` governs all strokes together.
+        max_points: Target maximum number of samples across all accepted scribbles. If there are
+            more strokes than this limit, it expands to retain one representative per stroke.
+        deduplication_distance: Distance in normalized model pixels below which samples from
+            overlapping strokes with the same label are considered duplicates.
+        track_id: Id of the current track. Required for tracking data. When given, the function
+            converts only the strokes whose ``track_id`` property matches.
+
+    Returns:
+        Sampled coordinates in ``(y, x)`` order and SAM labels (positive ``1``, negative ``0``).
+    """
+    if spacing <= 0:
+        raise ValueError("'spacing' must be positive.")
+    if max_points_per_stroke is not None and max_points_per_stroke <= 0:
+        raise ValueError("'max_points_per_stroke' must be positive.")
+    if max_points <= 0:
+        raise ValueError("'max_points' must be positive.")
+    if deduplication_distance < 0:
+        raise ValueError("'deduplication_distance' must be non-negative.")
+
+    shape_data = layer.data
+    shape_types = layer.shape_type
+    stroke_labels = layer.properties.get("label", [])
+    if not (len(shape_data) == len(shape_types) == len(stroke_labels)):
+        raise AssertionError("Scribble shapes, shape types and labels must have matching lengths.")
+
+    if track_id is None:
+        stroke_track_ids = [None] * len(shape_data)
+    else:
+        stroke_track_ids = list(map(int, layer.properties["track_id"]))
+        if len(stroke_track_ids) != len(shape_data):
+            raise AssertionError("Scribble shapes and track ids must have matching lengths.")
+
+    strokes = []
+    for vertices, shape_type, stroke_label, stroke_track_id in zip(
+        shape_data, shape_types, stroke_labels, stroke_track_ids
+    ):
+        if track_id is not None and stroke_track_id != track_id:
+            continue
+        if shape_type in ("rectangle", "ellipse", "polygon"):
+            continue
+        if shape_type not in SCRIBBLE_SHAPE_TYPES:
+            warnings.warn(
+                f"Shape type {shape_type} is not a scribble and will be ignored. "
+                "Use path, polyline or line in the 'prompts' layer.",
+                stacklevel=2,
+            )
+            continue
+        if stroke_label not in ("positive", "negative"):
+            warnings.warn(
+                f"Unknown scribble label {stroke_label!r}; the stroke will be ignored.", stacklevel=2
+            )
+            continue
+
+        vertices = np.asarray(vertices)
+        if i is None:
+            if vertices.ndim != 2 or vertices.shape[1] != 2:
+                raise ValueError("2D scribble vertices must have shape (N, 2).")
+            vertices_yx = vertices
+        else:
+            if vertices.ndim != 2 or vertices.shape[1] != 3:
+                raise ValueError("3D scribble vertices must have shape (N, 3).")
+            stroke_slices = np.round(vertices[:, 0]).astype(int)
+            if not np.all(stroke_slices == i):
+                continue
+            vertices_yx = vertices[:, 1:]
+
+        desired_count, length = _scribble_sample_count(vertices_yx, image_shape, spacing)
+        if max_points_per_stroke is not None:
+            desired_count = min(desired_count, max_points_per_stroke)
+        strokes.append((vertices_yx, stroke_label, desired_count, length))
+
+    if not strokes:
+        return np.empty((0, 2), dtype="float64"), np.empty((0,), dtype="int64")
+
+    sample_counts = _allocate_scribble_samples(
+        [stroke[2] for stroke in strokes], [stroke[3] for stroke in strokes], max_points
+    )
+    image_shape_array = np.asarray(image_shape, dtype="float64")
+    points, labels = [], []
+    previous_model_points = {0: [], 1: []}
+    for (vertices_yx, stroke_label, _, _), sample_count in zip(strokes, sample_counts):
+        sampled = _resample_scribble(
+            vertices_yx, image_shape=image_shape, spacing=spacing, n_points=sample_count
+        )
+        sam_label = 1 if stroke_label == "positive" else 0
+        current_model_points = []
+        for point in sampled:
+            model_point = point * (1024.0 / image_shape_array)
+            # Deduplicate only against earlier strokes so both endpoints of a very short individual
+            # stroke survive. Opposite-label conflicts are intentionally retained.
+            previous = previous_model_points[sam_label]
+            if previous and (
+                np.min(np.linalg.norm(np.asarray(previous) - model_point, axis=1)) <= deduplication_distance
+            ):
+                continue
+            if current_model_points and np.min(
+                np.linalg.norm(np.asarray(current_model_points) - model_point, axis=1)
+            ) == 0:
+                continue
+            current_model_points.append(model_point)
+            points.append(point)
+            labels.append(sam_label)
+        previous_model_points[sam_label].extend(current_model_points)
+
+    return np.asarray(points), np.asarray(labels, dtype="int64")
+
+
+def get_scribble_slices(layer: napari.layers.Shapes, track_id=None) -> np.ndarray:
+    """Return the sorted z-slices that contain open scribble shapes in a 3D Shapes layer.
+
+    When ``track_id`` is given, the function considers only scribbles whose ``track_id`` property matches.
+    """
+    shape_data = layer.data
+    shape_types = layer.shape_type
+    if len(shape_data) != len(shape_types):
+        raise AssertionError("Scribble shapes and shape types must have matching lengths.")
+
+    if track_id is None:
+        stroke_track_ids = [None] * len(shape_data)
+    else:
+        stroke_track_ids = list(map(int, layer.properties["track_id"]))
+
+    slices = []
+    for vertices, shape_type, stroke_track_id in zip(shape_data, shape_types, stroke_track_ids):
+        if shape_type not in SCRIBBLE_SHAPE_TYPES:
+            continue
+        if track_id is not None and stroke_track_id != track_id:
+            continue
+        vertices = np.asarray(vertices)
+        if vertices.ndim != 2 or vertices.shape[1] != 3:
+            continue
+        stroke_slices = np.round(vertices[:, 0]).astype(int)
+        if not np.all(stroke_slices == stroke_slices[0]):
+            warnings.warn("A 3D scribble must stay on one z-slice and will be ignored.", stacklevel=2)
+            continue
+        slices.append(stroke_slices[0])
+
+    return np.unique(slices).astype("int64") if slices else np.empty((0,), dtype="int64")
+
+
+def merge_point_prompts(*prompt_sets):
+    """Merge ``(points, labels)`` prompt tuples, preserving an empty ``(0, 2)`` convention."""
+    point_arrays, label_arrays = [], []
+    for points, labels in prompt_sets:
+        points = np.asarray(points).reshape(-1, 2)
+        labels = np.asarray(labels).reshape(-1)
+        if len(points) != len(labels):
+            raise AssertionError("The number of prompt coordinates and labels must match.")
+        if len(points):
+            point_arrays.append(points)
+            label_arrays.append(labels)
+    if not point_arrays:
+        return np.empty((0, 2), dtype="float64"), np.empty((0,), dtype="int64")
+    return np.concatenate(point_arrays), np.concatenate(label_arrays)
+
+
+@dataclass
+class FramePrompts:
+    """Every prompt annotated on a single frame (or on a 2d image), read from the napari layers.
+
+    Attributes:
+        points: The point prompts, including the points a scribble expands into, in (y, x) order.
+        labels: The label (1 positive, 0 negative) of each point.
+        boxes: The box prompts, one per rectangle, ellipse and polygon.
+        masks: The filled mask of each box, or None for a rectangle. Index-aligned with `boxes`.
+        is_stop: Whether the frame's sole segmentation cue is a stop annotation (a lone negative point).
+        have_scribbles: Whether the frame carries any scribble.
+    """
+    points: np.ndarray
+    labels: np.ndarray
+    boxes: List[np.ndarray]
+    masks: List[Optional[np.ndarray]]
+    is_stop: bool
+    have_scribbles: bool
+
+    def split_shapes(self) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+        """Separate the rectangles (box prompts) from the shapes carrying a filled mask."""
+        boxes = [box for box, mask in zip(self.boxes, self.masks) if mask is None]
+        masks = [mask for mask in self.masks if mask is not None]
+        return boxes, masks
+
+
+def collect_frame_prompts(
+    point_layer: napari.layers.Points,
+    shape_layer: napari.layers.Shapes,
+    shape: Tuple[int, int],
+    i=None,
+    track_id=None,
+    exclude_states=None,
+    with_stop_annotation: bool = True,
+) -> FramePrompts:
+    """Read every prompt of one frame from the annotation layers.
+
+    The single place prompts are extracted, so the interactive, volumetric and tracking entry points
+    cannot drift apart. Scribbles and shapes are resolved first, so a lone negative point only counts
+    as a stop annotation when it is the frame's sole segmentation cue - beside a scribble, box or
+    mask it is a correction of that object. The points a scribble expands into are merged into the
+    point prompts.
+
+    Args:
+        point_layer: The napari point layer.
+        shape_layer: The napari shape layer, holding both the shape and the scribble prompts.
+        shape: The image shape (in-plane, without the frame axis).
+        i: Index for the data (required for 3d or timeseries data).
+        track_id: Id of the current track (required for tracking data).
+        exclude_states: Track-states to drop, e.g. ('division',). See `point_layer_to_prompts`.
+        with_stop_annotation: Whether a lone negative point may be read as a stop annotation.
+
+    Returns:
+        The prompts of the frame.
+    """
+    scribble_points, scribble_labels = scribble_layer_to_prompts(
+        shape_layer, image_shape=shape, i=i, track_id=track_id
+    )
+    have_scribbles = len(scribble_points) > 0
+    boxes, masks = shape_layer_to_prompts(shape_layer, shape, i=i, track_id=track_id)
+
+    prompts = point_layer_to_prompts(
+        point_layer, i=i, track_id=track_id, exclude_states=exclude_states,
+        with_stop_annotation=with_stop_annotation and not have_scribbles and not boxes,
+    )
+    if prompts is None:
+        return FramePrompts(
+            points=np.empty((0, 2), dtype="float64"), labels=np.empty((0,), dtype="int64"),
+            boxes=boxes, masks=masks, is_stop=True, have_scribbles=have_scribbles,
+        )
+
+    points, labels = merge_point_prompts(prompts, (scribble_points, scribble_labels))
+    return FramePrompts(
+        points=points, labels=labels, boxes=boxes, masks=masks,
+        is_stop=False, have_scribbles=have_scribbles,
+    )
 
 
 def shape_layer_to_prompts(
@@ -248,6 +782,9 @@ def shape_layer_to_prompts(
                 mask[rr, cc] = 1
                 masks.append(mask)
 
+            elif type_ in SCRIBBLE_SHAPE_TYPES:
+                continue
+
             else:
                 warnings.warn(f"Shape type {type_} is not supported and will be ignored.")
 
@@ -279,431 +816,50 @@ def shape_layer_to_prompts(
     return boxes, masks
 
 
-def prompt_layer_to_state(prompt_layer: napari.layers.Points, i: int) -> str:
-    """Get the state of the track from a point layer for a given timeframe.
-
-    Only relevant for annotator_tracking.
-
-    Args:
-        prompt_layer: The napari layer.
-        i: Timeframe of the data.
-
-    Returns:
-        The state of this frame (either "division" or "track").
-    """
-    state = prompt_layer.properties["state"]
-
-    points = prompt_layer.data
-    assert points.shape[1] == 3, f"{points.shape}"
-    mask = points[:, 0] == i
-    this_points = points[mask][:, 1:]
-    this_state = state[mask]
-    assert len(this_points) == len(this_state)
-
-    # we set the state to 'division' if at least one point in this frame has a division label
-    if any(st == "division" for st in this_state):
-        return "division"
-    else:
-        return "track"
-
-
-def prompt_layers_to_state(point_layer: napari.layers.Points, box_layer: napari.layers.Shapes, i: int) -> str:
-    """Get the state of the track from a point layer and shape layer for a given timeframe.
-
-    Only relevant for annotator_tracking.
-
-    Args:
-        point_layer: The napari point layer.
-        box_layer: The napari box layer.
-        i: Timeframe of the data.
-
-    Returns:
-        The state of this frame (either "division" or "track").
-    """
-    state = point_layer.properties["state"]
-
-    points = point_layer.data
-    assert points.shape[1] == 3, f"{points.shape}"
-    mask = points[:, 0] == i
-    if mask.sum() > 0:
-        this_state = state[mask].tolist()
-    else:
-        this_state = []
-
-    box_states = box_layer.properties["state"]
-    this_box_states = [
-        state for box, state in zip(box_layer.data, box_states)
-        if (box[:, 0] == i).all()
-    ]
-    this_state.extend(this_box_states)
-
-    # we set the state to 'division' if at least one point in this frame has a division label
-    if any(st == "division" for st in this_state):
-        return "division"
-    else:
-        return "track"
-
-
-#
-# Helper functions to run (multi-dimensional) segmentation on napari layers.
-#
-
-
-def segment_slices_with_prompts(
-    predictor, point_prompts, box_prompts, image_embeddings, shape, track_id=None, update_progress=None,
-):
-    """@private"""
-    assert len(shape) == 3
-    image_shape = shape[1:]
-    seg = np.zeros(shape, dtype="uint32")
-
-    z_values = np.round(point_prompts.data[:, 0])
-    z_values_boxes = np.concatenate([box[:1, 0] for box in box_prompts.data]) if box_prompts.data else\
-        np.zeros(0, dtype="int")
-
-    if track_id is not None:
-        track_ids_points = np.array(list(map(int, point_prompts.properties["track_id"])))
-        assert len(track_ids_points) == len(z_values)
-        z_values = z_values[track_ids_points == track_id]
-
-        if len(z_values_boxes) > 0:
-            track_ids_boxes = np.array(list(map(int, box_prompts.properties["track_id"])))
-            assert len(track_ids_boxes) == len(z_values_boxes), f"{len(track_ids_boxes)}, {len(z_values_boxes)}"
-            z_values_boxes = z_values_boxes[track_ids_boxes == track_id]
-
-    slices = np.unique(np.concatenate([z_values, z_values_boxes])).astype("int")
-    stop_lower, stop_upper = False, False
-
-    if update_progress is None:
-        def update_progress(*args):
-            pass
-
-    for i in slices:
-        points_i = point_layer_to_prompts(point_prompts, i, track_id)
-
-        # do we end the segmentation at the outer slices?
-        if points_i is None:
-
-            if i == slices[0]:  # The bottom slice is a stop slice.
-                stop_lower = True
-                seg[i] = 0
-            elif i == slices[-1]:  # The top sloce is a stop slice.
-                stop_upper = True
-                seg[i] = 0
-            else:  # We have a stop annotation somewhere in the middle. Ignore this.
-                # Remove this slice from the annotated slices, so that it is segmented via
-                # projection in the next step.
-                slices = np.setdiff1d(slices, i)
-                print(f"You have provided a stop annotation (single red point) in slice {i},")
-                print("but you have annotated slices above or below it. This stop annotation will")
-                print(f"be ignored and the slice {i} will be segmented normally.")
-
-            update_progress(1)
-            continue
-
-        boxes, masks = shape_layer_to_prompts(box_prompts, image_shape, i=i, track_id=track_id)
-        points, labels = points_i
-
-        seg_i = prompt_segmentation(
-            predictor, points, labels, boxes, masks, image_shape, multiple_box_prompts=False,
-            image_embeddings=image_embeddings, i=i
-        )
-        if seg_i is None:
-            print(f"The prompts at slice or frame {i} are invalid and the segmentation was skipped.")
-            print("This will lead to a wrong segmentation across slices or frames.")
-            print(f"Please correct the prompts in {i} and rerun the segmentation.")
-            continue
-
-        seg[i] = seg_i
-        update_progress(1)
-
-    return seg, slices, stop_lower, stop_upper
-
-
-# For advanced batching: match prompts to already segmented objects and continue segmentation.
-def _match_prompts(previous_segmentation, points, boxes, seg_ids):
-    # Create a mapping between ids and prompts.
-    batched_prompts = {}
-    # seg_boundaries = find_boundaries(previous_segmentation, mode="inner")
-    # indices = distance_transform_edt(seg_boundaries, return_distance=False, return_index=True)
-    return batched_prompts
-
-
-def _batched_interactive_segmentation(predictor, points, labels, boxes, image_embeddings, i, previous_segmentation):
-    prev_seg = previous_segmentation if i is None else previous_segmentation[i]
-    seg = np.zeros(prev_seg.shape, dtype="uint32")
-
-    # seg_ids = np.unique(previous_segmentation)
-    # assert seg_ids[0] == 0
-
-    batched_points, batched_labels = [], []
-    negative_points, negative_labels = [], []
-    for j in range(len(points)):
-        if labels[j] == 1:  # positive point
-            batched_points.append(points[j:j+1])
-            batched_labels.append(labels[j:j+1])
-        else:  # negative points
-            negative_points.append(points[j:j+1])
-            negative_labels.append(labels[j:j+1])
-
-    batched_prompts = [(None, point, label) for point, label in zip(batched_points, batched_labels)]
-    batched_prompts.extend([(box, None, None) for box in boxes])
-    batched_prompts = {i: prompt for i, prompt in enumerate(batched_prompts, 1)}
-
-    # For advanced batching: match prompts to already segmented objects and continue segmentation.
-    # (This is left here as a reference for how this can be implemented.
-    #  I have not decided yet if this is actually a good idea or not.)
-    # # If we have no objects: this is the first call for a batched segmentation.
-    # # We treat each positive point or box as a separate object.
-    # if len(seg_ids) == 1:
-    #     # Create a list of all prompts.
-    #     batched_prompts = [(None, point, label) for point, label in zip(batched_points, batched_labels)]
-    #     batched_prompts.extend([(box, None, None) for box in boxes])
-    #     batched_prompts = {i: prompt for i, prompt in enumerate(batched_prompts, 1)}
-
-    # # Otherwise we match the prompts to existing objects.
-    # else:
-    #     batched_prompts = _match_prompts(prev_seg, batched_points, boxes, seg_ids)
-
-    for seg_id, prompt in batched_prompts.items():
-        box, point, label = prompt
-        if len(negative_points) > 0:
-            if point is None:
-                point, label = np.concatenate(negative_points), np.concatenate(negative_labels)
-            else:
-                point = np.concatenate([point] + negative_points)
-                label = np.concatenate([label] + negative_labels)
-
-        if (box is not None) and (point is not None):
-            prediction = prompt_based_segmentation.segment_from_box_and_points(
-                predictor, box, point, label, image_embeddings=image_embeddings, i=i
-            ).squeeze()
-        elif (box is not None) and (point is None):
-            prediction = prompt_based_segmentation.segment_from_box(
-                predictor, box, image_embeddings=image_embeddings, i=i
-            ).squeeze()
-        else:
-            prediction = prompt_based_segmentation.segment_from_points(
-                predictor, point, label, image_embeddings=image_embeddings, i=i
-            ).squeeze()
-
-        seg[prediction] = seg_id
-
-    return seg
-
-
-def prompt_segmentation(
-    predictor, points, labels, boxes, masks, shape, multiple_box_prompts,
-    image_embeddings=None, i=None, box_extension=0, batched=None, previous_segmentation=None,
-):
-    """@private"""
-    assert len(points) == len(labels)
-    have_points = len(points) > 0
-    have_boxes = len(boxes) > 0
-
-    # No prompts were given, return None.
-    if not have_points and not have_boxes:
-        return
-
-    # Batched interactive segmentation.
-    elif batched:
-        assert previous_segmentation is not None
-        seg = _batched_interactive_segmentation(
-            predictor, points, labels, boxes, image_embeddings, i, previous_segmentation
-        )
-
-    # Box and point prompts were given.
-    elif have_points and have_boxes:
-        if len(boxes) > 1:
-            print("You have provided point prompts and more than one box prompt.")
-            print("This setting is currently not supported.")
-            print("When providing both points and prompts you can only segment one object at a time.")
-            return
-        mask = masks[0]
-        if mask is None:
-            seg = prompt_based_segmentation.segment_from_box_and_points(
-                predictor, boxes[0], points, labels, image_embeddings=image_embeddings, i=i
-            ).squeeze()
-        else:
-            seg = prompt_based_segmentation.segment_from_mask(
-                predictor, mask, box=boxes[0], points=points, labels=labels, image_embeddings=image_embeddings, i=i
-            ).squeeze()
-
-    # Only point prompts were given.
-    elif have_points and not have_boxes:
-        seg = prompt_based_segmentation.segment_from_points(
-            predictor, points, labels, image_embeddings=image_embeddings, i=i
-        ).squeeze()
-
-    # Only box prompts were given.
-    elif not have_points and have_boxes:
-        seg = np.zeros(shape, dtype="uint32")
-
-        if len(boxes) > 1 and not multiple_box_prompts:
-            print("You have provided more than one box annotation. This is not yet supported in the 3d annotator.")
-            print("You can only segment one object at a time in 3d.")
-            return
-
-        # Batch this?
-        for seg_id, (box, mask) in enumerate(zip(boxes, masks), 1):
-            if mask is None:
-                prediction = prompt_based_segmentation.segment_from_box(
-                    predictor, box, image_embeddings=image_embeddings, i=i
-                ).squeeze()
-            else:
-                prediction = prompt_based_segmentation.segment_from_mask(
-                    predictor, mask, box=box, image_embeddings=image_embeddings, i=i,
-                    box_extension=box_extension,
-                ).squeeze()
-            seg[prediction] = seg_id
-
-    return seg
-
-
-def _compute_movement(seg, t0, t1):
-
-    def compute_center(t):
-        # computation with center of mass
-        center = np.where(seg[t] == 1)
-        center = np.array([np.mean(center[0]), np.mean(center[1])])
-        return center
-
-    center0 = compute_center(t0)
-    center1 = compute_center(t1)
-
-    move = center0 - center1
-    return move.astype("float64")
-
-
-def _shift_object(mask, motion_model):
-    mask_shifted = np.zeros_like(mask)
-    shift(mask, motion_model, output=mask_shifted, order=0, prefilter=False)
-    return mask_shifted
-
-
-def track_from_prompts(
-    point_prompts, box_prompts, seg, predictor, slices, image_embeddings,
-    stop_upper, threshold, projection, motion_smoothing=0.5, box_extension=0, update_progress=None,
-):
-    """@private
-    """
-    use_box, use_mask, use_points, use_single_point = _validate_projection(projection)
-
-    if update_progress is None:
-        def update_progress(*args):
-            pass
-
-    # shift the segmentation based on the motion model and update the motion model
-    def _update_motion_model(seg, t, t0, motion_model):
-        if t in (t0, t0 + 1):  # this is the first or second frame, we don't have a motion yet
-            pass
-        elif t == t0 + 2:  # this the third frame, we initialize the motion model
-            current_move = _compute_movement(seg, t - 1, t - 2)
-            motion_model = current_move
-        else:  # we already have a motion model and update it
-            current_move = _compute_movement(seg, t - 1, t - 2)
-            alpha = motion_smoothing
-            motion_model = alpha * motion_model + (1 - alpha) * current_move
-
-        return motion_model
-
-    has_division = False
-    motion_model = None
-    verbose = False
-
-    t0 = int(slices.min())
-    t = t0 + 1
-    while True:
-
-        # update the motion model
-        motion_model = _update_motion_model(seg, t, t0, motion_model)
-
-        # use the segmentation from prompts if we are in a slice with prompts
-        if t in slices:
-            seg_prev = None
-            seg_t = seg[t]
-            # currently using the box layer doesn't work for keeping track of the track state
-            # track_state = prompt_layers_to_state(point_prompts, box_prompts, t)
-            track_state = prompt_layer_to_state(point_prompts, t)
-
-        # otherwise project the mask (under the motion model) and segment the next slice from the mask
-        else:
-            if verbose:
-                print(f"Tracking object in frame {t} with movement {motion_model}")
-
-            seg_prev = seg[t - 1]
-            # shift the segmentation according to the motion model
-            if motion_model is not None:
-                seg_prev = _shift_object(seg_prev, motion_model)
-
-            seg_t = prompt_based_segmentation.segment_from_mask(
-                predictor, seg_prev, image_embeddings=image_embeddings, i=t,
-                use_mask=use_mask, use_box=use_box, use_points=use_points,
-                box_extension=box_extension, use_single_point=use_single_point,
-            )
-            track_state = "track"
-
-            # are we beyond the last slice with prompt?
-            # if no: we continue tracking because we know we need to connect to a future frame
-            # if yes: we only continue tracking if overlaps are above the threshold
-            if t < slices[-1]:
-                seg_prev = None
-
-            update_progress(1)
-
-        if (threshold is not None) and (seg_prev is not None):
-            iou = util.compute_iou(seg_prev, seg_t)
-            if iou < threshold:
-                msg = f"Segmentation stopped at frame {t} due to IOU {iou} < {threshold}."
-                print(msg)
-                break
-
-        # stop if we have a division
-        if track_state == "division":
-            has_division = True
-            break
-
-        seg[t] = seg_t
-        t += 1
-
-        # stop tracking if we have stop upper set (i.e. single negative point was set to indicate stop track)
-        if t == slices[-1] and stop_upper:
-            break
-
-        # stop if we are at the last slce
-        if t == seg.shape[0]:
-            break
-
-    return seg, has_division
-
-
 def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, device, tile_shape, halo):
 
-    # Update the index for model family, eg. 'Natural Images (SAM)', 'Light Microscopy', etc.
-    supported_dropdown_maps = {
-        "lm": "Light Microscopy",
-        "em_organelles": "Electron Microscopy",
-        "medical_imaging": "Medical Imaging",
-        "histopathology": "Histopathology",
-    }
+    # VFM families (DINO / UNI / SAM3) live in the classification widget's advanced tier. Let the widget
+    # place the selection. The SAM family/size parsing below is skipped for these names: it parses the
+    # size positionally (vit_<size>), which does not apply and even index-errors on short names ('sam3').
+    from ..models.vfm import is_vfm_model
+    is_vfm = is_vfm_model(model_type)
+    if is_vfm and hasattr(widget, "set_model_family_size"):
+        family, size = widget._family_and_size_for_model(model_type)
+        widget.set_model_family_size(family, size)
 
-    model_family = "Natural Images (SAM)"  # If no suffix patterns match, stick to 'Natural Images (SAM)' family.
-    for k, v in supported_dropdown_maps.items():
-        if model_type.endswith(k):
-            model_family = v
-            break
+    if not is_vfm:
+        # Update the index for model family, eg. 'Natural Images (SAM)', 'Light Microscopy', etc.
+        supported_dropdown_maps = {
+            "lm": "Light Microscopy",
+            "em_organelles": "Electron Microscopy",
+            "medical_imaging": "Medical Imaging",
+            "histopathology": "Histopathology",
+        }
 
-    index = widget.model_family_dropdown.findText(model_family)
-    if index > 0:
-        widget.model_family_dropdown.setCurrentIndex(index)
+        if model_type.startswith("hvit"):  # SAM2 models, eg. 'hvit_t'.
+            # Finetuned SAM2 families carry a suffix (e.g. 'hvit_t_cells' -> 'Microscopy'); the plain
+            # backbones ('hvit_t', ...) are natural-image models.
+            model_family = widget._family_for_sam2_model(model_type)
+        else:
+            model_family = "Natural Images (SAM)"  # No suffix match: stick to 'Natural Images (SAM)'.
+            for k, v in supported_dropdown_maps.items():
+                if model_type.endswith(k):
+                    model_family = v
+                    break
 
-    # Update the index for model size, eg. 'base', 'tiny', etc.
-    size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
-    model_size = size_map[model_type[4]]
+        index = widget.model_family_dropdown.findText(model_family)
+        if index >= 0:
+            widget.model_family_dropdown.setCurrentIndex(index)
 
-    index = widget.model_size_dropdown.findText(model_size)
-    if index > 0:
-        widget.model_size_dropdown.setCurrentIndex(index)
+        # Update the index for model size, eg. 'base', 'tiny', etc.
+        size_map = {"t": "tiny", "s": "small", "b": "base", "l": "large", "h": "huge"}
+        size_idx = 5 if model_type.startswith("hvit") else 4
+        model_size = size_map.get(model_type[size_idx])
+
+        if model_size is not None:
+            index = widget.model_size_dropdown.findText(model_size)
+            if index >= 0:
+                widget.model_size_dropdown.setCurrentIndex(index)
 
     if save_path is not None and isinstance(save_path, str):
         widget.embeddings_save_path_param.setText(str(save_path))
@@ -716,9 +872,29 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
         index = widget.device_dropdown.findText(device)
         widget.device_dropdown.setCurrentIndex(index)
 
+    # Keep tiling as it is when nothing is passed: the caller may not know the settings (e.g. an
+    # old classifier spec without them), and the widget has already applied its own defaults.
+    _sync_tiling_widget(widget, tile_shape, halo, disable_when_none=False)
+
+
+def _sync_tiling_widget(widget, tile_shape, halo, disable_when_none=True):
+    """Show the tiling settings the embeddings were actually computed with in the embedding widget.
+
+    Args:
+        widget: The embedding widget.
+        tile_shape: The in-plane tile shape, None if the embeddings are computed without tiling.
+        halo: The in-plane tile overlap, None if the embeddings are computed without tiling.
+        disable_when_none: Whether `tile_shape=None` switches the tiling dropdown off. This is what
+            the annotation tools want, so the widget never claims a tiling that was not used. Pass
+            False where None just means 'unknown, leave the widget alone'.
+    """
     if tile_shape is not None:
         widget.tile_x_param.setValue(tile_shape[0])
         widget.tile_y_param.setValue(tile_shape[1])
+        # Enable tiling so the loaded tile shape is used and shown.
+        widget.tiling_dropdown.setCurrentText("yes")
+    elif disable_when_none:
+        widget.tiling_dropdown.setCurrentText("no")
 
     if halo is not None:
         widget.halo_x_param.setValue(halo[0])
@@ -727,72 +903,21 @@ def _sync_embedding_widget(widget, model_type, save_path, checkpoint_path, devic
 
 # Read parameters from checkpoint path if it is given instead.
 def _sync_autosegment_widget(widget, model_type, checkpoint_path, update_decoder=None):
+    # The automatic segmentation widget builds its parameters from the backend defaults for the
+    # loaded model and mode (see 'AutoSegmentWidget._make_settings_widget'), so the things to sync
+    # here are which model is loaded and whether it can drive the widget at all.
     if update_decoder is not None:
-        widget._reset_segmentation_mode(update_decoder)
-
-    if widget.with_decoder:
-        settings = model_settings.AIS_SETTINGS.get(model_type, {})
-        params = ("center_distance_thresh", "boundary_distance_thresh")
-        for param in params:
-            if param in settings:
-                getattr(widget, f"{param}_param").setValue(settings[param])
-    else:
-        settings = model_settings.AMG_SETTINGS.get(model_type, {})
-        params = ("pred_iou_thresh", "stability_score_thresh", "min_object_size")
-        for param in params:
-            if param in settings:
-                getattr(widget, f"{param}_param").setValue(settings[param])
+        widget._reset_segmentation_mode(update_decoder, model_type=model_type)
 
 
-# Read parameters from checkpoint path if it is given instead.
-def _sync_ndsegment_widget(widget, model_type, checkpoint_path):
-    settings = model_settings.ND_SEGMENT_SETTINGS.get(model_type, {})
+def _autoseg_state_descriptor(embedding_path, mode):
+    """Descriptor of the SAM2 automatic-segmentation state cache in the embedding Zarr.
 
-    if "projection_mode" in settings:
-        projection_mode = settings["projection_mode"]
-        widget.projection = projection_mode
-        index = widget.projection_dropdown.findText(projection_mode)
-        if index > 0:
-            widget.projection_dropdown.setCurrentIndex(index)
-
-    params = ("iou_threshold", "box_extension")
-    for param in params:
-        if param in settings:
-            getattr(widget, f"{param}_param").setValue(settings[param])
-
-
-def _load_amg_state(embedding_path):
+    Returns the embedding path and mode (the annotator only caches the 'ais' decoder predictions);
+    the state itself is loaded on demand by
+    `micro_sam.precompute_state.cache_autoseg_state`. The SAM2 automatic segmentation widget
+    reads/writes the cache directly, so this only records where it lives.
+    """
     if embedding_path is None or not os.path.exists(embedding_path):
-        return {"cache_folder": None}
-
-    cache_folder = os.path.join(embedding_path, "amg_state")
-    os.makedirs(cache_folder, exist_ok=True)
-    amg_state = {"cache_folder": cache_folder}
-
-    state_paths = glob(os.path.join(cache_folder, "*.pkl"))
-    for path in state_paths:
-        with open(path, "rb") as f:
-            state = pickle.load(f)
-        i = int(Path(path).stem.split("-")[-1])
-        amg_state[i] = state
-    return amg_state
-
-
-def _load_is_state(embedding_path):
-    if embedding_path is None or not os.path.exists(embedding_path):
-        return {"cache_path": None}
-
-    cache_path = os.path.join(embedding_path, "is_state.h5")
-    is_state = {"cache_path": cache_path}
-
-    with h5py.File(cache_path, "a") as f:
-        for name, g in f.items():
-            i = int(name.split("-")[-1])
-            state = {
-                "foreground": g["foreground"][:],
-                "boundary_distances": g["boundary_distances"][:],
-                "center_distances": g["center_distances"][:],
-            }
-            is_state[i] = state
-
-    return is_state
+        return {"embedding_path": None, "mode": mode}
+    return {"embedding_path": embedding_path, "mode": mode}

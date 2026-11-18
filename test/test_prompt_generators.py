@@ -1,13 +1,16 @@
 import unittest
 
-import numpy as np
 import torch
+import pytest
+import numpy as np
 
+from bioimage_cpp.segmentation import label
 from skimage.data import binary_blobs
-from skimage.measure import label
 from skimage.transform import AffineTransform, warp
 
 from micro_sam.util import segmentation_to_one_hot
+
+pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
 
 
 class TestPromptGenerators(unittest.TestCase):

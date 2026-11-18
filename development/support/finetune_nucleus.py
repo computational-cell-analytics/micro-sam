@@ -5,7 +5,7 @@ import torch
 
 from torch_em.data import MinInstanceSampler
 
-import micro_sam.training as sam_training
+import micro_sam.v1.training as sam_training
 
 
 def get_loaders(data_root, patch_shape, batch_size, train_with_decoder):

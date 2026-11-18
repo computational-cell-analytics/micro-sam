@@ -8,10 +8,6 @@ the software license the micro-sam project is distributed under.
 
 from typing import Any, Dict, List, Literal
 
-import numpy as np
-
-import torch
-
 try:
     from numba import njit
     HAVE_NUMBA = True
@@ -20,6 +16,10 @@ except (ImportError, SystemError):
 
     def njit(func):
         return func
+
+import numpy as np
+
+import torch
 
 from bioimage_cpp.utils import compute_rle as _compute_rle_cpp
 

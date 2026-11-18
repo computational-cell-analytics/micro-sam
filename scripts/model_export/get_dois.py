@@ -24,5 +24,10 @@ def get_zenodo_url(model_name, model_id):
     print()
 
 
-for model_name, model_id in MODEL_TO_ID.items():
-    get_zenodo_url(model_name, model_id)
+def main():
+    for model_name, model_id in MODEL_TO_ID.items():
+        get_zenodo_url(model_name, model_id)
+
+
+if __name__ == "__main__":
+    main()

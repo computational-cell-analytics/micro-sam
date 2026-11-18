@@ -8,6 +8,8 @@ There are four ways to install `micro_sam`:
 
 You can find more information on the installation and how to troubleshoot it in [the FAQ section](#installation-questions).
 
+**IMPORTANT**: Version 2.0 (`micro-sam2`) is not released on pip and conda yet, so these install the previous version 1.x. To use the current pre-release, [install from source](#from-source) and check out the `v2.0.0a1` tag after cloning the repository (`git checkout v2.0.0a1`).
+
 ## From pip
 
 `pip` is the default python package manager. You can install `micro_sam` via pip with the command:
@@ -17,9 +19,14 @@ pip install micro_sam
 
 Note: when using pip you have to manage your python environments yourself. For example, you could create a conda environment and install `micro_sam` via pip in there, or use `venv` for this.
 
-To use the `vit_t` (MobileSAM) model, you have to additionally install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` was installed via pip. It is not available on PyPI, so it has to be installed from GitHub:
+To use the SAM1 `vit_t` (MobileSAM) model of the previous version (`micro_sam.v1`), you have to additionally install [MobileSAM](https://github.com/ChaoningZhang/MobileSAM) in the environment where `micro_sam` was installed via pip. It is not available on PyPI, so it has to be installed from GitHub:
 ```bash
-pip install git+https://github.com/ChaoningZhang/MobileSAM.git@f706ad9c4eb7f219c00d9050e46328518ffb65d2
+pip install git+https://github.com/ChaoningZhang/MobileSAM.git
+```
+
+The AnyUp upsampling option of the pixel and object classification tools needs [AnyUp](https://github.com/wimmerth/anyup). It is not available on PyPI or conda-forge, so it has to be installed from GitHub:
+```bash
+pip install git+https://github.com/wimmerth/anyup
 ```
 
 ## From conda
@@ -48,6 +55,11 @@ This means it will install the CPU version if you don't have a nvidia GPU, and w
 However, if you have an older operating system, or a CUDA version older than 12, than it may not install the correct version. In this case you will have to specify you're CUDA version, for example for CUDA 11, like this:
 ```bash
 conda install -c conda-forge micro_sam "libtorch=*=cuda11*"
+```
+
+The AnyUp upsampling option of the pixel and object classification tools needs [AnyUp](https://github.com/wimmerth/anyup). Install it with pip in the conda environment, since it is not available on PyPI or conda-forge:
+```bash
+pip install git+https://github.com/wimmerth/anyup
 ```
 
 ## From source

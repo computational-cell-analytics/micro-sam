@@ -4,8 +4,8 @@
 
 This software consists of four different python (sub-)modules:
 - The top-level `micro_sam` module implements general purpose functionality for using Segment Anything for multi-dimensional data.
-- `micro_sam.evaluation` provides functionality to evaluate Segment Anything models on (microscopy) segmentation tasks.
-- `micro_sam.training` implements the training functionality to finetune Segment Anything for custom segmentation datasets.
+- `micro_sam.v1.evaluation` provides functionality to evaluate Segment Anything models on (microscopy) segmentation tasks.
+- `micro_sam.v1.training` implements the training functionality to finetune Segment Anything for custom segmentation datasets.
 - `micro_sam.sam_annotator` implements the interactive annotation tools.
 
 ## Annotation Tools

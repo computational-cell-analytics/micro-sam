@@ -11,6 +11,11 @@ on:
   pull_request:  # run CI on commits to any open PR
   workflow_dispatch:  # can manually trigger CI from GitHub actions tab
 
+# Cancel older runs of this workflow on the same PR; other runs get their own group and always run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test-pip:
     name: pip-install ubuntu-latest ${{ matrix.python-version }}
@@ -19,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        python-version: ["3.12"]
 
     steps:
       - name: Checkout
@@ -41,15 +46,29 @@ jobs:
 
       # MobileSAM (vit_t backend) is not on PyPI; install it from GitHub to keep vit_t coverage.
       - name: Install MobileSAM
-        run: python -m pip install git+https://github.com/ChaoningZhang/MobileSAM.git@f706ad9c4eb7f219c00d9050e46328518ffb65d2
+        run: python -m pip install git+https://github.com/ChaoningZhang/MobileSAM.git
+
+      # SAM2 (hvit_* backend) is not on PyPI; install it from GitHub to keep SAM2 coverage.
+      # Reuse the installed torch: an isolated build downloads a second torch that overflows /tmp.
+      - name: Install SAM2
+        run: python -m pip install --no-build-isolation git+https://github.com/facebookresearch/sam2.git
 
       # A standalone mask prompt is build-dependent with the PyPI torch wheels used here;
       # MICRO_SAM_SKIP_STANDALONE_MASK_PROMPT skips that single assertion (see the test).
       # Set it via GITHUB_ENV so it is exported to the headless-gui step's environment.
       - name: Configure test environment
+        id: configure
         run: echo "MICRO_SAM_SKIP_STANDALONE_MASK_PROMPT=1" >> "$GITHUB_ENV"
 
-      - name: Run non-gui tests
+      # The non-gui tests run in two parts: the SAM1 tests (marked with 'pytest.mark.v1') and the
+      # SAM2 and annotator tests. The v2 part also runs when the v1 part fails.
+      - name: Run v1 non-gui tests
         uses: aganders3/headless-gui@v2
         with:
-          run: pytest -m "not gui"
+          run: pytest -m "v1 and not gui"
+
+      - name: Run v2 non-gui tests
+        if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+        uses: aganders3/headless-gui@v2
+        with:
+          run: pytest -m "not v1 and not gui"

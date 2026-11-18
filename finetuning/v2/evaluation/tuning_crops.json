@@ -1,0 +1,1275 @@
+{
+ "rule": "The tuning crops of the parameter search, placed by 'parameter_search.py prepare'. 3d: 32x512x512 tiles of the tuning region without overlap; an axis shorter than the crop gets one crop of its length; per dataset, at most 5 tiles stay, the ones with the most objects. 2d: 512x512 tiles of the tuning images the same way; per dataset, at most 10 tiles stay, the ones with the most objects, at most ceil(10 / images) per image.",
+ "datasets": {
+  "densecell_mito": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "1 of 1 tiles with objects stay, holding 7-7 objects.",
+   "starts": {
+    "densecell_train.h5": [
+     [
+      35,
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "lucchi": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "2 of 2 tiles with objects stay, holding 2-7 objects.",
+   "starts": {
+    "lucchi_train.h5": [
+     [
+      140,
+      0,
+      0
+     ],
+     [
+      140,
+      0,
+      512
+     ]
+    ]
+   }
+  },
+  "mitoem_human": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 60 tiles with objects stay, holding 19-20 objects.",
+   "starts": {
+    "human_val.n5": [
+     [
+      0,
+      0,
+      3072
+     ],
+     [
+      0,
+      512,
+      0
+     ],
+     [
+      0,
+      1024,
+      2560
+     ],
+     [
+      0,
+      1024,
+      3072
+     ],
+     [
+      0,
+      3584,
+      512
+     ]
+    ]
+   }
+  },
+  "mitoem_rat": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 57 tiles with objects stay, holding 18-25 objects.",
+   "starts": {
+    "rat_val.n5": [
+     [
+      0,
+      0,
+      1536
+     ],
+     [
+      0,
+      512,
+      1536
+     ],
+     [
+      0,
+      512,
+      2560
+     ],
+     [
+      0,
+      1536,
+      512
+     ],
+     [
+      0,
+      1536,
+      3072
+     ]
+    ]
+   }
+  },
+  "mitoemv2_beta": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 32 tiles with objects stay, holding 47-61 objects.",
+   "starts": {
+    "me2-beta_train01.n5": [
+     [
+      480,
+      0,
+      0
+     ],
+     [
+      512,
+      0,
+      0
+     ],
+     [
+      544,
+      0,
+      0
+     ],
+     [
+      608,
+      0,
+      0
+     ],
+     [
+      640,
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "mitoemv2_jurkat": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "4 of 4 tiles with objects stay, holding 2-9 objects.",
+   "starts": {
+    "me2-jurkat_train01.n5": [
+     [
+      230,
+      0,
+      0
+     ],
+     [
+      230,
+      0,
+      512
+     ],
+     [
+      230,
+      512,
+      0
+     ],
+     [
+      230,
+      512,
+      512
+     ]
+    ]
+   }
+  },
+  "mitoemv2_macro": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 32 tiles with objects stay, holding 20-24 objects.",
+   "starts": {
+    "me2-macro_train02.n5": [
+     [
+      96,
+      0,
+      0
+     ],
+     [
+      128,
+      0,
+      0
+     ],
+     [
+      160,
+      0,
+      0
+     ],
+     [
+      192,
+      0,
+      0
+     ],
+     [
+      224,
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "mitoemv2_podo": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 32 tiles with objects stay, holding 60-66 objects.",
+   "starts": {
+    "me2-podo_train02.n5": [
+     [
+      0,
+      512,
+      0
+     ],
+     [
+      160,
+      512,
+      0
+     ],
+     [
+      192,
+      512,
+      0
+     ],
+     [
+      192,
+      512,
+      512
+     ],
+     [
+      224,
+      512,
+      0
+     ]
+    ]
+   }
+  },
+  "mitoemv2_sperm": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 16 tiles with objects stay, holding 52-64 objects.",
+   "starts": {
+    "me2-sperm_train02.n5": [
+     [
+      0,
+      0,
+      512
+     ],
+     [
+      32,
+      0,
+      512
+     ],
+     [
+      64,
+      0,
+      512
+     ],
+     [
+      96,
+      0,
+      0
+     ],
+     [
+      96,
+      0,
+      512
+     ]
+    ]
+   }
+  },
+  "mitoemv2_stem": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "3 of 3 tiles with objects stay, holding 142-162 objects.",
+   "starts": {
+    "me2-stem_train02.n5": [
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      32,
+      0,
+      0
+     ],
+     [
+      64,
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "mitoemv2_mossy": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 27 tiles with objects stay, holding 27-35 objects.",
+   "starts": {
+    "pos2.zarr": [
+     [
+      32,
+      512,
+      512
+     ],
+     [
+      96,
+      0,
+      512
+     ],
+     [
+      128,
+      0,
+      512
+     ],
+     [
+      128,
+      512,
+      512
+     ],
+     [
+      160,
+      512,
+      512
+     ]
+    ]
+   }
+  },
+  "asem_mito": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 6 tiles with objects stay, holding 1-10 objects.",
+   "starts": {
+    "61_z0-700_y190-730_x2630-3380.zarr": [
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      32,
+      0,
+      0
+     ],
+     [
+      64,
+      0,
+      0
+     ],
+     [
+      96,
+      0,
+      0
+     ]
+    ],
+    "64_z400-641_y326-802_x2212-2740.zarr": [
+     [
+      0,
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "mitonet_kidney": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 12 tiles with objects stay, holding 62-93 objects.",
+   "starts": {
+    "kidney_050478761254.zarr": [
+     [
+      0,
+      0,
+      512
+     ],
+     [
+      0,
+      512,
+      0
+     ]
+    ],
+    "kidney_32c6ece54f2a.zarr": [
+     [
+      0,
+      0,
+      0
+     ]
+    ],
+    "kidney_348c6793d55c.zarr": [
+     [
+      0,
+      0,
+      512
+     ],
+     [
+      0,
+      512,
+      0
+     ]
+    ]
+   }
+  },
+  "snemi_mito": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "4 of 4 tiles with objects stay, holding 12-20 objects.",
+   "starts": {
+    "snemi_mito.h5": [
+     [
+      50,
+      0,
+      0
+     ],
+     [
+      50,
+      0,
+      512
+     ],
+     [
+      50,
+      512,
+      0
+     ],
+     [
+      50,
+      512,
+      512
+     ]
+    ]
+   }
+  },
+  "cellmap_nucleus": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 15 tiles with objects stay, holding 6-7 objects.",
+   "starts": {
+    "jrc_zf-cardiac-1_crop379.zarr": [
+     [
+      64,
+      0,
+      0
+     ],
+     [
+      96,
+      0,
+      0
+     ],
+     [
+      160,
+      0,
+      0
+     ],
+     [
+      192,
+      0,
+      0
+     ],
+     [
+      224,
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "fafb_nuclei": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 16 tiles with objects stay, holding 43-46 objects.",
+   "starts": {
+    "val_block_0.h5": [
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      32,
+      0,
+      0
+     ],
+     [
+      128,
+      0,
+      0
+     ]
+    ],
+    "val_block_1.h5": [
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      192,
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "microns_nuclei": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "5 of 32 tiles with objects stay, holding 7-7 objects.",
+   "starts": {
+    "val_block_0.h5": [
+     [
+      224,
+      0,
+      0
+     ]
+    ],
+    "val_block_1.h5": [
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      128,
+      0,
+      0
+     ],
+     [
+      160,
+      0,
+      0
+     ],
+     [
+      224,
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "platynereis_nuclei": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "3 of 3 tiles with objects stay, holding 12-14 objects.",
+   "starts": {
+    "train_data_nuclei_12.h5": [
+     [
+      16,
+      32,
+      32
+     ],
+     [
+      48,
+      32,
+      32
+     ],
+     [
+      80,
+      32,
+      32
+     ]
+    ]
+   }
+  },
+  "probtem": {
+   "crop_shape": [
+    512,
+    512
+   ],
+   "note": "10 crops of 3 images (at most 4 per image), holding 4-7 objects.",
+   "starts": {
+    "x_0.h5": [
+     [
+      0,
+      512
+     ],
+     [
+      512,
+      512
+     ]
+    ],
+    "x_3.h5": [
+     [
+      512,
+      512
+     ],
+     [
+      512,
+      1536
+     ],
+     [
+      1024,
+      512
+     ],
+     [
+      1024,
+      1024
+     ]
+    ],
+    "x_5.h5": [
+     [
+      1536,
+      0
+     ],
+     [
+      1536,
+      512
+     ],
+     [
+      1536,
+      1536
+     ],
+     [
+      2048,
+      512
+     ]
+    ]
+   }
+  },
+  "mitolab_tem": {
+   "crop_shape": [
+    512,
+    512
+   ],
+   "note": "10 crops of 10 images (at most 1 per image), holding 1-22 objects.",
+   "starts": {
+    "0s1JawDdbBymwtwOjgx8.tiff": [
+     [
+      512,
+      512
+     ]
+    ],
+    "6uc2ydKjW1yJG033GPjj.tiff": [
+     [
+      0,
+      0
+     ]
+    ],
+    "FSqfiQ5X7pl4pbbBV3og.tiff": [
+     [
+      0,
+      0
+     ]
+    ],
+    "PRV36TemoPe3oPNL0RXZ.tiff": [
+     [
+      512,
+      0
+     ]
+    ],
+    "QsP5DBmv2NYg8LUlw8b1.tiff": [
+     [
+      512,
+      0
+     ]
+    ],
+    "R6p8J6wCSmn3aStj4GHv.tiff": [
+     [
+      512,
+      0
+     ]
+    ],
+    "UuyHhnn7MjnSClcZPBAG.tiff": [
+     [
+      0,
+      0
+     ]
+    ],
+    "e8mrOPbV0mqJZ5L7xY8c.tiff": [
+     [
+      0,
+      512
+     ]
+    ],
+    "kBnMAlFJtapfTpTu5iHL.tiff": [
+     [
+      0,
+      0
+     ]
+    ],
+    "lw3ENjwOInSmgeNNY0Qk.tiff": [
+     [
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "cmito_dauer_manual": {
+   "crop_shape": [
+    512,
+    512
+   ],
+   "note": "10 crops of 14 images (at most 1 per image), holding 2-6 objects.",
+   "starts": {
+    "patch_015.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "patch_027.h5": [],
+    "patch_044.h5": [],
+    "patch_058.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "patch_079.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "patch_094.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "patch_095.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "patch_098.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "patch_112.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "patch_149.h5": [],
+    "patch_154.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "patch_156.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "patch_161.h5": [],
+    "patch_167.h5": [
+     [
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "tnbc_mito": {
+   "crop_shape": [
+    512,
+    512
+   ],
+   "note": "10 crops of 10 images (at most 1 per image), holding 2-23 objects.",
+   "starts": {
+    "rwt_2_HM_1.tif": [
+     [
+      512,
+      1024
+     ]
+    ],
+    "rwt_8_HM_1.tif": [
+     [
+      0,
+      1536
+     ]
+    ],
+    "wt_2Kx_2.tif": [
+     [
+      512,
+      1536
+     ]
+    ],
+    "wt_4Kx_1.tif": [
+     [
+      1024,
+      512
+     ]
+    ],
+    "wt_7_HM_2.tif": [
+     [
+      1024,
+      512
+     ]
+    ],
+    "R20_72_G01_2913_25.tif": [
+     [
+      1536,
+      2048
+     ]
+    ],
+    "R20_72_G01_2913_55.tif": [
+     [
+      2048,
+      1024
+     ]
+    ],
+    "R20_120A_53A_01.tif": [
+     [
+      1024,
+      512
+     ]
+    ],
+    "R20_120A_53A_13.tif": [
+     [
+      512,
+      2048
+     ]
+    ],
+    "R20_120B_53B_46.tif": [
+     [
+      1024,
+      2560
+     ]
+    ]
+   }
+  },
+  "cardiomyocyte_tem_mito": {
+   "crop_shape": [
+    512,
+    512
+   ],
+   "note": "10 crops of 4 images (at most 3 per image), holding 29-65 objects.",
+   "starts": {
+    "914.4_nucA_m3_M3500x_tile_y0_x0.h5": [
+     [
+      0,
+      0
+     ],
+     [
+      512,
+      0
+     ],
+     [
+      512,
+      512
+     ]
+    ],
+    "914.4_nucA_m3_M3500x_tile_y0_x1024.h5": [
+     [
+      512,
+      0
+     ],
+     [
+      512,
+      512
+     ]
+    ],
+    "914.4_nucA_m3_M3500x_tile_y1024_x1024.h5": [
+     [
+      0,
+      512
+     ],
+     [
+      512,
+      512
+     ]
+    ],
+    "914.4_nucA_m3_M3500x_tile_y1024_x2048.h5": [
+     [
+      0,
+      0
+     ],
+     [
+      0,
+      512
+     ],
+     [
+      512,
+      0
+     ]
+    ]
+   }
+  },
+  "u2os_fibsem_nucleus": {
+   "crop_shape": [
+    512,
+    512
+   ],
+   "note": "10 crops of 6 images (at most 2 per image), holding 1-1 objects.",
+   "starts": {
+    "U2OS_cells_nucleus_crop_05.h5": [
+     [
+      0,
+      0
+     ],
+     [
+      512,
+      0
+     ]
+    ],
+    "U2OS_cells_nucleus_crop_05_z0872.h5": [
+     [
+      0,
+      0
+     ],
+     [
+      512,
+      0
+     ]
+    ],
+    "U2OS_cells_nucleus_crop_11.h5": [
+     [
+      0,
+      0
+     ],
+     [
+      512,
+      0
+     ]
+    ],
+    "U2OS_cells_nucleus_crop_11_z0718.h5": [
+     [
+      0,
+      0
+     ],
+     [
+      512,
+      0
+     ]
+    ],
+    "U2OS_cells_nucleus_crop_17.h5": [
+     [
+      0,
+      0
+     ],
+     [
+      512,
+      0
+     ]
+    ],
+    "U2OS_cells_nucleus_crop_17_z0460.h5": []
+   }
+  },
+  "cellmap_nucleus_2d": {
+   "crop_shape": [
+    512,
+    512
+   ],
+   "note": "10 crops of 10 images (at most 1 per image), holding 6-7 objects.",
+   "starts": {
+    "val_00.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_01.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_02.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_03.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_04.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_05.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_06.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_07.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_08.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_09.h5": [
+     [
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "fafb_nuclei_2d": {
+   "crop_shape": [
+    512,
+    512
+   ],
+   "note": "10 crops of 10 images (at most 1 per image), holding 33-35 objects.",
+   "starts": {
+    "val_00.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_01.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_02.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_03.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_04.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_05.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_06.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_07.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_08.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_09.h5": [
+     [
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "microns_nuclei_2d": {
+   "crop_shape": [
+    512,
+    512
+   ],
+   "note": "10 crops of 10 images (at most 1 per image), holding 6-7 objects.",
+   "starts": {
+    "val_00.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_01.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_02.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_03.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_04.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_05.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_06.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_07.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_08.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_09.h5": [
+     [
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "platynereis_nuclei_2d": {
+   "crop_shape": [
+    512,
+    512
+   ],
+   "note": "10 crops of 10 images (at most 1 per image), holding 9-12 objects.",
+   "starts": {
+    "val_00.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_01.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_02.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_03.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_04.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_05.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_06.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_07.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_08.h5": [
+     [
+      0,
+      0
+     ]
+    ],
+    "val_09.h5": [
+     [
+      0,
+      0
+     ]
+    ]
+   }
+  }
+ }
+}

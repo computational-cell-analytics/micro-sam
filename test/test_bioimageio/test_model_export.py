@@ -6,6 +6,7 @@ from shutil import rmtree
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
 import numpy as np
 import imageio.v3 as imageio
 
@@ -16,6 +17,8 @@ import torch
 
 import micro_sam.util as util
 from micro_sam.sample_data import fetch_hela_2d_example_data, synthetic_data
+
+pytestmark = pytest.mark.v1  # SAM1 test module, runs in the 'v1' CI suite.
 
 spec_minor = int(bioimageio.spec.__version__.split(".")[1])
 
@@ -35,7 +38,7 @@ class TestModelExport(unittest.TestCase):
         rmtree(self.tmp_folder, ignore_errors=True)
 
     def test_model_export(self):
-        from micro_sam.bioimageio import export_sam_model
+        from micro_sam.v1.bioimageio import export_sam_model
         image, labels = synthetic_data(shape=(1024, 1022))
 
         cover_path = os.path.join(self.tmp_folder, "cover.png")
@@ -57,7 +60,7 @@ class TestModelExport(unittest.TestCase):
         "The full decoder model export is only tested on Linux.",
     )
     def test_model_export_with_decoder(self):
-        from micro_sam.bioimageio import export_sam_model
+        from micro_sam.v1.bioimageio import export_sam_model
         data_dir = os.path.join(util.get_cache_directory(), "sample_data")
         image = imageio.imread(fetch_hela_2d_example_data(data_dir))
         labels = np.zeros(image.shape[:2], dtype="uint32")
@@ -84,7 +87,7 @@ class TestModelExport(unittest.TestCase):
 
 class TestModelExportRegressions(unittest.TestCase):
     def test_decoder_export_pipelines_use_cpu(self):
-        from micro_sam.bioimageio import model_export
+        from micro_sam.v1.bioimageio import model_export
 
         image = np.zeros((1, 3, 8, 8), dtype="uint8")
         mask = np.ones((1, 1, 1, 8, 8), dtype="uint8")
@@ -135,7 +138,7 @@ class TestModelExportRegressions(unittest.TestCase):
                 create_pipeline.assert_called_once_with(model_description, devices=["cpu"])
 
     def test_prompt_free_prediction_without_decoder(self):
-        from micro_sam.bioimageio.predictor_adaptor import PredictorAdaptor
+        from micro_sam.v1.bioimageio.predictor_adaptor import PredictorAdaptor
 
         image = torch.zeros((1, 3, 8, 8), dtype=torch.uint8)
         embeddings = torch.zeros((1, 256, 64, 64), dtype=torch.float32)
@@ -172,7 +175,7 @@ class TestModelExportRegressions(unittest.TestCase):
         self.assertIs(output_embeddings, embeddings)
 
     def test_embedding_cache_uses_bounded_transformed_input(self):
-        from micro_sam.bioimageio.predictor_adaptor import PredictorAdaptor
+        from micro_sam.v1.bioimageio.predictor_adaptor import PredictorAdaptor
 
         embeddings = torch.zeros((1, 256, 64, 64), dtype=torch.float32)
         sam = MagicMock()
@@ -223,7 +226,7 @@ class TestModelExportRegressions(unittest.TestCase):
         self.assertEqual(adaptor._cached_original_size, (16, 8))
 
     def test_model_check_accepts_empty_automatic_segmentation(self):
-        from micro_sam.bioimageio import model_export
+        from micro_sam.v1.bioimageio import model_export
 
         input_arrays = {
             "image": np.zeros((1, 3, 8, 8), dtype="uint8"),

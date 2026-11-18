@@ -18,8 +18,8 @@ from torch_em.util import segmentation, prediction
 from torch_em.transform.label import PerObjectDistanceTransform
 from torch_em.data.datasets.light_microscopy import get_livecell_loader, get_covid_if_loader
 
-import micro_sam.training as sam_training
-from micro_sam.training.util import ConvertToSemanticSamInputs
+import micro_sam.v1.training as sam_training
+from micro_sam.v1.training.util import ConvertToSemanticSamInputs
 
 from elf.evaluation import mean_segmentation_accuracy
 

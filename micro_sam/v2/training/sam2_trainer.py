@@ -1,0 +1,514 @@
+import os
+import time
+import random
+import warnings
+import contextlib
+from typing import Callable, Optional
+
+import numpy as np
+
+import torch
+import torch.nn.functional as F
+import torch.distributed as dist
+
+import torch_em
+from torch_em.trainer.logger_base import TorchEmLogger
+
+from micro_sam.util import training_autocast_dtype
+from micro_sam.v2.loss.custom_sam2_loss import CORE_LOSS_KEY, CustomSAM2Metric
+
+# Fixed seed for the main-process randomness during validation (prompt/correction-click
+# sampling in SAM2Train, object subsampling in ConvertToSam2VideoBatch). Worker-side crop
+# randomness is pinned separately via the val loader's deterministic worker_init_fn.
+VALIDATION_SEED = 42
+
+
+def _snapshot_rng():
+    """Capture the global RNG state so it can be restored after deterministic validation."""
+    cuda_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
+    return random.getstate(), np.random.get_state(), torch.get_rng_state(), cuda_state
+
+
+def _restore_rng(state):
+    """Restore the global RNG state captured by _snapshot_rng."""
+    py_state, np_state, torch_state, cuda_state = state
+    random.setstate(py_state)
+    np.random.set_state(np_state)
+    torch.set_rng_state(torch_state)
+    if cuda_state is not None:
+        torch.cuda.set_rng_state_all(cuda_state)
+
+
+def _seed_all(seed):
+    """Seed the python, numpy, and torch (CPU + CUDA) global RNGs."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def _sam2_model_rng(model):
+    """Return SAM2Train's private numpy Generator, unwrapping DDP. None if the model has none."""
+    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+        model = model.module
+    return getattr(model, "rng", None)
+
+
+@contextlib.contextmanager
+def _pinned_validation_rng(model):
+    """Pin every RNG that affects validation, then restore it on exit.
+
+    Covers SAM2Train's own ``numpy.random.Generator``, which ``np.random.seed`` does not reach.
+    """
+    rng_state = _snapshot_rng()
+    model_rng = _sam2_model_rng(model)
+    model_rng_state = None if model_rng is None else model_rng.bit_generator.state
+    _seed_all(VALIDATION_SEED)
+    if model_rng is not None:
+        model_rng.bit_generator.state = np.random.default_rng(VALIDATION_SEED).bit_generator.state
+    try:
+        yield
+    finally:
+        _restore_rng(rng_state)
+        if model_rng is not None:
+            model_rng.bit_generator.state = model_rng_state
+
+
+def _get_cmap():
+    from matplotlib import colormaps
+    return colormaps["tab20"]
+
+
+def _colorize_instance_map(label_hw):
+    """(H,W) int64 numpy -> (3,H,W) float32 [0,1], one tab20 color per instance ID."""
+    cmap = _get_cmap()
+    H, W = label_hw.shape
+    rgb = np.zeros((H, W, 3), dtype=np.float32)
+    for i, uid in enumerate(np.unique(label_hw)):
+        if uid == 0:
+            continue
+        rgb[label_hw == uid] = np.array(cmap(i % 20)[:3], dtype=np.float32)
+    return rgb.transpose(2, 0, 1)
+
+
+def _overlay_binary_masks(masks_ohw, target_hw=None):
+    """(O,H,W) bool tensor -> (3,H,W) float32 [0,1] overlay, one tab20 color per object."""
+    cmap = _get_cmap()
+    O, H, W = masks_ohw.shape
+    rgb = np.zeros((H, W, 3), dtype=np.float32)
+    for i in range(O):
+        rgb[masks_ohw[i].cpu().numpy().astype(bool)] = np.array(cmap(i % 20)[:3], dtype=np.float32)
+    result = rgb.transpose(2, 0, 1)
+    if target_hw is not None and (H, W) != target_hw:
+        t = torch.from_numpy(result).unsqueeze(0)
+        result = F.interpolate(t, size=target_hw, mode="bilinear", align_corners=False).squeeze(0).numpy()
+    return result
+
+
+class CheckpointAdapter:
+    """Mixin that saves and loads checkpoints against the module a DDP wrapper holds.
+
+    Gives one on-disk format regardless of how training ran, so checkpoints transfer between
+    single-GPU and DDP in both directions.
+    """
+
+    def save_checkpoint(self, name, current_metric, best_metric, **extra_save_dict):
+        original_model = self.model
+        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+            self.model = self.model.module
+        peft_config = getattr(self.model, "peft_config", None)
+        if peft_config is not None:
+            extra_save_dict.setdefault("peft_kwargs", peft_config)
+        try:
+            super().save_checkpoint(name, current_metric, best_metric, **extra_save_dict)
+        finally:
+            self.model = original_model
+
+    def load_checkpoint(self, checkpoint="best"):
+        original_model = self.model
+        if isinstance(self.model, torch.nn.parallel.DistributedDataParallel):
+            self.model = self.model.module
+        try:
+            return super().load_checkpoint(checkpoint)
+        finally:
+            self.model = original_model
+
+
+class Sam2Trainer(CheckpointAdapter, torch_em.trainer.DefaultTrainer):
+    """torch-em style trainer for interactive segmentation with SAM2Train.
+
+    Uses SAM2Train (full model with video memory) and SAM2's native prompting
+    strategy, which handles 2D (T=1) and 3D/video (T>1) batches uniformly:
+    - T=1: forces point-input mode, one correction round.
+    - T>1: mixes point/box/mask prompts across frames with iterative correction.
+
+    The prompting logic (initial point/box/mask selection, iterative correction
+    from error regions) is fully embedded in SAM2Train.forward(). No manual
+    iterative loop is needed here.
+
+    Args:
+        convert_inputs: Callable that converts (x, y) torch-em batches to
+            BatchedVideoDatapoint. Use ConvertToSam2VideoBatch.
+        loss: Loss module compatible with SAM2Train outputs. Defaults to
+            MultiStepMultiMasksAndIous when constructed via train_sam2().
+        kwargs: Forwarded to torch_em.trainer.DefaultTrainer (model,
+            train_loader, val_loader, optimizer, device, lr_scheduler,
+            logger, save_root, etc.). mixed_precision and mixed_precision_dtype
+            default to what the device runs natively, see
+            `micro_sam.util.training_autocast_dtype`.
+    """
+
+    def __init__(
+        self,
+        convert_inputs: Callable,
+        loss: torch.nn.Module,
+        metric: Optional[torch.nn.Module] = None,
+        clip_grad_norm: Optional[float] = None,
+        **kwargs,
+    ):
+        # The validation metric mirrors v1 SamTrainer: a best-mask Dice score (here on the
+        # initial SAM2 prompt response). Default to CustomSAM2Metric if none is given.
+        if metric is None:
+            metric = CustomSAM2Metric()
+        # The hardware decides the precision. SAM2 trains in bfloat16 only.
+        dtype = training_autocast_dtype(kwargs.get("device"))
+        kwargs.setdefault("mixed_precision", dtype is not None)
+        kwargs.setdefault("mixed_precision_dtype", "bfloat16")
+        super().__init__(loss=loss, metric=metric, **kwargs)
+        self.convert_inputs = convert_inputs
+        self.clip_grad_norm = clip_grad_norm
+        self.interactive_loss = loss
+        self._kwargs = kwargs
+
+    def _amp_context(self):
+        return torch.autocast(device_type=self._device_type, dtype=getattr(torch, self.mixed_precision_dtype))
+
+    # The parent pairs its mixed epoch with _backprop_mixed. SAM2 needs _sam2_backprop in both.
+    def _train_epoch(self, progress):
+        return self._train_epoch_impl(progress, contextlib.nullcontext, self._sam2_backprop)
+
+    def _train_epoch_mixed(self, progress):
+        return self._train_epoch_impl(progress, self._amp_context, self._sam2_backprop)
+
+    def _validate(self):
+        return self._validate_impl(contextlib.nullcontext)
+
+    def _validate_mixed(self):
+        return self._validate_impl(self._amp_context)
+
+    def _check_input_normalization(self, x, input_check_done):
+        if not input_check_done:
+            data_min, data_max = x.min().item(), x.max().item()
+            # Raise an error, because training on inputs in [0, 255] gives a model that you cannot use.
+            if data_max > 1:
+                raise ValueError(
+                    f"The training inputs have the range [{data_min:.3g}, {data_max:.3g}], but the SAM2 trainer "
+                    "expects inputs in [0, 1]. Normalize the inputs to [0, 1], for example with "
+                    "`micro_sam.v2.normalization.normalize_raw`."
+                )
+            if data_min < 0:
+                warnings.warn(
+                    f"The training inputs have the minimum {data_min:.3g}, but the SAM2 trainer expects inputs "
+                    "in [0, 1]. Normalize the inputs to [0, 1]."
+                )
+            input_check_done = True
+        return input_check_done
+
+    def _sam2_backprop(self, loss: torch.Tensor):
+        """Backward + optional gradient clipping + optimizer step.
+
+        Returns the pre-clip total gradient norm when clipping is enabled, else None.
+        """
+        grad_norm = None
+        if self.scaler is not None:
+            self.scaler.scale(loss).backward()
+            if self.clip_grad_norm is not None:
+                self.scaler.unscale_(self.optimizer)
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            loss.backward()
+            if self.clip_grad_norm is not None:
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm)
+            self.optimizer.step()
+        return None if grad_norm is None else grad_norm.item()
+
+    def _interactive_step(self, x, y):
+        # Convert on the device: the 1024x1024 resize dominates and is ~13x faster there, and
+        # the source patches transfer 4x less data than the resized ones. The trailing .to()
+        # only moves the metadata tensors, which are built on the host.
+        x = x.to(self.device, non_blocking=True)
+        y = y.to(self.device, non_blocking=True)
+        batch = self.convert_inputs(x, y)
+        batch = batch.to(self.device, non_blocking=True)
+        outputs = self.model(batch)
+        loss = self.interactive_loss(outputs, batch.masks)[CORE_LOSS_KEY]
+        return loss, batch, outputs
+
+    def _train_epoch_impl(self, progress, forward_context, backprop):
+        # Advance the distributed sampler seed so each epoch has a different shuffle.
+        if hasattr(self.train_loader, "batch_sampler") and \
+                hasattr(self.train_loader.batch_sampler, "set_epoch"):
+            self.train_loader.batch_sampler.set_epoch(self._epoch)
+
+        self.model.train()
+        n_iter = 0
+        t_per_iter = time.time()
+        input_check_done = False
+
+        for x, y in self.train_loader:
+            input_check_done = self._check_input_normalization(x, input_check_done)
+            self.optimizer.zero_grad()
+
+            with forward_context():
+                loss, batch, outputs = self._interactive_step(x, y)
+
+            grad_norm = self._sam2_backprop(loss)
+
+            if self.logger is not None:
+                log_imgs = (self._iteration % self.log_image_interval == 0)
+                lr = self.optimizer.param_groups[0]["lr"]
+                with torch.no_grad():
+                    metric = self.metric(outputs, batch.masks).item()
+                n_frames = x.shape[2] if x.ndim == 5 else 1
+                self.logger.log_train(
+                    self._iteration, loss.item(), lr,
+                    metric=metric, grad_norm=grad_norm, n_frames=n_frames,
+                    x=x if log_imgs else None,
+                    y=y if log_imgs else None,
+                    batch=batch if log_imgs else None,
+                    outputs=outputs if log_imgs else None,
+                )
+
+            self._iteration += 1
+            n_iter += 1
+            if self._iteration >= self.max_iteration:
+                break
+            progress.update(1)
+
+        return (time.time() - t_per_iter) / n_iter
+
+    def _validate_impl(self, forward_context):
+        self.model.eval()
+        val_loss = 0.0
+        val_dice_loss = 0.0
+        n_iter = 0
+        input_check_done = False
+        log_x = log_y = log_batch = log_outputs = None
+
+        # Pick one validation sample to log via reservoir sampling, seeded per epoch so the
+        # logged image panels show a different sample each epoch (the metric still covers all
+        # samples). This is decoupled from the pinned validation order below, so the metric
+        # stays reproducible while the logged sample varies.
+        log_rng = random.Random(VALIDATION_SEED + self._epoch)
+
+        # Pin the RNGs so the sampled prompts are identical every epoch. Worker-side crop
+        # randomness is pinned via the val loader's deterministic worker_init_fn.
+        with _pinned_validation_rng(self.model):
+            with torch.no_grad():
+                for i, (x, y) in enumerate(self.val_loader):
+                    input_check_done = self._check_input_normalization(x, input_check_done)
+                    with forward_context():
+                        loss, batch, outputs = self._interactive_step(x, y)
+                        val_loss += loss.item()
+                        val_dice_loss += self.metric(outputs, batch.masks).item()
+                    n_iter += 1
+                    if log_rng.random() < 1.0 / (i + 1):
+                        log_x, log_y, log_batch, log_outputs = x, y, batch, outputs
+
+        val_loss /= max(n_iter, 1)
+        val_dice_loss /= max(n_iter, 1)
+
+        # Synchronize across DDP ranks so every rank makes the same early-stopping
+        # decision. Without this, ranks can desync and deadlock.
+        if dist.is_available() and dist.is_initialized():
+            stats = torch.tensor([val_loss, val_dice_loss], device=self.device)
+            dist.all_reduce(stats, op=dist.ReduceOp.AVG)
+            val_loss, val_dice_loss = stats[0].item(), stats[1].item()
+
+        if self.logger is not None:
+            self.logger.log_validation(
+                self._iteration, val_loss, val_dice_loss, log_x, log_y, log_batch, log_outputs,
+            )
+
+        # Return the v1-style best-mask Dice loss (lower is better) so checkpoint and
+        # early-stopping selection track segmentation quality rather than the raw loss.
+        return val_dice_loss
+
+
+class Sam2Logger(TorchEmLogger):
+    """TensorBoard logger for Sam2Trainer.
+
+    Logs scalars every step; logs four image panels at log_image_interval:
+      raw - input image (first batch item, first frame)
+      gt_all - colorized instance map (all objects in the patch)
+      gt_chosen - overlay of the objects sampled for this training step
+      predictions - model's predicted masks for the chosen objects
+    Only rank 0 writes; all other ranks are no-ops.
+    """
+
+    def __init__(self, trainer, save_root, **unused_kwargs):
+        super().__init__(trainer, save_root)
+        rank = getattr(trainer, "rank", None)
+        if rank is not None and rank != 0:
+            self.tb = None
+            return
+        self.log_dir = (
+            f"./logs/{trainer.name}"
+            if save_root is None
+            else os.path.join(save_root, "logs", trainer.name)
+        )
+        os.makedirs(self.log_dir, exist_ok=True)
+        self.tb = torch.utils.tensorboard.SummaryWriter(self.log_dir)
+        self.log_image_interval = trainer.log_image_interval
+
+    def _masks_for_batch_item(self, batch, b=0, t=0):
+        """Return binary masks from batch.masks for a single batch item at frame t.
+
+        batch.masks is (T, O_total, H, W) where O_total spans all batch items.
+        batch.obj_to_frame_idx is (T, O_total, 2): [:, :, 1] gives the batch index
+        for each object slot. Filter to only the objects belonging to batch item b.
+        """
+        b_indices = batch.obj_to_frame_idx[t, :, 1]  # (O_total,)
+        return batch.masks[t][b_indices == b]  # (O_b, H, W)
+
+    def _log_images(self, step, x, y, batch, outputs, prefix):
+        is_3d = (x.ndim == 5)
+
+        # Raw: first batch item, first frame, first 3 channels - already [0, 1]
+        raw = x[0, :3, 0].cpu().float() if is_3d else x[0, :3].cpu().float()
+        H, W = raw.shape[-2:]
+        self.tb.add_image(f"{prefix}/raw", raw, step)
+
+        # GT all: colorized instance map for first batch item (all objects in the patch)
+        gt_lbl = y[0, 0, 0].cpu().numpy() if is_3d else y[0, 0].cpu().numpy()
+        self.tb.add_image(f"{prefix}/gt_all", _colorize_instance_map(gt_lbl), step)
+
+        # GT chosen: objects sampled for batch item 0 at frame 0 (subset of gt_all)
+        gt_chosen = self._masks_for_batch_item(batch, b=0, t=0)
+        self.tb.add_image(f"{prefix}/gt_chosen", _overlay_binary_masks(gt_chosen, target_hw=(H, W)), step)
+
+        # Predictions: show step-0 prediction (initial response to the first prompt, before
+        # oracle corrections). Final corrected output is near-identical to GT by design,
+        # since SAM2Train uses GT-derived clicks for iterative correction.
+        # multistep_pred_masks_high_res: (O_total, num_steps, 1024, 1024)
+        b_indices = batch.obj_to_frame_idx[0, :, 1]
+        pred_step0 = outputs[0]["multistep_pred_masks_high_res"][b_indices == 0, 0].detach()
+        self.tb.add_image(f"{prefix}/predictions", _overlay_binary_masks(pred_step0 > 0, target_hw=(H, W)), step)
+
+    def log_train(
+        self, step, loss, lr, metric=None, grad_norm=None, n_frames=None, x=None, y=None, batch=None, outputs=None
+    ):
+        if self.tb is None:
+            return
+        self.tb.add_scalar("train/loss", loss, step)
+        self.tb.add_scalar("train/learning_rate", lr, step)
+        if metric is not None:
+            self.tb.add_scalar("train/metric", metric, step)
+        if grad_norm is not None:
+            self.tb.add_scalar("train/grad_norm", grad_norm, step)
+        if n_frames is not None:
+            self.tb.add_scalar("train/n_frames", n_frames, step)
+        if x is not None:
+            self._log_images(step, x, y, batch, outputs, "train")
+
+    def log_validation(self, step, loss, metric=None, x=None, y=None, batch=None, outputs=None):
+        if self.tb is None:
+            return
+        self.tb.add_scalar("validation/loss", loss, step)
+        if metric is not None:
+            self.tb.add_scalar("validation/metric", metric, step)
+        if x is not None:
+            self._log_images(step, x, y, batch, outputs, "validation")
+
+
+class UniSAM2Trainer(CheckpointAdapter, torch_em.trainer.DefaultTrainer):
+    """DefaultTrainer subclass for UniSAM2 automatic segmentation.
+
+    Adds two DDP-compatible behaviours on top of DefaultTrainer:
+    - :class:`CheckpointAdapter` saves and loads checkpoints unwrapped, so they
+      transfer between DDP and non-DDP models.
+    - :meth:`_validate_impl` all_reduces the validation loss across ranks
+      so every rank makes the same early-stopping decision, and passes
+      the last batch to the logger for image visualization.
+    """
+
+    def _validate_impl(self, forward_context):
+        self.model.eval()
+        metric_val = 0.0
+        n_iter = 0
+        last_x = last_y = last_pred = None
+
+        # Pin synchronous crop sampling without advancing the training RNG state.
+        with _pinned_validation_rng(self.model):
+            with torch.no_grad():
+                for x, y in self.val_loader:
+                    x, y = x.to(self.device, non_blocking=True), y.to(self.device, non_blocking=True)
+                    with forward_context():
+                        pred, loss = self._forward_and_loss(x, y)
+                    metric_val += loss.item()
+                    n_iter += 1
+                    last_x, last_y, last_pred = x, y, pred
+
+        metric_val /= max(n_iter, 1)
+
+        if dist.is_available() and dist.is_initialized():
+            val_tensor = torch.tensor(metric_val, device=self.device)
+            dist.all_reduce(val_tensor, op=dist.ReduceOp.AVG)
+            metric_val = val_tensor.item()
+
+        if self.logger is not None:
+            self.logger.log_validation(self._iteration, metric_val, last_x, last_y, last_pred)
+
+        return metric_val
+
+
+class UniSAM2Logger(TorchEmLogger):
+    """TensorBoard logger for UniSAM2Trainer.
+
+    Only rank 0 writes; all other ranks get a no-op logger.
+    Logs scalars every step and per-channel images of input, target, and
+    prediction at the trainer's log_image_interval.
+    """
+
+    def __init__(self, trainer, save_root, **unused_kwargs):
+        super().__init__(trainer, save_root)
+        rank = getattr(trainer, "rank", None)
+        if rank is not None and rank != 0:
+            self.tb = None
+            return
+        self.log_dir = (
+            f"./logs/{trainer.name}"
+            if save_root is None
+            else os.path.join(save_root, "logs", trainer.name)
+        )
+        os.makedirs(self.log_dir, exist_ok=True)
+        self.tb = torch.utils.tensorboard.SummaryWriter(self.log_dir)
+        self.log_image_interval = trainer.log_image_interval
+
+    def _log_images(self, step, x, y, pred, prefix, gradients=None):
+        from torch_em.trainer.tensorboard_logger import make_grid_image, normalize_im
+
+        selection = np.s_[0] if x.ndim == 4 else np.s_[0, :, x.shape[2] // 2]
+        image = normalize_im(x[selection].cpu())
+        self.tb.add_image(f"{prefix}/input", image, step)
+        im, im_name = make_grid_image(image, y, pred, selection, gradients)
+        self.tb.add_image(f"{prefix}/{im_name}", im, step)
+
+    def log_train(self, step, loss, lr, x, y, pred, log_gradients=False):
+        if self.tb is None:
+            return
+        self.tb.add_scalar("train/loss", loss.item() if hasattr(loss, "item") else loss, step)
+        self.tb.add_scalar("train/learning_rate", lr, step)
+        if step % self.log_image_interval == 0:
+            gradients = pred.grad if log_gradients else None
+            self._log_images(step, x, y, pred, "train", gradients=gradients)
+
+    def log_validation(self, step, metric, x, y, pred):
+        if self.tb is None:
+            return
+        self.tb.add_scalar("validation/loss", metric, step)
+        if x is not None:
+            self._log_images(step, x, y, pred, "validation")

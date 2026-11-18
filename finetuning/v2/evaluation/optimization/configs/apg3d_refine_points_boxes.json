@@ -1,0 +1,5 @@
+{
+  "name": "apg3d-refine-points-boxes",
+  "params_2d": {},
+  "params_3d": {"refinement": "points+boxes"}
+}

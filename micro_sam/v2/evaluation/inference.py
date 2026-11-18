@@ -1,0 +1,799 @@
+import os
+import shutil
+import warnings
+from pathlib import Path
+from typing import Union, Optional, List, Tuple
+
+import numpy as np
+from tqdm import tqdm
+import imageio.v3 as imageio
+from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
+
+import torch
+
+from elf.io import open_file
+
+from torch_em.util.segmentation import size_filter
+
+from bioimage_cpp.segmentation import label as connected_components
+
+from micro_sam.v2.normalization import to_image
+from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
+from micro_sam.prompt_generators import CenterIterativePromptGenerator, IterativePromptGenerator
+from micro_sam.v1.evaluation.inference import (
+    _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
+)
+from micro_sam.v2.util import (
+    _get_device, configure_image_predictor, encode_image, get_sam2_image_predictor, get_sam2_model,
+    precompute_image_embeddings,
+)
+
+
+def _embedding_tensors_to_numpy(embeddings):
+    """Move SAM2 video embeddings to CPU arrays for CustomVideoPredictor.init_state."""
+    def _convert(value):
+        if hasattr(value, "detach"):
+            return value.detach().cpu().numpy()
+        if isinstance(value, list):
+            return [_convert(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(_convert(v) for v in value)
+        if isinstance(value, dict):
+            return {k: _convert(v) for k, v in value.items()}
+        return value
+
+    return _convert(embeddings)
+
+
+#
+# Automatic Mask Generation (AMG) for Images
+#
+
+
+def run_amg(
+    image_paths: List[Union[os.PathLike, str]],
+    image_key: Optional[str],
+    experiment_folder: Union[os.PathLike, str],
+    model_type: str,
+    checkpoint_path: Union[os.PathLike, str],
+    device: Optional[Union[torch.device, str]] = None,
+    min_object_size: int = 0,
+    ensure_8bit: bool = True,
+):
+    """Run automatic mask generation (AMG) of SAM2 on 2d images and save the segmentations.
+
+    The function saves one tif file per image in '<experiment_folder>/amg/inference'. It skips images
+    that are already segmented.
+
+    Args:
+        image_paths: The paths of the images.
+        image_key: The key of the image data in container files, e.g. hdf5 or zarr. None for image files, e.g. tif.
+        experiment_folder: The folder where the segmentations are saved.
+        model_type: The SAM2 model, e.g. 'hvit_t_cells'.
+        checkpoint_path: Optional path of the model weights. By default the weights of `model_type` are used.
+        device: The torch device. By default the best available device is used.
+        min_object_size: The minimum size of objects in pixels. Smaller objects are removed.
+        ensure_8bit: Whether to normalize the images to 8 bit, as in training. Otherwise only grayscale
+            images are converted to RGB.
+
+    Returns:
+        The folder of the segmentations.
+    """
+    # where the predictions are saved
+    prediction_dir = os.path.join(experiment_folder, "amg", "inference")
+    os.makedirs(prediction_dir, exist_ok=True)
+
+    for image_path in tqdm(image_paths, desc="Run inference for automatic mask generation"):
+        image_name = Path(os.path.basename(image_path)).with_suffix(".tif")
+
+        # We skip the images that are already segmented.
+        prediction_path = os.path.join(prediction_dir, image_name)
+        if os.path.exists(prediction_path):
+            continue
+
+        if image_key is None:
+            image = imageio.imread(image_path)
+        else:
+            image = open_file(image_path)[image_key][:]
+
+        if ensure_8bit:
+            image = to_image(image)
+        elif image.ndim == 2:  # Convert single channel images to RGB images.
+            image = np.stack([image] * 3, axis=-1)
+
+        model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
+
+        mask_generator = SAM2AutomaticMaskGenerator(
+            model=model,
+            pred_iou_thresh=0.6,  # default: 0.8
+            stability_score_thresh=0.6,  # default: 0.95
+        )
+        configure_image_predictor(mask_generator.predictor)
+
+        outputs = mask_generator.generate(image.astype("uint8"))  # NOTE: Done as this is what SAM2 expects as inputs.
+
+        if len(outputs) == 0:  # i.e. no segmentations were found.
+            segmentation = np.zeros(image.shape[:2], dtype="uint32")
+        else:
+            segmentation = mask_data_to_segmentation(
+                masks=outputs, with_background=True, min_object_size=min_object_size
+            )
+
+        imageio.imwrite(prediction_path, segmentation, compression=5)
+
+    return prediction_dir
+
+
+#
+# Interactive Segmentation for Images
+#
+
+
+@torch.no_grad()
+def _run_interactive_segmentation_2d_per_image(
+    image: np.ndarray,
+    gt: np.ndarray,
+    prediction_paths: Union[os.PathLike, str],
+    predictor,
+    start_with_box_prompt: bool = False,
+    dilation: int = 5,
+    device: Optional[Union[torch.device, str]] = None,
+    n_iterations: int = 8,
+    use_masks: bool = False,
+    batch_size: int = 32,
+    mask_threshold: float = 0.0,
+    seed: int = 0,
+    click_protocol: str = "random",
+) -> None:
+    """Functionality for interactive segmentation per 2d image.
+    """
+    if click_protocol not in ("random", "center"):
+        raise ValueError(f"Invalid click protocol '{click_protocol}', choose 'random' or 'center'.")
+    device = _get_device(device)
+
+    # The prompt generators sample from the global numpy RNG. Seeding it per image makes the clicks,
+    # and with them the results, independent of the image order, the sharding and any resumption.
+    np.random.seed(seed)
+
+    # Let's define the iterative prompt generator.
+    prompt_generator = CenterIterativePromptGenerator() if click_protocol == "center" else IterativePromptGenerator()
+
+    # Preparing prompts for the first iteration: use multimasking only if we have a single positive prompt without box
+    if start_with_box_prompt:
+        use_boxes, use_points = True, False
+        n_positive = 0
+        multimasking = False
+    else:
+        use_boxes, use_points = False, True
+        n_positive = 1
+        multimasking = click_protocol == "random"
+
+    # Expects RGB-style images.
+    encode_image(predictor, image.astype("uint8"))  # uint8 is what SAM2 expects as input.
+
+    gt_ids = np.setdiff1d(np.unique(gt), [0])
+
+    points, point_labels, boxes = _get_batched_prompts(
+        gt=gt,
+        gt_ids=gt_ids,
+        use_points=use_points,
+        use_boxes=use_boxes,
+        n_positives=n_positive,
+        n_negatives=0,
+        dilation=dilation,
+    )
+
+    # The prompt generator scans the full masks per object, which is ~7x faster on the GPU.
+    sampled_binary_y = segmentation_to_one_hot(segmentation=gt.astype("int64"), segmentation_ids=gt_ids).to(device)
+
+    for iteration in range(n_iterations):
+        if iteration == 0:  # logits masks cannot be used for the first iteration.
+            logits_masks = None
+        else:
+            if not use_masks:  # logits masks should not be used when not desired.
+                logits_masks = None
+
+        # scripts for batched inference
+        # TODO: we move this in a separate script the same as micro-sam
+        n_prompts = boxes.shape[0] if use_boxes else points.shape[0]
+        n_batches = int(np.ceil(float(n_prompts) / batch_size))
+
+        masks, logits = [], []
+        for batch_idx in range(n_batches):
+            batch_start = batch_idx * batch_size
+            batch_stop = min((batch_idx + 1) * batch_size, n_prompts)
+
+            batch_boxes = boxes[batch_start: batch_stop] if use_boxes else None
+            batch_points = points[batch_start: batch_stop] if (use_points or points is not None) else None
+            batch_point_labels = point_labels[batch_start: batch_stop] if (use_points or point_labels is not None) \
+                else None
+            batch_logits_masks = logits_masks[batch_start: batch_stop] if use_masks and logits_masks is not None \
+                else None
+
+            batch_masks, batch_scores, batch_logits = predictor.predict(
+                point_coords=batch_points,
+                point_labels=batch_point_labels,
+                box=batch_boxes,
+                mask_input=batch_logits_masks,
+                multimask_output=multimasking,
+                return_logits=True,
+            )
+
+            if batch_scores.ndim == 2:
+                max_index = batch_scores.argmax(axis=1)
+            elif batch_scores.ndim == 1:
+                max_index = batch_scores.argmax()
+                max_index = np.array([max_index])
+                batch_masks, batch_logits = batch_masks[None], batch_logits[None]
+            else:
+                raise ValueError
+
+            if multimasking:
+                batch_masks = np.stack([batch_masks[i, max_id][None] for i, max_id in enumerate(max_index)])
+                batch_logits = np.stack([batch_logits[i, max_id][None] for i, max_id in enumerate(max_index)])
+
+            masks.append(batch_masks)
+            logits.append(batch_logits)
+
+        # 'masks' holds logits so far, since a threshold above the SAM2 default of 0 counteracts
+        # the over-segmentation that the mask feedback otherwise compounds across iterations.
+        masks = np.concatenate(masks) > mask_threshold
+        logits_masks = np.concatenate(logits)
+
+        # switching off multimasking after first iter, as next iters (with multiple prompts) don't expect multimasking
+        multimasking = False
+
+        next_coords, next_labels = _get_batched_iterative_prompts(
+            sampled_binary_gt=sampled_binary_y,
+            masks=torch.from_numpy(masks).to(device=device, dtype=torch.float32),
+            batch_size=batch_size,
+            prompt_generator=prompt_generator
+        )
+        next_coords, next_labels = next_coords.detach().cpu().numpy(), next_labels.detach().cpu().numpy()
+
+        if points is not None:
+            points = np.concatenate([points, next_coords], axis=1)
+        else:
+            points = next_coords
+
+        if point_labels is not None:
+            point_labels = np.concatenate([point_labels, next_labels], axis=1)
+        else:
+            point_labels = next_labels
+
+        _save_segmentation(masks=torch.from_numpy(masks), prediction_path=prediction_paths[iteration])
+
+
+def get_prediction_dir_2d(
+    prediction_dir: Union[os.PathLike, str], start_with_box_prompt: bool, use_masks: bool
+) -> str:
+    """Return the folder that `run_interactive_segmentation_2d` writes its 'iterationNN' folders to.
+
+    Args:
+        prediction_dir: The root folder of the predictions.
+        start_with_box_prompt: Whether the iterative prompting starts with a box prompt.
+        use_masks: Whether the iterative prompting uses the mask logits of the previous iteration.
+
+    Returns:
+        The folder of the predictions.
+    """
+    box_or_pt = "start_with_box" if start_with_box_prompt else "start_with_point"
+    return os.path.join(prediction_dir, box_or_pt, "with_masks" if use_masks else "without_masks")
+
+
+def run_interactive_segmentation_2d(
+    image_paths: List[Union[os.PathLike, str]],
+    gt_paths: List[Union[os.PathLike, str]],
+    image_key: Optional[str],
+    gt_key: Optional[str],
+    prediction_dir: Union[os.PathLike, str],
+    model_type: str,
+    checkpoint_path: Union[os.PathLike, str],
+    start_with_box_prompt: bool = False,
+    device: Optional[Union[torch.device, str]] = None,
+    n_iterations: int = 8,
+    dilation: int = 5,
+    batch_size: int = 32,
+    use_masks: bool = True,
+    ensure_8bit: bool = True,
+    mask_threshold: float = 0.0,
+    seed: int = 0,
+    click_protocol: str = "random",
+):
+    """Functionality for interactive segmentation in 2d images using iterative prompting.
+
+    `use_masks` defaults to True because SAM2 is trained with the previous mask logits alongside every
+    correction click, see 'SAM2Train._iter_correct_pt_sampling'. Without them the predictions degrade
+    with each iteration. `seed` seeds the prompt sampling of every image.
+
+    `click_protocol` chooses the correction clicks: 'random' samples them at random positions in the
+    error regions and picks the best of 3 masks for a first point prompt. 'center' places them at the
+    centers of the largest error regions and predicts a single mask for a first point prompt.
+
+    Args:
+        image_paths: The paths of the images.
+        gt_paths: The paths of the ground-truth instance segmentations, in the same order as `image_paths`.
+        image_key: The key of the image data in container files, e.g. hdf5 or zarr. None for image files, e.g. tif.
+        gt_key: The key of the ground-truth data in container files. None for image files.
+        prediction_dir: The root folder of the predictions, see `get_prediction_dir_2d`.
+        model_type: The SAM2 model, e.g. 'hvit_t_cells'.
+        checkpoint_path: Optional path of the model weights. By default the weights of `model_type` are used.
+        start_with_box_prompt: Whether the iterative prompting starts with a box prompt. Otherwise it starts
+            with a point prompt.
+        device: The torch device. By default the best available device is used.
+        n_iterations: The number of iterations for iterative prompting.
+        dilation: The dilation factor for the radius around the ground-truth object around which
+            points will not be sampled.
+        batch_size: The number of objects that are segmented together.
+        use_masks: Whether to use the mask logits of the previous iteration as a prompt.
+        ensure_8bit: Whether to normalize the images to 8 bit, as in training. Otherwise only grayscale
+            images are converted to RGB.
+        mask_threshold: The threshold for the mask logits.
+        seed: The seed of the prompt sampling of every image.
+        click_protocol: The correction clicks, 'random' or 'center', see above.
+
+    Returns:
+        The folder of the predictions. It holds one subfolder per iteration: 'iteration00', 'iteration01' and so on.
+    """
+    if len(image_paths) != len(gt_paths):
+        raise ValueError(f"Expect same number of images and gt images, got {len(image_paths)}, {len(gt_paths)}")
+
+    # create all prediction folders for all intermediate iterations'
+    prediction_dir = get_prediction_dir_2d(prediction_dir, start_with_box_prompt, use_masks)
+    if use_masks:
+        print("The iterative prompting will make use of logits masks from previous iterations.")
+
+    for i in range(n_iterations):
+        os.makedirs(os.path.join(prediction_dir, f"iteration{i:02}"), exist_ok=True)
+
+    model = get_sam2_model(model_type=model_type, device=device, checkpoint_path=checkpoint_path)
+    predictor = get_sam2_image_predictor(model)
+
+    for image_path, gt_path in tqdm(
+        zip(image_paths, gt_paths), total=len(image_paths), desc="Run inference with iterative prompting",
+    ):
+        assert os.path.exists(image_path), image_path
+        assert os.path.exists(gt_path), gt_path
+
+        image_name = Path(os.path.basename(image_path)).with_suffix(".tif")
+
+        # We skip the images that have already been segmented
+        prediction_paths = [os.path.join(prediction_dir, f"iteration{i:02}", image_name) for i in range(n_iterations)]
+        if all(os.path.exists(prediction_path) for prediction_path in prediction_paths):
+            continue
+
+        if image_key is None:
+            image = imageio.imread(image_path)
+        else:
+            image = open_file(image_path)[image_key][:]
+
+        if ensure_8bit:
+            image = to_image(image)
+        elif image.ndim == 2:
+            image = np.stack([image] * 3, axis=-1)
+
+        if gt_key is None:
+            gt = imageio.imread(gt_path)
+        else:
+            gt = open_file(gt_path)[gt_key][:]
+
+        # Run connected components on labels
+        gt = connected_components(gt).astype("uint32")
+
+        # Skip the image if it has no labels. An image that one object covers has no background, but it
+        # still has a label to prompt.
+        if gt.max() == 0:
+            continue
+
+        _run_interactive_segmentation_2d_per_image(
+            image=image,
+            gt=gt,
+            prediction_paths=prediction_paths,
+            predictor=predictor,
+            start_with_box_prompt=start_with_box_prompt,
+            device=device,
+            dilation=dilation,
+            n_iterations=n_iterations,
+            use_masks=use_masks,
+            batch_size=batch_size,
+            mask_threshold=mask_threshold,
+            seed=seed,
+            click_protocol=click_protocol,
+        )
+
+    return prediction_dir
+
+
+#
+# Interactive Segmentation for Multi-Dimensional Inputs
+#
+
+
+def _convert_volumes_to_frames(raw, frames_dir):
+    """Converts whole volumes to individual frames and stores them sequentially in a directory.
+    """
+    # Let's convert the inputs to individual slices as tifs and pair them with it's respective labels
+    if os.path.exists(frames_dir):  # We remove the previously stored frames.
+        shutil.rmtree(frames_dir)
+
+    image_dir = os.path.join(frames_dir, "images")  # Store slices in the directory.
+    os.makedirs(image_dir, exist_ok=True)
+
+    # Save all slices in order.
+    [imageio.imwrite(os.path.join(image_dir, f"{i:04}.tif"), fraw) for i, fraw in enumerate(raw)]
+
+    return image_dir
+
+
+def get_prediction_paths_3d(
+    prediction_dir: Union[os.PathLike, str], prediction_fname: str, start_with_box_prompt: bool, n_iterations: int,
+) -> Tuple[str, List[str]]:
+    """Return the folder and the per-iteration files that `run_interactive_segmentation_3d` writes.
+
+    Args:
+        prediction_dir: The root folder of the predictions.
+        prediction_fname: The name of the segmentation file.
+        start_with_box_prompt: Whether the iterative prompting starts with a box prompt.
+        n_iterations: The number of iterations for iterative prompting.
+
+    Returns:
+        The folder of the predictions and the path of the segmentation for each iteration.
+    """
+    box_or_pt = "start_with_box" if start_with_box_prompt else "start_with_point"
+    prediction_dir = os.path.join(prediction_dir, "interactive_segmentation_3d", box_or_pt, "without_masks")
+    fname = Path(prediction_fname).with_suffix(".tif")
+    return prediction_dir, [os.path.join(prediction_dir, f"iteration{i}", fname) for i in range(n_iterations)]
+
+
+def run_interactive_segmentation_3d(
+    raw: np.ndarray,
+    labels: np.ndarray,
+    model_type: str,
+    checkpoint_path: Union[os.PathLike, str],
+    start_with_box_prompt: bool,
+    prediction_dir: Union[os.PathLike, str],
+    prediction_fname: str = "segmentation",
+    dilation: int = 5,
+    device: Optional[Union[torch.device, str]] = None,
+    first_prompt_at_center: bool = True,  # NOTE: With our current schema, we always put the first prompt in center.
+    min_size: int = 0,
+    batch_size: int = 16,
+    n_iterations: int = 8,
+    run_connected_components: bool = True,
+    seed: int = 0,
+    correction_margin: float = 0.0,
+    click_protocol: str = "random",
+) -> str:
+    """Run interactive segmentation on 3d inputs using Segment Anything 2.
+
+    Args:
+        raw: The raw input array.
+        labels: The corresponding ground-truth array with instance labels.
+        model_type: The choice of Segment Anything 2 model.
+        checkpoint_path: The filepath to the model checkpoints.
+        start_with_box_prompt: Whether the iterative prompting starts with 'box' as first prompt
+            (else 'points' will be used).
+        prediction_dir: The filepath where the predictions will be stored.
+        prediction_fname: The name for storing the segmentations.
+        dilation: The dilation factor for the radius around the ground-truth object around which
+            points will not be sampled.
+        device: The torch device.
+        first_prompt_at_center: Whether to place the first prompt at center.
+        min_size: The minimum pixel criterion to accept instance objects for interactive segmentation.
+        batch_size: The batch size to compute prompts.
+        n_iterations: The number of iterations for iterative prompting.
+        run_connected_components: Whether to ensure individual instances and filter out small objects.
+        seed: The seed of the prompt sampling of the volume.
+        correction_margin: The fraction of each object's z-extent at either end that is excluded when the slice
+            for the next correction click is chosen. 0 chooses among all slices of the object.
+        click_protocol: The correction clicks on the worst slice of an object: 'random' samples them at random
+            positions in the error regions, 'center' places them at the centers of the largest error regions.
+
+    Returns:
+        The folder where segmentations are stored.
+    """
+    prediction_dir, prediction_paths = get_prediction_paths_3d(
+        prediction_dir, prediction_fname, start_with_box_prompt, n_iterations
+    )
+    if all([os.path.exists(_path) for _path in prediction_paths]):
+        cached = imageio.imread(prediction_paths[0])
+        if cached.shape == labels.shape:
+            print(f"The results are stored at '{prediction_dir}'.")
+            return prediction_dir
+        warnings.warn(
+            f"Stale cache: '{prediction_paths[0]}' has shape {cached.shape} "
+            f"but labels have shape {labels.shape}. Deleting and recomputing."
+        )
+        for path in prediction_paths:
+            if os.path.exists(path):
+                os.remove(path)
+
+    # Get the device.
+    device = _get_device(device)
+
+    if run_connected_components:
+        # Ensuring sequential instance labels.
+        labels = connected_components(labels).astype(labels.dtype)
+        # NOTE: There are some objects covering very few pixels, eg. in lucchi, causing troubles in iterative prompting.
+        labels = size_filter(seg=labels, min_size=min_size)
+
+    # Preparing prompts for the first iteration
+    if start_with_box_prompt:
+        use_boxes, use_points = True, False
+        n_positive = 0
+    else:
+        use_boxes, use_points = False, True
+        n_positive = 1
+
+    # Get the SAM2 predictor.
+    predictor = get_sam2_model(
+        model_type=model_type, device=device, checkpoint_path=checkpoint_path, input_type="videos",
+    )
+    # Match training: frames that receive correction clicks become conditioning frames so
+    # their corrected predictions are preserved and used as memory for neighboring frames.
+    predictor.add_all_frames_to_correct_as_cond = True
+
+    # Initialize the inference state
+    volume_embeddings = _embedding_tensors_to_numpy(
+        precompute_image_embeddings(predictor=predictor, input_=raw, ndim=3)
+    )
+    inference_state = predictor.init_state(volume=raw, volume_embeddings=volume_embeddings)
+
+    # The prompt generators sample from the global numpy RNG. Seeding it per volume makes the clicks,
+    # and with them the results, reproducible.
+    np.random.seed(seed)
+
+    gt_ids = list(np.setdiff1d(np.unique(labels), [0]))  # Ignoring the background label
+    # An empty volume has nothing to prompt, so all iterations stay empty.
+    segmentation = [np.zeros(labels.shape, dtype="uint64") for _ in range(n_iterations)]
+    # The area of the object that holds each label, per iteration, to resolve overlaps.
+    areas = [np.full(int(max(gt_ids, default=0)) + 1, np.inf) for _ in range(n_iterations)]
+    for gt_id in tqdm(gt_ids, desc="Segmenting per object in the volume"):
+        _per_iter_segmentation = _run_interactive_segmentation_3d_per_object(
+            gt_ids=gt_id,
+            labels=labels,
+            predictor=predictor,
+            inference_state=inference_state,
+            first_prompt_at_center=first_prompt_at_center,
+            use_points=use_points,
+            use_boxes=use_boxes,
+            n_positive=n_positive,
+            dilation=dilation,
+            batch_size=batch_size,
+            n_iterations=n_iterations,
+            correction_margin=correction_margin,
+            click_protocol=click_protocol,
+        )
+
+        # Merge the incoming object. Where objects overlap, the smaller one is kept, as in the 2d
+        # evaluation (see 'mask_data_to_segmentation'). Adding the labels would turn an overlap into the
+        # sum of both ids, i.e. into a third object.
+        for _iter in range(n_iterations):
+            mask = _per_iter_segmentation[_iter] > 0
+            area = mask.sum()
+            existing = segmentation[_iter][mask]
+            segmentation[_iter][mask] = np.where(areas[_iter][existing] > area, gt_id, existing)
+            areas[_iter][gt_id] = area
+
+    # Each file is written under a temporary name and then renamed, so a job killed during the write
+    # leaves no truncated file that a rerun would accept as complete.
+    for i, prediction_path in enumerate(prediction_paths):
+        os.makedirs(Path(prediction_path).parent, exist_ok=True)
+        partial_path = Path(prediction_path).with_suffix(".partial.tif")
+        imageio.imwrite(partial_path, segmentation[i], compression="zlib")
+        os.replace(partial_path, prediction_path)
+
+    return prediction_dir
+
+
+@torch.no_grad()
+def _run_interactive_segmentation_3d_per_object(
+    gt_ids: Union[List[int], int],
+    labels: np.ndarray,
+    predictor,
+    inference_state,
+    first_prompt_at_center: bool,
+    use_points: bool,
+    use_boxes: bool,
+    n_positive: int,
+    dilation: int = 5,
+    batch_size: int = 32,
+    n_iterations: int = 8,
+    correction_margin: float = 0.0,
+    click_protocol: str = "random",
+):
+    """Functionality for interactive segmentation using iterative prompting.
+    """
+    if not isinstance(gt_ids, list):
+        gt_ids = [gt_ids]
+
+    # Get prompts for the desired frame and desired object id for the first iteration.
+    id_to_prompts = _extract_prompts_per_object(
+        labels=labels,
+        gt_ids=gt_ids,
+        first_prompt_at_center=first_prompt_at_center,
+        use_points=use_points,
+        use_boxes=use_boxes,
+        n_positive=n_positive,
+        dilation=dilation,
+    )
+
+    # Get segmentation for iterative prompting per object.
+    preds_per_object = _get_iteratively_prompted_segmentation_per_image_dir(
+        inference_state=inference_state,
+        labels=labels,
+        id_to_prompts=id_to_prompts,
+        predictor=predictor,
+        batch_size=batch_size,
+        n_iterations=n_iterations,
+        correction_margin=correction_margin,
+        click_protocol=click_protocol,
+    )
+
+    assert len(gt_ids) == len(preds_per_object), "The number of label ids must match the number of objects segmented."
+
+    seg_per_iterations = []
+    for gt_id, _preds_per_iters in zip(gt_ids, preds_per_object):  # Access interactive segmentation per object.
+        assert len(_preds_per_iters) == n_iterations
+
+        for _iter in range(n_iterations):  # Acces per-object per-iteration predictions.
+            _pred_per_iter = _preds_per_iters[_iter]
+            assert isinstance(_pred_per_iter, np.ndarray)
+
+            # Replace the id of foreground with the expect object id
+            _pred_per_iter[_pred_per_iter > 0] = gt_id
+
+            # Let's merge the prediction per iteration at label id.
+            if gt_id == gt_ids[0]:  # If the array is not a part of the list.
+                seg_per_iterations.append(_pred_per_iter)
+            else:  # If this is a existing array, we merge the incoming labels
+                seg_per_iterations[_iter] += _pred_per_iter
+
+    for seg in seg_per_iterations:
+        if seg.shape != labels.shape:
+            raise AssertionError(f"'{seg.shape}' not equal to the expect shape: '{labels.shape}'")
+
+    return seg_per_iterations
+
+
+def _extract_prompts_per_object(
+    labels, gt_ids, first_prompt_at_center, use_points, use_boxes, n_positive, dilation,
+):
+    """Extracts input prompts per object for interactive segmentation.
+    """
+    ids_to_prompts = {}
+    for gt_id in gt_ids:
+        # The first thing to do is find where all the objects start from and end to
+        z_slices = np.where(labels == gt_id)[0]
+        z_range = (z_slices.min(), z_slices.max())
+
+        if first_prompt_at_center:  # choose the middle slice of the object
+            z_choice = int(np.ceil(np.mean(z_range)))
+        else:  # choose the first slice of the object
+            z_choice = z_range[0]
+
+        points, point_labels, boxes = _get_batched_prompts(
+            gt=(labels[z_choice] == gt_id).astype("uint32"),  # binary label of the particular slice per object
+            gt_ids=[1],  # see above line: binary labels per object
+            use_points=use_points, use_boxes=use_boxes, n_positives=n_positive, n_negatives=0, dilation=dilation,
+        )
+        ids_to_prompts[gt_id] = [z_choice, points, point_labels, boxes]
+
+    return ids_to_prompts
+
+
+@torch.no_grad()
+def _get_iteratively_prompted_segmentation_per_image_dir(
+    inference_state, labels, id_to_prompts, predictor, batch_size=32, n_iterations=8, correction_margin=0.0,
+    click_protocol="random",
+):
+    """Functionality for inference of 3d interactive segmentation.
+    """
+    # Let's define the iterative prompt generator.
+    if click_protocol not in ("random", "center"):
+        raise ValueError(f"Invalid click protocol '{click_protocol}', choose 'random' or 'center'.")
+    prompt_generator = CenterIterativePromptGenerator() if click_protocol == "center" else IterativePromptGenerator()
+
+    pred_per_object = []
+    for _obj_id, _input_prompts in id_to_prompts.items():
+        z_cond, _point, _label, _box = _input_prompts  # z_cond stays fixed for all iterations
+
+        list_of_iterations = list(range(n_iterations))
+        pred_per_iteration = []
+        _corr_points = None  # (x,y) correction points for the next iteration
+        _corr_labels = None
+        _corr_frame = None  # z-slice where corrections will be applied
+
+        for iteration in list_of_iterations:
+            if iteration == 0:
+                # First iteration: initial box or point at the conditioning frame.
+                _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+                    inference_state=inference_state, frame_idx=z_cond, obj_id=_obj_id,
+                    points=_point, labels=_label, box=_box,
+                )
+            else:
+                # Subsequent iterations: add corrective points at the worst-predicted frame.
+                # The video predictor automatically loads prev_sam_mask_logits from the
+                # previous propagation at that frame, matching the mask_inputs feedback used
+                # during training (SAM2Train._iter_correct_pt_sampling, line 492).
+                for per_point, per_label in zip(_corr_points, _corr_labels):
+                    # The 'center' clicks pad a missing error type with the label -1.
+                    if per_label < 0:
+                        continue
+                    _, out_obj_ids, out_mask_logits = predictor.add_new_points_or_box(
+                        inference_state=inference_state, frame_idx=_corr_frame, obj_id=_obj_id,
+                        points=np.array([per_point]), labels=np.array([per_label]),
+                        box=None, clear_old_points=False,
+                    )
+
+            # Propagate the masklets throughout the frames using the input prompts in selected frames
+            forward_video_segments = {}
+            for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
+                forward_video_segments[out_frame_idx] = {
+                    out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
+                }
+
+            # Propagate reverse in time if needed.
+            reverse_video_segments = {}
+            if len(forward_video_segments) < labels.shape[0]:
+                for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
+                    inference_state, reverse=True,
+                ):
+                    reverse_video_segments[out_frame_idx] = {
+                        out_obj_id: (out_mask_logits[i] > 0.0).cpu().numpy() for i, out_obj_id in enumerate(out_obj_ids)
+                    }
+                reverse_video_segments = dict(reversed(list(reverse_video_segments.items())))
+
+            video_segments = {**reverse_video_segments, **forward_video_segments}
+
+            height, width = labels.shape[-2:]
+            segmentation = []
+            for slice_idx in video_segments.keys():
+                per_slice_seg = np.zeros((height, width))
+                for _instance_idx, _instance_mask in video_segments[slice_idx].items():
+                    # Non-square frames are padded to a square, see '_load_frame_as_tensor'.
+                    per_slice_seg[_instance_mask.squeeze()[:height, :width]] = _instance_idx
+                segmentation.append(per_slice_seg)
+
+            segmentation = (np.stack(segmentation) > 0).astype("uint64")
+            pred_per_iteration.append(segmentation)
+
+            if len(list_of_iterations) > 1 and iteration < list_of_iterations[-1]:
+                # Find the z-slice where the prediction is worst for this object.
+                # Restrict to slices where the object exists so IterativePromptGenerator
+                # always has FN pixels (or overlap) to sample a positive point from.
+                gt_3d = (labels == _obj_id)
+                obj_z_slices = np.where(gt_3d.any(axis=(1, 2)))[0]
+                if correction_margin > 0:
+                    # A correction on an end slice of the object turns its small cross-section into a
+                    # conditioning frame, which degrades the other slices of the object.
+                    margin = correction_margin * (obj_z_slices.max() - obj_z_slices.min())
+                    inner = obj_z_slices[
+                        (obj_z_slices >= obj_z_slices.min() + margin) & (obj_z_slices <= obj_z_slices.max() - margin)
+                    ]
+                    obj_z_slices = inner if len(inner) else obj_z_slices
+                errors_per_slice = np.array([
+                    np.sum(gt_3d[z] != (segmentation[z] > 0)) for z in obj_z_slices
+                ])
+                z_worst = int(obj_z_slices[np.argmax(errors_per_slice)])
+
+                gt_slice = gt_3d[z_worst].astype("int64")
+                pred_slice = (segmentation[z_worst] > 0).astype("int64")
+                next_coords, next_labels = _get_batched_iterative_prompts(
+                    sampled_binary_gt=torch.from_numpy(gt_slice)[None, None].to(torch.float32),
+                    masks=torch.from_numpy(pred_slice)[None, None].to(torch.float32),
+                    batch_size=batch_size,
+                    prompt_generator=prompt_generator,
+                )
+                next_coords = next_coords.detach().cpu().numpy()  # [1, 2, 2]: (obj, pos+neg, xy)
+                next_labels = next_labels.detach().cpu().numpy()  # [1, 2]
+                _corr_points = next_coords[0]  # [[x_pos, y_pos], [x_neg, y_neg]]
+                _corr_labels = next_labels[0]  # [1, 0]
+                _corr_frame = z_worst
+
+        pred_per_object.append(pred_per_iteration)
+
+        # Reset the state after tracking
+        predictor.reset_state(inference_state)
+
+    return pred_per_object

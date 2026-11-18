@@ -9,7 +9,7 @@ import imageio.v3 as imageio
 from elf.evaluation import mean_segmentation_accuracy
 
 from micro_sam import util
-from micro_sam.instance_segmentation import (
+from micro_sam.v1.instance_segmentation import (
     InstanceSegmentationWithDecoder,
     TiledInstanceSegmentationWithDecoder,
     get_predictor_and_decoder,

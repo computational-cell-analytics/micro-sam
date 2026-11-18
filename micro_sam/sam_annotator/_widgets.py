@@ -1,48 +1,48 @@
-"""Implements the widgets used in the annotation plugins.
-"""
+"""Implements the widgets used in the annotation plugins."""
 
-import os
 import gc
-import multiprocessing as mp
-import pickle
+import os
+import json
+import hashlib
 from pathlib import Path
 from typing import Optional
+import multiprocessing as mp
 
-import h5py
-import json
-import zarr
-import napari
+import z5py
 import numpy as np
 
-try:
-    import z5py
-except ImportError:
-    z5py = None
-
-from bioimage_cpp.utils import segmentation_overlap
-
-import elf.parallel
-
-from qtpy import QtWidgets
-from qtpy.QtCore import QObject, Signal
-from superqt import QCollapsible
-from napari.utils.notifications import show_info
-from magicgui import magic_factory
-from magicgui.widgets import ComboBox, Container, create_widget
+import napari
 # We have disabled the thread workers for now because they result in a
 # massive slowdown in napari >= 0.5.
 # See also https://forum.image.sc/t/napari-thread-worker-leads-to-massive-slowdown/103786
 # from napari.qt.threading import thread_worker
 from napari.utils import progress
+from napari.utils.notifications import show_info
 
+from qtpy import QtWidgets
+from qtpy.QtCore import QObject, Signal, Qt
+from qtpy.QtGui import QStandardItem, QStandardItemModel
+
+from magicgui import magic_factory
+from magicgui.widgets import ComboBox, Container, create_widget
+
+from superqt import QCollapsible, QLabeledRangeSlider
+
+import elf.parallel
+
+from bioimage_cpp.utils import segmentation_overlap
+
+from .. import util
 from . import util as vutil
-from ._tooltips import get_tooltip
 from ._state import AnnotatorState
-from .. import instance_segmentation, util
-from ..multi_dimensional_segmentation import (
-    segment_mask_in_volume, merge_instance_segmentation_3d, track_across_frames, PROJECTION_MODES, get_napari_track_data
+from ._tooltips import get_tooltip
+from ..v1.multi_dimensional_segmentation import (
+    export_tracking_result_to_ctc,
+    export_tracking_result_to_geff,
+    export_tracking_result_to_trackmate_xml,
+    get_napari_track_data,
+    track_across_frames,
 )
-
 
 #
 # Convenience functionality for creating QT UI and manipulating the napari viewer.
@@ -54,13 +54,95 @@ def _select_layer(viewer, layer_name):
 
 
 # Create a collapsible around the widget
-def _make_collapsible(widget, title):
+def _make_collapsible(widget, title, tooltip=None):
     parent_widget = QtWidgets.QWidget()
     parent_widget.setLayout(QtWidgets.QVBoxLayout())
     collapsible = QCollapsible(title, parent_widget)
+    if tooltip:
+        collapsible.setToolTip(tooltip)
+        # Also set it on the header toggle button, since that is what the user hovers (Qt does not
+        # fall back to the parent's tooltip for child widgets).
+        toggle_btn = getattr(collapsible, "_toggle_btn", None)
+        if toggle_btn is not None:
+            toggle_btn.setToolTip(tooltip)
     collapsible.addWidget(widget)
     parent_widget.layout().addWidget(collapsible)
     return parent_widget
+
+
+class CheckableComboBox(QtWidgets.QComboBox):
+    """A dropdown with a checkbox per item, to select several items at once.
+
+    Args:
+        items: The item names.
+        labels: Optional display text per item. By default the item names are shown.
+        parent: The parent widget.
+    """
+    selection_changed = Signal()
+
+    def __init__(self, items, labels=None, parent=None):
+        super().__init__(parent)
+        self._items = list(items)
+        labels = self._items if labels is None else list(labels)
+        self._model = QStandardItemModel(self)
+        for label in labels:
+            item = QStandardItem(label)
+            # The click handler toggles the state, so the item itself is not user-checkable.
+            item.setFlags(Qt.ItemIsEnabled)
+            item.setData(Qt.Checked, Qt.CheckStateRole)
+            self._model.appendRow(item)
+        self.setModel(self._model)
+        self.view().pressed.connect(self._toggle)
+        self._keep_open = False
+        # The closed box only shows a short summary, so the long item names must not widen the panel.
+        self.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(12)
+        self.view().setMinimumWidth(self.view().sizeHintForColumn(0) + 40)
+
+    def _toggle(self, index):
+        item = self._model.itemFromIndex(index)
+        checked = item.data(Qt.CheckStateRole) == Qt.Checked
+        item.setData(Qt.Unchecked if checked else Qt.Checked, Qt.CheckStateRole)
+        self._keep_open = True
+        self.update()
+        self.selection_changed.emit()
+
+    def hidePopup(self):
+        # Keep the popup open while the user toggles items.
+        if self._keep_open:
+            self._keep_open = False
+            return
+        super().hidePopup()
+
+    def selected(self):
+        """Return the names of the checked items."""
+        return [
+            name for row, name in enumerate(self._items)
+            if self._model.item(row).data(Qt.CheckStateRole) == Qt.Checked
+        ]
+
+    def set_selected(self, names):
+        """Check exactly the items in `names`."""
+        for row, name in enumerate(self._items):
+            self._model.item(row).setData(Qt.Checked if name in names else Qt.Unchecked, Qt.CheckStateRole)
+        self.update()
+        self.selection_changed.emit()
+
+    def paintEvent(self, event):
+        # Show a summary of the selection instead of the current item.
+        n_selected = len(self.selected())
+        if n_selected == len(self._items):
+            text = "all features"
+        elif n_selected == 0:
+            text = "no features"
+        else:
+            text = f"{n_selected} of {len(self._items)} features"
+        painter = QtWidgets.QStylePainter(self)
+        option = QtWidgets.QStyleOptionComboBox()
+        self.initStyleOption(option)
+        option.currentText = text
+        painter.drawComplexControl(QtWidgets.QStyle.CC_ComboBox, option)
+        painter.drawControl(QtWidgets.QStyle.CE_ComboBoxLabel, option)
 
 
 # Base class for a widget with convenience functionality for adding parameters.
@@ -77,7 +159,26 @@ class _WidgetBase(QtWidgets.QWidget):
             checkbox.setToolTip(tooltip)
         return checkbox
 
-    def _add_string_param(self, name, value, title=None, placeholder=None, layout=None, tooltip=None):
+    def _update_batched_visibility(self):
+        """Hide the 'Batched' checkbox while embeddings are tiled (batched prompting is unsupported
+        with tiling). No-op for widgets without a batched checkbox."""
+        checkbox = getattr(self, "batched_checkbox", None)
+        if checkbox is None:
+            return
+        is_tiled = _embeddings_are_tiled(AnnotatorState())
+        if is_tiled and getattr(self, "batched", False):
+            checkbox.setChecked(False)  # reset to single-object (also updates 'self.batched')
+        checkbox.setVisible(not is_tiled)
+
+    def _add_string_param(
+        self,
+        name,
+        value,
+        title=None,
+        placeholder=None,
+        layout=None,
+        tooltip=None,
+    ):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
         label = QtWidgets.QLabel(title or name)
@@ -94,8 +195,18 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(param)
         return param, layout
 
-    def _add_float_param(self, name, value, title=None, min_val=0.0, max_val=1.0, decimals=2,
-                         step=0.01, layout=None, tooltip=None):
+    def _add_float_param(
+        self,
+        name,
+        value,
+        title=None,
+        min_val=0.0,
+        max_val=1.0,
+        decimals=2,
+        step=0.01,
+        layout=None,
+        tooltip=None,
+    ):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
         label = QtWidgets.QLabel(title or name)
@@ -113,7 +224,17 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(param)
         return param, layout
 
-    def _add_int_param(self, name, value, min_val, max_val, title=None, step=1, layout=None, tooltip=None):
+    def _add_int_param(
+        self,
+        name,
+        value,
+        min_val,
+        max_val,
+        title=None,
+        step=1,
+        layout=None,
+        tooltip=None,
+    ):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
         label = QtWidgets.QLabel(title or name)
@@ -130,7 +251,30 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(param)
         return param, layout
 
-    def _add_choice_param(self, name, value, options, title=None, layout=None, update=None, tooltip=None):
+    def _make_int_field(self, name, value, min_val, max_val, step=1, title=None, tooltip=None):
+        # A single labeled int spinbox wrapped in its own widget, so it can be placed inside a row
+        # next to other fields and shown / hidden independently (e.g. the z fields, which only apply
+        # to 3d data). Returns the spinbox and the wrapping widget.
+        field = QtWidgets.QWidget()
+        field_layout = QtWidgets.QVBoxLayout()
+        field_layout.setContentsMargins(0, 0, 0, 0)
+        param, _ = self._add_int_param(
+            name, value, min_val=min_val, max_val=max_val, step=step,
+            layout=field_layout, title=title, tooltip=tooltip,
+        )
+        field.setLayout(field_layout)
+        return param, field
+
+    def _add_choice_param(
+        self,
+        name,
+        value,
+        options,
+        title=None,
+        layout=None,
+        update=None,
+        tooltip=None,
+    ):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
         label = QtWidgets.QLabel(title or name)
@@ -142,7 +286,13 @@ class _WidgetBase(QtWidgets.QWidget):
         dropdown = QtWidgets.QComboBox()
         dropdown.addItems(options)
         if update is None:
-            dropdown.currentIndexChanged.connect(lambda index: setattr(self, name, options[index]))
+            # Read the label off the live dropdown rather than the list captured here: the items are
+            # swapped later (the model sizes depend on the family), which makes that list stale.
+            def bind_selection(index, box=dropdown, attribute=name):
+                if index >= 0:
+                    setattr(self, attribute, box.itemText(index))
+
+            dropdown.currentIndexChanged.connect(bind_selection)
         else:
             dropdown.currentIndexChanged.connect(update)
 
@@ -155,26 +305,48 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(dropdown)
         return dropdown, layout
 
-    def _add_shape_param(self, names, values, min_val, max_val, step=1, title=None, tooltip=None):
+    def _add_shape_param(
+        self, names, values, min_val, max_val, step=1, title=None, tooltip=None
+    ):
         layout = QtWidgets.QHBoxLayout()
 
         x_layout = QtWidgets.QVBoxLayout()
         x_param, _ = self._add_int_param(
-            names[0], values[0], min_val=min_val, max_val=max_val, layout=x_layout, step=step,
-            title=title[0] if title is not None else title, tooltip=tooltip
+            names[0],
+            values[0],
+            min_val=min_val,
+            max_val=max_val,
+            layout=x_layout,
+            step=step,
+            title=title[0] if title is not None else title,
+            tooltip=tooltip,
         )
         layout.addLayout(x_layout)
 
         y_layout = QtWidgets.QVBoxLayout()
         y_param, _ = self._add_int_param(
-            names[1], values[1], min_val=min_val, max_val=max_val, layout=y_layout, step=step,
-            title=title[1] if title is not None else title, tooltip=tooltip
+            names[1],
+            values[1],
+            min_val=min_val,
+            max_val=max_val,
+            layout=y_layout,
+            step=step,
+            title=title[1] if title is not None else title,
+            tooltip=tooltip,
         )
         layout.addLayout(y_layout)
 
         return x_param, y_param, layout
 
-    def _add_path_param(self, name, value, select_type, title=None, placeholder=None, tooltip=None):
+    def _add_path_param(
+        self,
+        name,
+        value,
+        select_type,
+        title=None,
+        placeholder=None,
+        tooltip=None,
+    ):
         assert select_type in ("directory", "file", "both")
 
         layout = QtWidgets.QHBoxLayout()
@@ -187,7 +359,13 @@ class _WidgetBase(QtWidgets.QWidget):
         path_textbox.setText("" if value is None else str(value))
         if placeholder is not None:
             path_textbox.setPlaceholderText(placeholder)
-        path_textbox.textChanged.connect(lambda val: setattr(self, name, val if val else None))
+
+        # An empty path means that no optional path was selected. Keep this as ``None`` in the
+        # widget state instead of an empty (or whitespace-only) string: downstream model loading
+        # distinguishes ``None`` (use the registered model) from a custom checkpoint path.
+        path_textbox.textChanged.connect(
+            lambda val: setattr(self, name, val if val.strip() else None)
+        )
         if tooltip:
             path_textbox.setToolTip(tooltip)
 
@@ -199,7 +377,11 @@ class _WidgetBase(QtWidgets.QWidget):
             path_button = QtWidgets.QPushButton(button_text)
 
             # Call appropriate function based on select_type.
-            path_button.clicked.connect(lambda: getattr(self, f"_get_{select_type}_path")(name, path_textbox))
+            path_button.clicked.connect(
+                lambda: getattr(self, f"_get_{select_type}_path")(
+                    name, path_textbox
+                )
+            )
             if tooltip:
                 path_button.setToolTip(tooltip)
             layout.addWidget(path_button)
@@ -237,29 +419,32 @@ class _WidgetBase(QtWidgets.QWidget):
             # Handle the case where the selected path is not a file
             print("Invalid file selected. Please try again.")
 
+    def _align_widths(self, widgets):
+        # Give a set of widgets a uniform (max) fixed width so rows line up symmetrically.
+        widgets = [w for w in widgets if w is not None]
+        if not widgets:
+            return
+        width = max(w.sizeHint().width() for w in widgets)
+        for w in widgets:
+            w.setFixedWidth(width)
+
     def _get_model_size_options(self):
-        # We store the actual model names mapped to UI labels.
-        self.model_size_mapping = {}
-        if self.model_family == "Natural Images (SAM)":
-            self.model_size_options = list(self._model_size_map .values())
-            self.model_size_mapping = {self._model_size_map[k]: f"vit_{k}" for k in self._model_size_map.keys()}
-        else:
-            model_suffix = self.supported_dropdown_maps[self.model_family]
-            self.model_size_options = []
+        # The available model sizes depend on the selected family: the base SAM2 family supports all
+        # sizes, while finetuned families can be available only for specific sizes (e.g. 'Microscopy'
+        # is an 'hvit_t' model). We store the UI labels mapped to the corresponding model names.
+        sizes = self.model_family_config[self.model_family]["sizes"]
+        self.model_size_options = [self._model_size_map[k] for k in sizes]
+        self.model_size_mapping = {self._model_size_map[k]: f"hvit_{k}" for k in sizes}
 
-            for option in self.model_options:
-                if option.endswith(model_suffix):
-                    # Extract model size character on-the-fly.
-                    key = next((k for k in self._model_size_map .keys() if f"vit_{k}" in option), None)
-                    if key:
-                        size_label = self._model_size_map[key]
-                        self.model_size_options.append(size_label)
-                        self.model_size_mapping[size_label] = option  # Store the actual model name.
-
-        # We ensure an assorted order of model sizes ('tiny' to 'huge')
-        self.model_size_options.sort(key=lambda x: ["tiny", "base", "large", "huge"].index(x))
+        # We ensure an assorted order of model sizes ('tiny' to 'large').
+        self.model_size_options.sort(
+            key=lambda x: ["tiny", "small", "base", "large"].index(x)
+        )
 
     def _update_model_type(self):
+        # Sync the selected family. Both the available sizes and the model-type suffix depend on it.
+        self.model_family = self.model_family_dropdown.currentText() or self.model_family
+
         # Get currently selected model size (before clearing dropdown)
         current_selection = self.model_size_dropdown.currentText()
         self._get_model_size_options()  # Update model size options dynamically
@@ -275,16 +460,27 @@ class _WidgetBase(QtWidgets.QWidget):
         if current_selection in self.model_size_options:
             self.model_size = current_selection
         else:
-            if self.model_size_options:  # Default to the first available model size
+            if (
+                self.model_size_options
+            ):  # Default to the first available model size
                 self.model_size = self.model_size_options[0]
 
-        # Let's map the selection to the correct model type (eg. "tiny" -> "vit_t")
+        # Let's map the selection to the correct model type (eg. "tiny" -> "hvit_t").
         size_key = next(
-            (k for k, v in self._model_size_map.items() if v == self.model_size), "b"
+            (
+                k
+                for k, v in self._model_size_map.items()
+                if v == self.model_size
+            ),
+            "t",
         )
-        self.model_type = f"vit_{size_key}" + self.supported_dropdown_maps[self.model_family]
+        # Append the family suffix (e.g. 'tiny' + 'Microscopy' -> 'hvit_t_cells'; base -> 'hvit_t').
+        suffix = self.model_family_config[self.model_family]["suffix"]
+        self.model_type = f"hvit_{size_key}{suffix}"
 
-        self.model_size_dropdown.setCurrentText(self.model_size)  # Apply the selected text to the dropdown
+        self.model_size_dropdown.setCurrentText(
+            self.model_size
+        )  # Apply the selected text to the dropdown
 
         # We force a refresh for UI here.
         self.model_size_dropdown.update()
@@ -292,23 +488,54 @@ class _WidgetBase(QtWidgets.QWidget):
         # NOTE: And finally, we should re-enable signals again.
         self.model_size_dropdown.blockSignals(False)
 
-    def _create_model_section(self, default_model: str = util._DEFAULT_MODEL, create_layout: bool = True):
+        # The batch size depends on the backend and its VRAM cost, so it follows the model selection.
+        if getattr(self, "_batch_size_widget", None) is not None:
+            self._refresh_batch_size()
 
-        # Create a list of support dropdown values and correspond them to suffixes.
+    def _create_model_section(
+        self,
+        default_model: Optional[str] = None,
+        create_layout: bool = True,
+    ):
+        # The widget encodes its default as the synthetic 'vit_<size><suffix>' selector string. For
+        # SAM2 model ids ('hvit_...') this is just the id without the leading 'h', so we derive it
+        # from the single-source 'DEFAULT_MODEL' (e.g. 'hvit_t_cells' -> 'vit_t_cells' -> Microscopy/tiny).
+        if default_model is None:
+            from ..v2.util import DEFAULT_MODEL
+            default_model = DEFAULT_MODEL[1:]
+
+        # Create a list of supported dropdown values and correspond them to suffixes (used to parse
+        # the synthetic default-model string). Additional SAM2 families can be added here in future.
         self.supported_dropdown_maps = {
-            "Natural Images (SAM)": "",
-            "Light Microscopy": "_lm",
-            "Electron Microscopy": "_em_organelles",
-            "Medical Imaging": "_medical_imaging",
-            "Histopathology": "_histopathology",
+            "Natural Images": "_sam2",
+            "Microscopy": "_cells",
+            "Mitochondria (EM)": "_em_mito",
+            "Nuclei (EM)": "_em_nuclei",
         }
 
-        # NOTE: The available options for all are either 'tiny', 'base', 'large' or 'huge'.
-        self._model_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
+        # Per-family backend config: the model-type suffix appended after 'hvit_{size}' and the
+        # available model sizes. The base SAM2 family supports all sizes. Finetuned families (e.g.
+        # 'Microscopy', the joint SAM2 + UniSAM2 'hvit_*_cells' models) can exist only for some sizes.
+        self.model_family_config = {
+            "Natural Images": {"suffix": "", "sizes": ["t", "s", "b", "l"]},
+            "Microscopy": {"suffix": "_cells", "sizes": ["t", "s", "b", "l"]},
+            "Mitochondria (EM)": {"suffix": "_em_mito", "sizes": ["s"]},
+            "Nuclei (EM)": {"suffix": "_em_nuclei", "sizes": ["s"]},
+        }
+
+        # NOTE: The available SAM2 model sizes are 'tiny', 'small', 'base' and 'large'.
+        self._model_size_map = {
+            "t": "tiny",
+            "s": "small",
+            "b": "base",
+            "l": "large",
+        }
 
         self._default_model_choice = default_model
         # Let's set the literally default model choice depending on 'micro-sam'.
-        self.model_family = {v: k for k, v in self.supported_dropdown_maps.items()}[self._default_model_choice[5:]]
+        self.model_family = {
+            v: k for k, v in self.supported_dropdown_maps.items()
+        }[self._default_model_choice[5:]]
 
         kwargs = {}
         if create_layout:
@@ -318,45 +545,118 @@ class _WidgetBase(QtWidgets.QWidget):
         # NOTE: We stick to the base variant for each model family.
         # i.e. 'Natural Images (SAM)', 'Light Microscopy', 'Electron Microscopy', 'Medical_Imaging', 'Histopathology'.
         self.model_family_dropdown, layout = self._add_choice_param(
-            "model_family", self.model_family, list(self.supported_dropdown_maps.keys()),
-            title="Model:", tooltip=get_tooltip("embedding", "model_family"), **kwargs,
+            "model_family",
+            self.model_family,
+            list(self.supported_dropdown_maps.keys()),
+            title="Model:",
+            tooltip=get_tooltip("embedding", "model_family"),
+            **kwargs,
         )
-        self.model_family_dropdown.currentTextChanged.connect(self._update_model_type)
+        self.model_family_dropdown.currentTextChanged.connect(
+            self._update_model_type
+        )
         return layout
 
     def _create_model_size_section(self):
 
         # Create UI for the model size.
-        # This would combine with the chosen 'self.model_family' and depend on 'self._default_model_choice'.
+        # This combines with the chosen 'self.model_family' and depends on 'self._default_model_choice'.
         self.model_size = self._model_size_map[self._default_model_choice[4]]
-
-        # Get all model options.
-        self.model_options = list(util.models().urls.keys())
-        # Filter out the decoders from the model list.
-        self.model_options = [model for model in self.model_options if not model.endswith("decoder")]
 
         # Now, we get the available sizes per model family.
         self._get_model_size_options()
 
+        # Resolve the type for the shown default now. The dropdowns only sync it on a change, and
+        # '_validate_model_type_and_custom_weights' not until the run button, so it would be unset.
+        self.model_type = self._resolve_model_type()
+
         self.model_size_dropdown, layout = self._add_choice_param(
-            "model_size", self.model_size, self.model_size_options,
-            title="model size:", tooltip=get_tooltip("embedding", "model_size"),
+            "model_size",
+            self.model_size,
+            self.model_size_options,
+            title="model size:",
+            tooltip=get_tooltip("embedding", "model_size"),
         )
-        self.model_size_dropdown.currentTextChanged.connect(self._update_model_type)
+        self.model_size_dropdown.currentTextChanged.connect(
+            self._update_model_type
+        )
         return layout
 
+    def _family_for_sam2_model(self, model_type):
+        """The family of a SAM2 model name by its suffix, e.g. 'hvit_s_em_mito' -> 'Mitochondria (EM)'."""
+        for family, config in self.model_family_config.items():
+            if config["suffix"] and model_type.endswith(config["suffix"]):
+                return family
+        return "Natural Images"
+
+    def _resolve_model_type(self):
+        """The model type for the selected family and size, e.g. 'tiny' + 'Microscopy' -> 'hvit_t_cells'."""
+        suffix = self.model_family_config.get(self.model_family, {}).get("suffix", "")
+        return f"hvit_{self.model_size[0]}{suffix}"
+
     def _validate_model_type_and_custom_weights(self):
-        # Let's get all model combination stuff into the desired `model_type` structure.
-        self.model_type = "vit_" + self.model_size[0] + self.supported_dropdown_maps[self.model_family]
+        self.model_type = self._resolve_model_type()
 
         # For 'custom_weights', we remove the displayed text on top of the drop-down menu.
         if self.custom_weights:
             # NOTE: We prevent recursive updates for this step temporarily.
             self.model_family_dropdown.blockSignals(True)
-            self.model_family_dropdown.setCurrentIndex(-1)  # This removes the displayed text.
+            self.model_family_dropdown.setCurrentIndex(
+                -1
+            )  # This removes the displayed text.
             self.model_family_dropdown.update()
             # NOTE: And re-enable signals again.
             self.model_family_dropdown.blockSignals(False)
+
+    def _validate_model_support(self):
+        # The segmentation and tracking annotators support only SAM2. The classification widget overrides this.
+        if not self.model_type.startswith("hvit_"):
+            tool = "tracking" if getattr(self, "is_timeseries", False) else "segmentation"
+            return _generate_message(
+                "error",
+                f"The {tool} annotator does not support the model '{self.model_type}'. "
+                "Use a (µ)SAM2 model ('hvit_*').",
+            )
+        return False
+
+    def _validate_vfm_requirements(self):
+        # For gated VFM models (DINOv3 via 'transformers', UNI / UNI2-h via 'timm') check that the backend
+        # package is importable and HuggingFace access is set up, surfacing a clear message if not. DINOv2
+        # ('torch_hub') is ungated and auto-downloads, so it is not checked. A no-op for SAM models.
+        import importlib
+        from ..models.vfm import is_vfm_model, VFM_MODELS
+
+        if not is_vfm_model(self.model_type):
+            return False
+
+        backend = VFM_MODELS[self.model_type]["backend"]
+        if backend == "torch_hub":  # DINOv2: ungated, weights auto-download.
+            return False
+
+        package = "transformers" if backend == "hf" else "timm"
+        try:
+            importlib.import_module(package)
+        except ImportError:
+            return _generate_message(
+                "error",
+                f"The model '{self.model_type}' requires the '{package}' package, which is not installed. "
+                f"Install it (e.g. 'pip install {package}') and try again."
+            )
+
+        # These weights are gated on HuggingFace. Warn (but allow continuing, e.g. if already cached).
+        try:
+            from huggingface_hub import get_token
+            has_token = get_token() is not None
+        except Exception:
+            has_token = False
+        if not has_token:
+            return _generate_message(
+                "info",
+                f"'{self.model_type}' is a gated model on Hugging Face. Request access on its Hugging Face "
+                "page and authenticate via 'huggingface-cli login' or the 'HF_TOKEN' environment variable. "
+                "If the weights are already downloaded you can continue. Otherwise the download will fail."
+            )
+        return False
 
 
 # Custom signals for managing progress updates.
@@ -369,44 +669,61 @@ class PBarSignals(QObject):
 
 
 class InfoDialog(QtWidgets.QDialog):
-    def __init__(self, title, message):
+    def __init__(self, title, message, buttons=("OK", "Cancel")):
         super().__init__()
         self.setWindowTitle(title)
+        # Label of the button the user clicked (None if the dialog was closed without a button).
+        self.clicked_label = None
+        # The first button accepts the dialog. The rest reject it.
+        self._accept_label = buttons[0]
 
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(QtWidgets.QLabel(message))
 
-        # Add buttons
-        button_box = QtWidgets.QHBoxLayout()  # Use QHBoxLayout for buttons side-by-side
-        accept_button = QtWidgets.QPushButton("OK")
-        accept_button.clicked.connect(lambda: self.button_clicked(accept_button))  # Connect to clicked signal
-        button_box.addWidget(accept_button)
-
-        cancel_button = QtWidgets.QPushButton("Cancel")
-        cancel_button.clicked.connect(lambda: self.button_clicked(cancel_button))  # Connect to clicked signal
-        button_box.addWidget(cancel_button)
+        # The buttons sit side by side. The first is the default, so Enter triggers it.
+        button_box = QtWidgets.QHBoxLayout()
+        for i, label in enumerate(buttons):
+            button = QtWidgets.QPushButton(label)
+            button.clicked.connect(lambda checked=False, lbl=label: self.button_clicked(lbl))
+            if i == 0:
+                button.setDefault(True)
+                button.setFocus()
+            button_box.addWidget(button)
 
         layout.addLayout(button_box)
         self.setLayout(layout)
 
-    def button_clicked(self, button):
-        if button.text() == "OK":
-            self.accept()  # Accept the dialog
+    def button_clicked(self, label):
+        self.clicked_label = label
+        if label == self._accept_label:
+            self.accept()
         else:
-            self.reject()  # Reject the dialog (Cancel)
+            self.reject()
 
 
 # Set up the progress bar. We handle this via custom signals that are passed as callbacks to the
 # function that does the actual work. We need callbacks for initializing the progress bar,
 # updating it and for stopping the progress bar.
-def _create_pbar_for_threadworker():
-    pbar = progress()
+def _create_pbar_for_threadworker(initial_description=None):
+    """Create a napari progress bar, optionally visible in an indeterminate preparation state.
+
+    Supplying the description at construction time ensures napari can paint meaningful status before
+    a synchronous caller reaches the backend callback that provides the final work-item count.
+    """
+    pbar = progress(desc=initial_description)
     pbar_signals = PBarSignals()
-    pbar_signals.pbar_total.connect(lambda total: setattr(pbar, "total", total))
+    pbar_signals.pbar_total.connect(
+        lambda total: setattr(pbar, "total", total)
+    )
     pbar_signals.pbar_update.connect(lambda update: pbar.update(update))
-    pbar_signals.pbar_description.connect(lambda description: pbar.set_description(description))
+    pbar_signals.pbar_description.connect(
+        lambda description: pbar.set_description(description)
+    )
     pbar_signals.pbar_stop.connect(lambda: pbar.close())
     pbar_signals.pbar_reset.connect(lambda: pbar.reset())
+    # Paint it now. The callers run on the main thread and only reach the next 'processEvents' after
+    # the model is built, so without this the bar stays invisible for the whole preparation.
+    QtWidgets.QApplication.processEvents()
     return pbar, pbar_signals
 
 
@@ -425,9 +742,9 @@ def _reset_tracking_state(viewer):
     viewer.layers["point_prompts"].property_choices["track_id"] = ["1"]
     viewer.layers["prompts"].property_choices["track_id"] = ["1"]
 
-    # Reset the choices in the track_id menu.
-    state.widgets["tracking"][1].value = "1"
-    state.widgets["tracking"][1].choices = ["1"]
+    # Reset the choices in the track_id menu (index 2: prompt, track_state, track_id).
+    state.annotator._tracking_widget[2].value = "1"
+    state.annotator._tracking_widget[2].choices = ["1"]
 
 
 #
@@ -449,25 +766,36 @@ def clear(viewer: "napari.viewer.Viewer") -> None:
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
-def clear_volume(viewer: "napari.viewer.Viewer", all_slices: bool = True) -> None:
+def clear_volume(
+    viewer: "napari.viewer.Viewer", all_slices: bool = True
+) -> None:
     """Widget for clearing the current annotations in 3D.
 
     Args:
         viewer: The napari viewer.
         all_slices: Choose whether to clear the annotations for all or only the current slice.
     """
+    state = AnnotatorState()
+
     if all_slices:
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.dims.point[0])
+        i = vutil.current_slice(viewer, viewer.layers["current_object"])
         vutil.clear_annotations_slice(viewer, i=i)
+
+    # If this is a SAM2 promptable segmentation workflow,
+    # reset the prompts after the user clicks 'clear annotations'.
+    if state.interactive_segmenter is not None:
+        state.interactive_segmenter.reset_predictor()
 
     # Perform garbage collection.
     gc.collect()
 
 
 @magic_factory(call_button="Clear Annotations [Shift + C]")
-def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None:
+def clear_track(
+    viewer: "napari.viewer.Viewer", all_frames: bool = True
+) -> None:
     """Widget for clearing all tracking annotations and state.
 
     Args:
@@ -478,7 +806,7 @@ def clear_track(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None
         _reset_tracking_state(viewer)
         vutil.clear_annotations(viewer)
     else:
-        i = int(viewer.dims.point[0])
+        i = vutil.current_slice(viewer, viewer.layers["current_object"])
         vutil.clear_annotations_slice(viewer, i=i)
 
     # Perform garbage collection.
@@ -497,7 +825,9 @@ def _mask_matched_objects(seg, prev_seg, preservation_threshold):
             mask_ids.append(seg_ids[0])
             prev_mask_ids.append(prev_id)
 
-    preserve_mask = np.logical_or(np.isin(seg, mask_ids), np.isin(prev_seg, prev_mask_ids))
+    preserve_mask = np.logical_or(
+        np.isin(seg, mask_ids), np.isin(prev_seg, prev_mask_ids)
+    )
     return preserve_mask
 
 
@@ -512,7 +842,7 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
         bb = np.s_[:]
     else:
         z_min, z_max = state.z_range
-        bb = np.s_[z_min:(z_max+1)]
+        bb = np.s_[z_min : (z_max + 1)]  # noqa
 
     # Cast the dtype of the segmentation we work with correctly.
     # Otherwise we run into type conversion errors later.
@@ -526,7 +856,10 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
     # id_offset = int(viewer.layers["committed_objects"].data.max())
     full_shape = viewer.layers["committed_objects"].data.shape
     id_offset = int(
-        elf.parallel.max(viewer.layers["committed_objects"].data, block_shape=util.get_block_shape(full_shape))
+        elf.parallel.max(
+            viewer.layers["committed_objects"].data,
+            block_shape=util.get_block_shape(full_shape),
+        )
     )
 
     # Compute the mask for the current object.
@@ -544,7 +877,9 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
             # In the mode 'objects' we preserve committed objects instead, by comparing the overlaps
             # of already committed and newly committed objects.
             if preserve_mode == "objects":
-                preserve_mask = _mask_matched_objects(seg, prev_seg, preservation_threshold)
+                preserve_mask = _mask_matched_objects(
+                    seg, prev_seg, preservation_threshold
+                )
             mask[preserve_mask] = 0
 
     # Write the current object to committed objects.
@@ -552,52 +887,33 @@ def _commit_impl(viewer, layer, preserve_mode, preservation_threshold):
     viewer.layers["committed_objects"].data[bb][mask] = seg[mask]
     viewer.layers["committed_objects"].refresh()
 
+    # If this is a SAM2 promptable segmentation workflow, reset the prompts after the user clicks commit.
+    if state.interactive_segmenter is not None:
+        state.interactive_segmenter.reset_predictor()
+
     return id_offset, seg, mask, bb
 
 
 def _get_auto_segmentation_options(state, object_ids):
+    # The parameters of a run depend on the mode, so the widget reports them.
     widget = state.widgets["autosegment"]
 
-    segmentation_options = {"object_ids": [int(object_id) for object_id in object_ids]}
-    if widget.with_decoder:
-        segmentation_options["boundary_distance_thresh"] = widget.boundary_distance_thresh
-        segmentation_options["center_distance_thresh"] = widget.center_distance_thresh
-    else:
-        segmentation_options["pred_iou_thresh"] = widget.pred_iou_thresh
-        segmentation_options["stability_score_thresh"] = widget.stability_score_thresh
-        segmentation_options["box_nms_thresh"] = widget.box_nms_thresh
-
-    segmentation_options["min_object_size"] = widget.min_object_size
-    if widget.volumetric:
-        segmentation_options["apply_to_volume"] = widget.apply_to_volume
-        segmentation_options["gap_closing"] = widget.gap_closing
-        segmentation_options["min_extent"] = widget.min_extent
+    segmentation_options = {
+        "object_ids": [int(object_id) for object_id in object_ids]
+    }
+    segmentation_options.update(widget.commit_settings())
 
     return segmentation_options
 
 
 def _get_promptable_segmentation_options(state, object_ids):
-    segmentation_options = {"object_ids": [int(object_id) for object_id in object_ids]}
-    is_tracking = False
-    if "segment_nd" in state.widgets:
-        widget = state.widgets["segment_nd"]
-        segmentation_options["projection"] = widget.projection
-        segmentation_options["iou_threshold"] = widget.iou_threshold
-        segmentation_options["box_extension"] = widget.box_extension
-        if widget.tracking:
-            segmentation_options["motion_smoothing"] = widget.motion_smoothing
-            is_tracking = True
-    return segmentation_options, is_tracking
+    segmentation_options = {
+        "object_ids": [int(object_id) for object_id in object_ids]
+    }
+    return segmentation_options, False
 
 
 def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
-
-    if z5py is None:
-        raise RuntimeError(
-            "Committing annotations to file requires z5py, which is only available via conda. "
-            "Install it with 'conda install -c conda-forge z5py'."
-        )
-
     # NOTE: zarr-python is quite inefficient and writes empty blocks.
     # So we have to use z5py here.
 
@@ -613,7 +929,9 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
 
     def _save_signature(f, data_signature):
         embeds = state.widgets["embeddings"]
-        tile_shape, halo = _process_tiling_inputs(embeds.tile_x, embeds.tile_y, embeds.halo_x, embeds.halo_y)
+        tile_shape, halo = _process_tiling_inputs(
+            embeds.tile_x, embeds.tile_y, embeds.halo_x, embeds.halo_y
+        )
         signature = util._get_embedding_signature(
             input_=None,  # We don't need this because we pass the data signature.
             predictor=state.predictor,
@@ -649,7 +967,11 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
     full_shape = viewer.layers["committed_objects"].data.shape
     block_shape = util.get_block_shape(full_shape)
     ds = f.require_dataset(
-        "committed_objects", shape=full_shape, chunks=block_shape, compression="gzip", dtype=seg.dtype
+        "committed_objects",
+        shape=full_shape,
+        chunks=block_shape,
+        compression="gzip",
+        dtype=seg.dtype,
     )
     ds.n_threads = mp.cpu_count()
     data = ds[bb]
@@ -667,7 +989,9 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
     # We committed an automatic segmentation.
     if layer == "auto_segmentation":
         # Save the settings of the segmentation widget.
-        segmentation_options = _get_auto_segmentation_options(state, object_ids)
+        segmentation_options = _get_auto_segmentation_options(
+            state, object_ids
+        )
         commit_history.append({"auto_segmentation": segmentation_options})
 
         # Write the commit history.
@@ -677,17 +1001,33 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
         # any prompts and so don't need to commit anything else.
         return
 
-    segmentation_options, is_tracking = _get_promptable_segmentation_options(state, object_ids)
+    segmentation_options, is_tracking = _get_promptable_segmentation_options(
+        state, object_ids
+    )
     commit_history.append({"current_object": segmentation_options})
 
-    def write_prompts(object_id, prompts, point_prompts, point_labels, track_state=None):
+    def write_prompts(
+        object_id, prompts, point_prompts, point_labels, track_state=None
+    ):
         g = f.create_group(f"prompts/{object_id}")
         if prompts is not None and len(prompts) > 0:
             data = np.array(prompts)
-            g.create_dataset("prompts", data=data, shape=data.shape, chunks=data.shape)
+            g.create_dataset(
+                "prompts", data=data, shape=data.shape, chunks=data.shape
+            )
         if point_prompts is not None and len(point_prompts) > 0:
-            g.create_dataset("point_prompts", data=point_prompts, shape=data.shape, chunks=point_prompts.shape)
-            ds = g.create_dataset("point_labels", data=point_labels, shape=data.shape, chunks=point_labels.shape)
+            g.create_dataset(
+                "point_prompts",
+                data=point_prompts,
+                shape=data.shape,
+                chunks=point_prompts.shape,
+            )
+            ds = g.create_dataset(
+                "point_labels",
+                data=point_labels,
+                shape=data.shape,
+                chunks=point_labels.shape,
+            )
             if track_state is not None:
                 ds.attrs["track_state"] = track_state.tolist()
 
@@ -697,56 +1037,100 @@ def _commit_to_file(path, viewer, layer, seg, mask, bb, extra_attrs=None):
     point_prompts = point_layer.data
     point_labels = point_layer.properties["label"]
     if len(point_prompts) > 0:
-        point_labels = np.array([1 if label == "positive" else 0 for label in point_labels])
-        assert len(point_prompts) == len(point_labels), \
-            f"Number of point prompts and labels disagree: {len(point_prompts)} != {len(point_labels)}"
+        point_labels = np.array(
+            [1 if label == "positive" else 0 for label in point_labels]
+        )
+        assert len(point_prompts) == len(
+            point_labels
+        ), f"Number of point prompts and labels disagree: {len(point_prompts)} != {len(point_labels)}"
 
     # Commit the prompts for all the objects in the commit.
     if len(object_ids) == 1:  # We only have a single object.
         write_prompts(object_ids[0], prompts, point_prompts, point_labels)
 
-    elif is_tracking:  # We have multiple objects from tracking a lineage with divisions.
+    elif (
+        is_tracking
+    ):  # We have multiple objects from tracking a lineage with divisions.
         track_ids_points = np.array(point_layer.properties["track_id"])
-        track_ids_prompts = np.array(viewer.layers["prompts"].properties["track_id"])
+        track_ids_prompts = np.array(
+            viewer.layers["prompts"].properties["track_id"]
+        )
 
         unique_track_ids = np.unique(track_ids_points)
         assert len(unique_track_ids) == len(object_ids)
         track_state = np.array(point_layer.properties["state"])
         for track_id, object_id in zip(unique_track_ids, object_ids):
-            this_prompts = None if len(prompts) == 0 else prompts[track_ids_prompts == track_id]
+            this_prompts = (
+                None
+                if len(prompts) == 0
+                else prompts[track_ids_prompts == track_id]
+            )
             point_mask = track_ids_points == track_id
-            this_points, this_labels, this_track_state = \
-                point_prompts[point_mask], point_labels[point_mask], track_state[point_mask]
-            write_prompts(object_id, this_prompts, this_points, this_labels, track_state=this_track_state)
+            this_points, this_labels, this_track_state = (
+                point_prompts[point_mask],
+                point_labels[point_mask],
+                track_state[point_mask],
+            )
+            write_prompts(
+                object_id,
+                this_prompts,
+                this_points,
+                this_labels,
+                track_state=this_track_state,
+            )
 
     else:  # We have multiple objects, which are the result from batched interactive segmentation.
         # Note: we can't match exact object ids to their prompts, for batched segmentation.
         # We first write the objects from box prompts, then from point prompts.
         n_prompts, n_points = len(prompts), len(point_prompts)
-        assert n_prompts + n_points == len(object_ids), \
-            f"Number of prompts and objects disagree: {n_prompts} + {n_points} != {len(object_ids)}"
+        assert n_prompts + n_points == len(
+            object_ids
+        ), f"Number of prompts and objects disagree: {n_prompts} + {n_points} != {len(object_ids)}"
         for i, object_id in enumerate(object_ids):
             if i < n_prompts:
-                this_prompts, this_points, this_labels = prompts[i:i+1], None, None
+                this_prompts, this_points, this_labels = (
+                    prompts[i : i + 1],  # noqa
+                    None,
+                    None,
+                )
             else:
                 j = i - n_prompts
-                this_prompts, this_points, this_labels = None, point_prompts[j:j+1], point_labels[j:j+1]
+                this_prompts, this_points, this_labels = (
+                    None,
+                    point_prompts[j : j + 1],  # noqa
+                    point_labels[j : j + 1],  # noqa
+                )
             write_prompts(object_id, this_prompts, this_points, this_labels)
 
     # Write the commit history.
     f.attrs["commit_history"] = commit_history
 
 
+def _call_button_tooltip(widget_type, name):
+    # Returns a magic_factory 'widget_init' that sets the call button's tooltip (magicgui call buttons
+    # cannot be given a tooltip via the decorator directly).
+    def _init(widget):
+        widget.call_button.tooltip = get_tooltip(widget_type, name)
+    return _init
+
+
 @magic_factory(
     call_button="Commit [C]",
-    layer={"choices": ["current_object", "auto_segmentation"], "tooltip": get_tooltip("commit", "layer")},
-    preserve_mode={"choices": ["objects", "pixels", "none"], "tooltip": get_tooltip("commit", "preserve_mode")},
+    widget_init=_call_button_tooltip("commit", "commit_button"),
+    layer={
+        "choices": ["current_object", "auto_segmentation"],
+        "tooltip": get_tooltip("commit", "layer"),
+    },
+    preserve_mode={
+        "choices": ["objects", "pixels", "none"],
+        "tooltip": get_tooltip("commit", "preserve_mode"),
+    },
     commit_path={"mode": "d", "tooltip": get_tooltip("commit", "commit_path")},
 )
 def commit(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
-    preserve_mode: str = "objects",
+    preserve_mode: str = "pixels",
     preservation_threshold: float = 0.75,
     commit_path: Optional[Path] = None,
 ) -> None:
@@ -756,19 +1140,24 @@ def commit(
         viewer: The napari viewer.
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
+            The annotator selects the layer of the last segmentation. The user can change it.
         preserve_mode: The mode for preserving already committed objects, in order to prevent over-writing
-            them by a new commit. Supports the modes 'objects', which preserves on the object level and is the default,
-            'pixels', which preserves on the pixel-level, or 'none', which does not preserve commited objects.
+            them by a new commit. Supports the modes 'objects', which preserves on the object level,
+            'pixels', which preserves on the pixel-level and is the default, or 'none', which does not
+            preserve commited objects.
         preservation_threshold: The overlap threshold for preserving objects. This is only used if
             preservation_mode is set to 'objects'.
         commit_path: Select a file path where the committed results and prompts will be saved.
-            This feature is still experimental.
+            This feature is not implemented yet and will be supported in a future release.
     """
-    # Commit the segmentation layer.
-    _, seg, mask, bb = _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
-
+    # Saving committed results to file is not supported yet.
     if commit_path is not None:
-        _commit_to_file(commit_path, viewer, layer, seg, mask, bb)
+        raise NotImplementedError(
+            "Saving committed results to 'commit_path' is not supported yet and will be added in a future release."
+        )
+
+    # Commit the segmentation layer.
+    _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
 
     if layer == "current_object":
         vutil.clear_annotations(viewer)
@@ -785,14 +1174,21 @@ def commit(
 
 @magic_factory(
     call_button="Commit [C]",
-    layer={"choices": ["current_object", "auto_segmentation"]},
-    preserve_mode={"choices": ["objects", "pixels", "none"]},
-    commit_path={"mode": "d"},  # choose a directory
+    widget_init=_call_button_tooltip("commit", "commit_button"),
+    layer={
+        "choices": ["current_object", "auto_segmentation"],
+        "tooltip": get_tooltip("commit", "layer"),
+    },
+    preserve_mode={
+        "choices": ["objects", "pixels", "none"],
+        "tooltip": get_tooltip("commit", "preserve_mode"),
+    },
+    commit_path={"mode": "d", "tooltip": get_tooltip("commit", "commit_path")},
 )
 def commit_track(
     viewer: "napari.viewer.Viewer",
     layer: str = "current_object",
-    preserve_mode: str = "objects",
+    preserve_mode: str = "pixels",
     preservation_threshold: float = 0.75,
     commit_path: Optional[Path] = None,
 ) -> None:
@@ -802,44 +1198,67 @@ def commit_track(
         viewer: The napari viewer.
         layer: Select the layer to commit. Can be either 'current_object' to commit interacitve segmentation results.
             Or 'auto_segmentation' to commit automatic segmentation results.
+            The annotator selects the layer of the last segmentation. The user can change it.
         preserve_mode: The mode for preserving already committed objects, in order to prevent over-writing
-            them by a new commit. Supports the modes 'objects', which preserves on the object level and is the default,
-            'pixels', which preserves on the pixel-level, or 'none', which does not preserve commited objects.
+            them by a new commit. Supports the modes 'objects', which preserves on the object level,
+            'pixels', which preserves on the pixel-level and is the default, or 'none', which does not
+            preserve commited objects.
         preservation_threshold: The overlap threshold for preserving objects. This is only used if
             preservation_mode is set to 'objects'.
         commit_path: Select a file path where the committed results and prompts will be saved.
             This feature is still experimental.
     """
     # Commit the segmentation layer.
-    id_offset, seg, mask, bb = _commit_impl(viewer, layer, preserve_mode, preservation_threshold)
+    id_offset, seg, mask, bb = _commit_impl(
+        viewer, layer, preserve_mode, preservation_threshold
+    )
 
-    # Update the lineages.
+    # Update the lineages: the ones of the automatic tracking, or the single one of the interactive tracking.
     state = AnnotatorState()
-    lineage = state.lineage
-
-    if isinstance(lineage, list):  # This is a list of lineages from auto-tracking.
-        assert id_offset == 0
-        assert len(state.committed_lineages) == 0
-        state.committed_lineages.extend(lineage)
-    else:  # This is a single lineage from interactive tracking.
-        updated_lineage = {
-            parent + id_offset: [child + id_offset for child in children] for parent, children in state.lineage.items()
-        }
-        state.committed_lineages.append(updated_lineage)
+    if layer == "auto_segmentation":
+        if state.auto_lineages is None:
+            # A segmentation without tracking: every object is a track of its own, without divisions.
+            lineage = {int(object_id): [] for object_id in np.unique(seg[mask]) if object_id != 0}
+            if lineage:
+                state.committed_lineages.append(lineage)
+        else:
+            state.committed_lineages.extend(
+                {parent + id_offset: [child + id_offset for child in children] for parent, children in lineage.items()}
+                for lineage in state.auto_lineages
+            )
+    else:
+        state.committed_lineages.append({
+            parent + id_offset: [child + id_offset for child in children]
+            for parent, children in state.lineage.items()
+        })
 
     if commit_path is not None:
         _commit_to_file(
-            commit_path, viewer, layer, seg, mask, bb,
-            extra_attrs={"committed_lineages": state.committed_lineages}
+            commit_path,
+            viewer,
+            layer,
+            seg,
+            mask,
+            bb,
+            extra_attrs={"committed_lineages": state.committed_lineages},
         )
 
     if layer == "current_object":
         vutil.clear_annotations(viewer)
+    else:
+        # Clear the committed result, so that it is not committed a second time.
+        state.auto_lineages = None
+        viewer.layers["auto_segmentation"].data = np.zeros(
+            viewer.layers["auto_segmentation"].data.shape, dtype="uint32"
+        )
+        viewer.layers["auto_segmentation"].refresh()
 
     # Create / update the tracking layer.
     layer_name = "tracks"
     segmentation = viewer.layers["committed_objects"].data
-    track_data, parent_graph = get_napari_track_data(segmentation, state.committed_lineages)
+    track_data, parent_graph = get_napari_track_data(
+        segmentation, state.committed_lineages
+    )
     if layer_name in viewer.layers:
         layer = viewer.layers[layer_name]
         layer.data = track_data
@@ -847,30 +1266,83 @@ def commit_track(
     else:
         viewer.add_tracks(track_data, name=layer_name, graph=parent_graph)
 
-    # Reset the tracking state.
-    _reset_tracking_state(viewer)
+    # Reset the interactive tracking state, which an automatic result does not use.
+    if layer == "current_object":
+        _reset_tracking_state(viewer)
 
     # Perform garbage collection.
     gc.collect()
 
 
-def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="label"):
-    """Create the menu for toggling point prompt labels."""
-    label_menu = ComboBox(label=menu_name, choices=labels, tooltip=get_tooltip("prompt_menu", "labels"))
+@magic_factory(
+    call_button="Export",
+    widget_init=_call_button_tooltip("annotator_tracking", "export_button"),
+    export_format={"choices": ["CTC", "GEFF", "TrackMate XML"]},
+    export_folder={"mode": "d"},  # choose a directory
+)
+def export_track(
+    viewer: "napari.viewer.Viewer",
+    export_format: str = "CTC",
+    export_folder: Path = Path.cwd(),
+) -> None:
+    """Widget for exporting the committed tracking result.
+
+    Args:
+        viewer: The napari viewer.
+        export_format: The tracking export format. Supports 'CTC', 'GEFF' and 'TrackMate XML'.
+        export_folder: The folder where the export is written. By default the current working directory is used.
+    """
+    if "committed_objects" not in viewer.layers or viewer.layers["committed_objects"].data.max() == 0:
+        _generate_message("error", "There are no committed tracking results to export yet.")
+        return
+
+    segmentation = viewer.layers["committed_objects"].data
+    lineages = AnnotatorState().committed_lineages
+    if export_format == "CTC":
+        export_tracking_result_to_ctc(segmentation, lineages, export_folder)
+        show_info(f"Exported the tracking result to CTC format in '{export_folder}'.")
+    elif export_format == "GEFF":
+        export_path = export_tracking_result_to_geff(segmentation, lineages, export_folder)
+        show_info(f"Exported the tracking result to GEFF format in '{export_path}'.")
+    elif export_format == "TrackMate XML":
+        export_path = export_tracking_result_to_trackmate_xml(segmentation, lineages, export_folder)
+        show_info(f"Exported the tracking result to TrackMate XML format in '{export_path}'.")
+    else:
+        _generate_message("error", f"Unsupported tracking export format: {export_format}.")
+
+
+def create_prompt_menu(
+    points_layer, labels, menu_name="prompt", label_name="label", linked_layers=None, viewer=None,
+):
+    """Create a menu that keeps point and optional shape prompt labels synchronized."""
+    prompt_layers = [points_layer] + ([] if linked_layers is None else list(linked_layers))
+    label_menu = ComboBox(
+        label=menu_name,
+        choices=labels,
+        tooltip=get_tooltip("prompt_menu", "labels"),
+    )
     label_widget = Container(widgets=[label_menu])
 
     def update_label_menu(event):
-        new_label = str(points_layer.current_properties[label_name][0])
+        new_label = str(event.source.current_properties[label_name][0])
         if new_label != label_menu.value:
             label_menu.value = new_label
 
-    points_layer.events.current_properties.connect(update_label_menu)
+    for layer in prompt_layers:
+        layer.events.current_properties.connect(update_label_menu)
 
     def label_changed(new_label):
-        current_properties = points_layer.current_properties
-        current_properties[label_name] = np.array([new_label])
-        points_layer.current_properties = current_properties
-        points_layer.refresh_colors()
+        for layer in prompt_layers:
+            if label_name == "label":
+                # Only the layer in use relabels its selected scribbles, see 'relabels_selection'.
+                vutil.set_prompt_label(
+                    layer, new_label, relabel_selected=vutil.relabels_selection(layer, viewer)
+                )
+            else:
+                current_properties = layer.current_properties
+                current_properties[label_name] = np.array([new_label])
+                layer.current_properties = current_properties
+                layer.refresh_colors()
 
     label_menu.changed.connect(label_changed)
 
@@ -881,7 +1353,9 @@ def create_prompt_menu(points_layer, labels, menu_name="prompt", label_name="lab
     call_button="Update settings",
     cache_directory={"mode": "d"},  # choose a directory
 )
-def settings_widget(cache_directory: Optional[Path] = util.get_cache_directory()) -> None:
+def settings_widget(
+    cache_directory: Optional[Path] = util.get_cache_directory(),
+) -> None:
     """Widget to update global micro_sam settings.
 
     Args:
@@ -912,7 +1386,9 @@ def _generate_message(message_type: str, message: str) -> bool:
     """
     # Set button text and behavior based on message type
     if message_type == "error":
-        QtWidgets.QMessageBox.critical(None, "Error", message, QtWidgets.QMessageBox.Ok)
+        QtWidgets.QMessageBox.critical(
+            None, "Error", message, QtWidgets.QMessageBox.Ok
+        )
         abort = True
         return abort
     elif message_type == "info":
@@ -923,6 +1399,16 @@ def _generate_message(message_type: str, message: str) -> bool:
             return abort
     else:
         raise ValueError(f"Invalid message type {message_type}")
+
+
+def _ask_load_or_recompute(message: str) -> str:
+    """Ask the user whether to load existing embeddings or recompute them.
+
+    Returns 'load', 'recompute' or 'cancel'.
+    """
+    dialog = InfoDialog(title="Existing embeddings found", message=message, buttons=("Load", "Recompute", "Cancel"))
+    dialog.exec_()
+    return {"Load": "load", "Recompute": "recompute"}.get(dialog.clicked_label, "cancel")
 
 
 def _validate_embeddings(viewer: "napari.viewer.Viewer"):
@@ -988,23 +1474,185 @@ def _validation_window_for_missing_layer(layer_choice):
     return _generate_message(message_type="error", message=msg)
 
 
-def _validate_layers(viewer: "napari.viewer.Viewer", automatic_segmentation: bool = False) -> bool:
+def _validate_layers(
+    viewer: "napari.viewer.Viewer", automatic_segmentation: bool = False
+) -> bool:
     # Check whether all layers exist as expected or create new ones automatically.
     state = AnnotatorState()
     state.annotator._require_layers()
 
     if not automatic_segmentation:
         # Check prompts layer.
-        if len(viewer.layers["prompts"].data) == 0 and len(viewer.layers["point_prompts"].data) == 0:
+        if (
+            len(viewer.layers["prompts"].data) == 0
+            and len(viewer.layers["point_prompts"].data) == 0
+        ):
             msg = "No prompts were given. Please provide prompts to run interactive segmentation."
             return _generate_message("error", msg)
         else:
             return False
 
 
-@magic_factory(call_button="Segment Object [S]")
-def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
-    """Segment object(s) for the current prompts.
+def _embeddings_are_tiled(state):
+    """Whether the current embeddings are tiled (tiled embeddings have a top-level 'input_size' of None)."""
+    return state.image_embeddings is not None and state.image_embeddings.get("input_size") is None
+
+
+def _batched_disabled_when_tiled(state, batched):
+    """Batched (multi-object) prompting is not supported with tiling: each tile is segmented
+    independently, so object ids would collide across tiles. Force single-object and warn."""
+    if batched and _embeddings_are_tiled(state):
+        show_info(
+            "Batched (multi-object) prompting is not supported with tiling. "
+            "It runs single-object segmentation instead."
+        )
+        return False
+    return batched
+
+
+def _bound_z_range_by_stops(prompted_slices, stop_slices, n_slices, z_range=None):
+    """Bound the propagation range by the stop annotations (a lone negative point) of a volume.
+
+    A stop below all prompted slices ends the object below, a stop above all prompted slices ends it
+    above. The stop slice itself stays empty. A stop between prompted slices is ignored.
+
+    Args:
+        prompted_slices: The slices carrying a segmentation prompt.
+        stop_slices: The slices carrying a stop annotation.
+        n_slices: The number of slices in the volume.
+        z_range: The inclusive (z_min, z_max) range selected by the user, or None for the full volume.
+
+    Returns:
+        The inclusive (z_min, z_max) propagation range, or None for the full volume.
+        The stop slices that were ignored.
+    """
+    if not stop_slices or not prompted_slices:
+        return z_range, []
+
+    z_first, z_last = min(prompted_slices), max(prompted_slices)
+    lower = [z for z in stop_slices if z < z_first]
+    upper = [z for z in stop_slices if z > z_last]
+    ignored = sorted(z for z in stop_slices if z_first <= z <= z_last)
+    if not lower and not upper:
+        return z_range, ignored
+
+    z_min, z_max = (0, n_slices - 1) if z_range is None else z_range
+    if lower:
+        z_min = max(z_min, max(lower) + 1)
+    if upper:
+        z_max = min(z_max, min(upper) - 1)
+    return (z_min, z_max), ignored
+
+
+def _plan_volume_prompts(merged_prompts, shape_prompts, is_batched):
+    """Plan every prompt push of a volume segmentation round, in the order they must be pushed.
+
+    Shapes come first: SAM2 requires a box before any point on the same object and frame, so pushing
+    the shapes ahead of the points lets a shape and its correction points combine regardless of the
+    order they were drawn in.
+
+    In batched mode each box, mask and positive point is an object of its own, drawing ids from one
+    shared counter, and a slice's negative points correct every object on that slice. In standard mode
+    every prompt feeds the single object the segmenter defaults to.
+
+    Args:
+        merged_prompts: Per-slice '(points, labels)', including the points a scribble expands into.
+        shape_prompts: Per-slice '(boxes, masks)', with the rectangles separated from the filled shapes.
+        is_batched: Whether each positive prompt defines an object of its own.
+
+    Returns:
+        The pushes as '(kind, frame_id, object_ids, payload)' tuples. The payload is '(points, labels)'
+        for a point push and the list of shapes otherwise; 'object_ids' is None in standard mode.
+    """
+    plan = []
+    object_id = 0
+
+    def negatives_on(frame_id):
+        # Only batched objects need the negatives shared explicitly; in standard mode they already
+        # reach the one object through the point pushes below.
+        if not is_batched:
+            return np.zeros((0, 2))
+        points, labels = merged_prompts.get(frame_id, (np.zeros((0, 2)), np.zeros(0, dtype=int)))
+        return points[labels != 1]
+
+    for frame_id, (boxes, masks) in shape_prompts.items():
+        negatives = negatives_on(frame_id)
+        negative_labels = np.zeros(len(negatives), dtype=int)
+        for kind, shapes in (("box", boxes), ("mask", masks)):
+            if not shapes:
+                continue
+            ids = list(range(object_id + 1, object_id + 1 + len(shapes))) if is_batched else None
+            object_id += len(shapes)
+            plan.append((kind, frame_id, ids, shapes))
+            if ids is not None and len(negatives):
+                for obj_id in ids:
+                    plan.append(("point", frame_id, [obj_id] * len(negatives), (negatives, negative_labels)))
+
+    for frame_id, (points, labels) in merged_prompts.items():
+        if not is_batched:
+            plan.append(("point", frame_id, None, (points, labels)))
+            continue
+        negatives = points[labels != 1]
+        negative_labels = np.zeros(len(negatives), dtype=int)
+        for positive in points[labels == 1]:
+            object_id += 1
+            if len(negatives):
+                pts = np.concatenate([positive[None], negatives])
+                lbs = np.concatenate([[1], negative_labels])
+            else:
+                pts, lbs = positive[None], np.array([1])
+            plan.append(("point", frame_id, [object_id] * len(pts), (pts, lbs)))
+
+    return plan
+
+
+def _volume_prompt_signatures(plan):
+    """Hashable descriptors of every planned push, used to detect prompts changed since the last run.
+
+    The object id is part of the signature. 'sync_prompt_state' keeps the persistent SAM2 state when
+    the new prompt set is a superset of the previous one, and the routing is what makes that safe:
+    adding a box renumbers the objects of every prompt behind it, so without the id an unchanged point
+    would be replayed into a different object and corrupt the state it is deduplicated against.
+    """
+    signatures = set()
+    for kind, frame_id, object_ids, payload in plan:
+        if kind == "point":
+            points, labels = payload
+            ids = [1] * len(points) if object_ids is None else object_ids
+            for (y, x), label, obj_id in zip(points, labels, ids):
+                signatures.add(("point", obj_id, frame_id, round(float(y)), round(float(x)), int(label)))
+            continue
+        ids = [1] * len(payload) if object_ids is None else object_ids
+        for shape, obj_id in zip(payload, ids):
+            if kind == "box":
+                signatures.add(
+                    ("box", obj_id, frame_id) + tuple(np.round(np.asarray(shape)).astype(int).tolist())
+                )
+            else:
+                digest = hashlib.sha1(np.ascontiguousarray(shape).tobytes()).hexdigest()
+                signatures.add(("mask", obj_id, frame_id, digest))
+    return signatures
+
+
+def _push_volume_prompts(segmenter, plan):
+    """Push a planned prompt round; the segmenter skips the prompts already in its persistent state."""
+    for kind, frame_id, object_ids, payload in plan:
+        if kind == "point":
+            points, labels = payload
+            segmenter.add_point_prompts(
+                frame_ids=frame_id, points=points, point_labels=labels, object_id=object_ids,
+            )
+        elif kind == "box":
+            segmenter.add_box_prompts(frame_ids=frame_id, boxes=payload, object_id=object_ids)
+        else:
+            segmenter.add_mask_prompts(frame_ids=frame_id, masks=payload, object_id=object_ids)
+
+
+def _segment_object_2d(viewer, batched=False):
+    """Segment object(s) in 2d for the current prompts.
+
+    This is the shared implementation used by the `segment` widget and the
+    `InteractiveSegmentationWidget`.
 
     Args:
         viewer: The napari viewer.
@@ -1017,109 +1665,70 @@ def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
 
     shape = viewer.layers["current_object"].data.shape
 
-    # get the current box and point prompts
-    boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape)
-    points, labels = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], with_stop_annotation=False)
-
-    predictor = AnnotatorState().predictor
-    image_embeddings = AnnotatorState().image_embeddings
-    seg = vutil.prompt_segmentation(
-        predictor, points, labels, boxes, masks, shape, image_embeddings=image_embeddings,
-        multiple_box_prompts=True, batched=batched, previous_segmentation=viewer.layers["current_object"].data,
+    # Get the current box, point and open-stroke prompts. Scribbles are encoded through SAM's
+    # existing sparse point prompt embeddings, so the predictor interface remains unchanged.
+    # 2d has no stop annotation, so a lone negative point stays a normal prompt.
+    prompts = vutil.collect_frame_prompts(
+        viewer.layers["point_prompts"], viewer.layers["prompts"], shape, with_stop_annotation=False,
     )
+    points, labels, boxes, masks = prompts.points, prompts.labels, prompts.boxes, prompts.masks
+
+    have_scribbles = prompts.have_scribbles
+    if have_scribbles and not len(boxes) and not np.any(labels == 1):
+        msg = "A negative scribble needs a positive point, positive scribble, box or mask prompt."
+        return _generate_message("error", msg)
+
+    state = AnnotatorState()
+    predictor = state.predictor
+    image_embeddings = state.image_embeddings
+    batched = _batched_disabled_when_tiled(state, batched)
+    if have_scribbles and batched:
+        show_info(
+            "Batched segmentation is not supported with scribble prompts. "
+            "It runs single-object segmentation instead."
+        )
+        batched = False
+
+    # When the embeddings are tiled (top-level 'input_size' is None), route the prompts to the
+    # matching tile and stitch. Otherwise the predictor already holds the single image embedding.
+    if image_embeddings is not None and image_embeddings.get("input_size") is None:
+        from micro_sam.v2.prompt_based_segmentation import tiled_promptable_segmentation_2d
+        seg = tiled_promptable_segmentation_2d(
+            predictor=predictor, image_embeddings=image_embeddings,
+            points=points, labels=labels, boxes=boxes, masks=masks, batched=batched,
+            devices=state.inference_devices,
+        )
+    else:
+        from micro_sam.v2.prompt_based_segmentation import promptable_segmentation_2d
+        seg = promptable_segmentation_2d(
+            predictor=predictor,
+            points=points,
+            labels=labels,
+            boxes=boxes,
+            masks=masks,
+            batched=batched,
+        )
 
     # no prompts were given or prompts were invalid, skip segmentation
     if seg is None:
-        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
+        print(
+            "You either haven't provided any prompts or invalid prompts. The segmentation will be skipped."
+        )
         return
 
     viewer.layers["current_object"].data = seg
     viewer.layers["current_object"].refresh()
 
 
-@magic_factory(call_button="Segment Slice [S]")
-def segment_slice(viewer: "napari.viewer.Viewer") -> None:
-    """Segment object for to the current prompts.
+@magic_factory(call_button="Segment Object [S]")
+def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
+    """Segment object(s) for the current prompts.
 
     Args:
         viewer: The napari viewer.
+        batched: Choose if you want to segment multiple objects with point prompts.
     """
-    if _validate_embeddings(viewer):
-        return None
-    if _validate_layers(viewer):
-        return None
-
-    shape = viewer.layers["current_object"].data.shape[1:]
-
-    position_world = viewer.dims.point
-    position = viewer.layers["point_prompts"].world_to_data(position_world)
-    z = int(position[0])
-
-    point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], z)
-    # this is a stop prompt, we do nothing
-    if not point_prompts:
-        return
-
-    boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape, i=z)
-    points, labels = point_prompts
-
-    state = AnnotatorState()
-    seg = vutil.prompt_segmentation(
-        state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=state.image_embeddings, i=z,
-    )
-
-    # no prompts were given or prompts were invalid, skip segmentation
-    if seg is None:
-        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
-        return
-
-    viewer.layers["current_object"].data[z] = seg
-    viewer.layers["current_object"].refresh()
-
-
-@magic_factory(call_button="Segment Frame [S]")
-def segment_frame(viewer: "napari.viewer.Viewer") -> None:
-    """Segment object for the current prompts.
-
-    Args:
-        viewer: The napari viewer.
-    """
-    if _validate_embeddings(viewer):
-        return None
-    if _validate_layers(viewer):
-        return None
-
-    state = AnnotatorState()
-    shape = state.image_shape[1:]
-    position = viewer.dims.point
-    t = int(position[0])
-
-    point_prompts = vutil.point_layer_to_prompts(viewer.layers["point_prompts"], i=t, track_id=state.current_track_id)
-    # this is a stop prompt, we do nothing
-    if not point_prompts:
-        return
-
-    boxes, masks = vutil.shape_layer_to_prompts(viewer.layers["prompts"], shape, i=t, track_id=state.current_track_id)
-    points, labels = point_prompts
-
-    seg = vutil.prompt_segmentation(
-        state.predictor, points, labels, boxes, masks, shape, multiple_box_prompts=False,
-        image_embeddings=state.image_embeddings, i=t
-    )
-
-    # no prompts were given or prompts were invalid, skip segmentation
-    if seg is None:
-        print("You either haven't provided any prompts or invalid prompts. The segmentation will be skipped.")
-        return
-
-    # clear the old segmentation for this track_id
-    old_mask = viewer.layers["current_object"].data[t] == state.current_track_id
-    viewer.layers["current_object"].data[t][old_mask] = 0
-    # set the new segmentation
-    new_mask = seg.squeeze() == 1
-    viewer.layers["current_object"].data[t][new_mask] = state.current_track_id
-    viewer.layers["current_object"].refresh()
+    _segment_object_2d(viewer, batched=batched)
 
 
 #
@@ -1144,7 +1753,10 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
         if tile_shape[0] < 256:
             tile_shape = (256, tile_shape[1])  # Create a new tuple
         if tile_shape[1] < 256:
-            tile_shape = (tile_shape[0], 256)  # Create a new tuple with modified value
+            tile_shape = (
+                tile_shape[0],
+                256,
+            )  # Create a new tuple with modified value
     if all(item in (0, None) for item in halo):
         if tile_shape is not None:
             halo = (0, 0)
@@ -1162,66 +1774,87 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
-    def __init__(self, parent=None):
+    # Whether to show the CPU info popup for expensive (many-tile / 3D) computations.
+    warn_on_cpu = True
+
+    # A tiled 2D image only gets slow on the CPU once it has many tiles. Warn from this many on.
+    cpu_warn_tiles = 64
+
+    # Whether to offer the 'cache automatic segmentation state' option (segmentation / tracking only,
+    # not the classification tools which have no automatic segmentation).
+    supports_state_caching = True
+
+    def __init__(self, parent=None, ndim_choice=False, is_timeseries=False):
         super().__init__(parent=parent)
+        # Whether to expose the 'image dimensions' (ndim) override dropdown. Only the segmentation
+        # annotator wires it into image normalization, so it is off by default (hidden for tracking
+        # and the classifiers, which do not use it).
+        self.ndim_choice = ndim_choice
+        # The tracking annotator operates on a (T, H, W) timeseries, not a 3D volume. Relabel the
+        # embedding progress accordingly (the underlying compute path is the same as for 3D).
+        self.is_timeseries = is_timeseries
 
         # Create a nested layout for the sections.
         # Section 1: Image and Model.
         section1_layout = QtWidgets.QHBoxLayout()
         section1_layout.addLayout(self._create_image_section())
-        section1_layout.addLayout(self._create_model_section())  # Creates the model family widget section.
+        # Default to the single-source 'DEFAULT_MODEL' (the 'Microscopy' / 'hvit_t_cells' model);
+        # '_create_model_section' derives the synthetic selector string from it when no value is given.
+        section1_layout.addLayout(
+            self._create_model_section()
+        )  # Creates the model family widget section.
         self.layout().addLayout(section1_layout)
 
         # Section 2: Settings (collapsible).
         self.layout().addWidget(self._create_settings_widget())
 
+        # Enable sensible default tiling when a large image is selected.
+        self.image_selection.changed.connect(self._set_default_tiling)
+        self._set_default_tiling()
+
         # Section 3: The button to trigger the embedding computation.
         self.run_button = QtWidgets.QPushButton("Compute Embeddings")
-        self.run_button.clicked.connect(self._initialize_image)
         self.run_button.clicked.connect(self.__call__)
         self.run_button.setToolTip(get_tooltip("embedding", "run_button"))
         self.layout().addWidget(self.run_button)
 
-    def _initialize_image(self):
-        state = AnnotatorState()
-        layer = self.image_selection.get_value()
-
-        # This is encountered when there is no image layer available / selected.
-        # In this case, we need not specify other image-level parameters to the state. Hence, we skip them.
-        # NOTE: On code-level, this happens as the first step when "Compute Embedding" click is triggered.
-        if layer is None:
-            return
-
-        image_shape = layer.data.shape
-        image_scale = tuple(layer.scale)
-        state.image_shape = image_shape
-        state.image_scale = image_scale
-        state.image_name = layer.name
-
     def _create_image_section(self):
         image_section = QtWidgets.QVBoxLayout()
-        image_layer_widget = QtWidgets.QLabel("Image Layer:")
-        # image_layer_widget.setToolTip(get_tooltip("embedding", "image")) #  this adds tooltip to label
-        image_section.addWidget(image_layer_widget)
+        layer_label = "Timeseries Layer:" if self.is_timeseries else "Image Layer:"
+        self.image_layer_label = QtWidgets.QLabel(layer_label)
+        # self.image_layer_label.setToolTip(get_tooltip("embedding", "image")) #  this adds tooltip to label
+        image_section.addWidget(self.image_layer_label)
 
         # Setting a napari layer in QT, see:
         # https://github.com/pyapp-kit/magicgui/blob/main/docs/examples/napari/napari_combine_qt.py
         self.image_selection = create_widget(annotation=napari.layers.Image)
-        self.image_selection.native.setToolTip(get_tooltip("embedding", "image"))
+        self.image_selection.native.setToolTip(
+            get_tooltip("embedding", "image")
+        )
         image_section.addWidget(self.image_selection.native)
 
         return image_section
 
     def _update_model(self, state):
-        _model_type = state.predictor.model_type if self.custom_weights else self.model_type
+        _model_type = (
+            state.predictor.model_type
+            if self.custom_weights
+            else self.model_type
+        )
 
         # Provide a detailed message for the model family and model size per chosen combination.
         msg = "Computed embeddings for "
-        if self.custom_weights:  # Whether the user provided a filepath to custom finetuned model weights.
+        if (
+            self.custom_weights
+        ):  # Whether the user provided a filepath to custom finetuned model weights.
             msg += f"the model located at '{os.path.abspath(self.custom_weights)}' "
-            msg += f"of size '{self._model_size_map[_model_type[4]]}'."
+            # The size letter follows the backbone prefix: 'hvit_b...' for SAM2, 'vit_b...' for SAM1.
+            size_key = _model_type[len("hvit_") if _model_type.startswith("hvit_") else len("vit_"):][:1]
+            msg += f"of size '{self._model_size_map.get(size_key, self.model_size)}'."
         else:
-            msg += f"the '{self.model_family}' model of size '{self.model_size}'."
+            msg += (
+                f"the '{self.model_family}' model of size '{self.model_size}'."
+            )
 
         show_info(msg)
 
@@ -1234,8 +1867,10 @@ class EmbeddingWidget(_WidgetBase):
             save_path=self.embeddings_save_path,
             checkpoint_path=self.custom_weights,
             device=self.device,
-            tile_shape=[self.tile_x, self.tile_y],
-            halo=[self.halo_x, self.halo_y]
+            # Only forward tiling params when tiling is actually enabled. Otherwise '_sync_embedding_widget'
+            # would force the tiling dropdown to "yes" using the (always-nonzero) default tile values.
+            tile_shape=[self.tile_x, self.tile_y] if self.tiling == "yes" else None,
+            halo=[self.halo_x, self.halo_y] if self.tiling == "yes" else None,
         )
 
         # Set the default settings for this model in the autosegment widget if it is part of
@@ -1243,80 +1878,385 @@ class EmbeddingWidget(_WidgetBase):
         if "autosegment" in state.widgets:
             with_decoder = state.decoder is not None
             vutil._sync_autosegment_widget(
-                state.widgets["autosegment"], _model_type, self.custom_weights, update_decoder=with_decoder
+                state.widgets["autosegment"],
+                _model_type,
+                self.custom_weights,
+                update_decoder=with_decoder,
             )
-            # Load the AMG/AIS state if we have a 3d segmentation plugin.
-            if state.widgets["autosegment"].volumetric and with_decoder:
-                state.amg_state = vutil._load_is_state(state.embedding_path)
-            elif state.widgets["autosegment"].volumetric and not with_decoder:
-                state.amg_state = vutil._load_amg_state(state.embedding_path)
+            # Record the location of the cached decoder predictions. The widget reads and writes the cache.
+            if with_decoder:
+                state.autoseg_state = vutil._autoseg_state_descriptor(state.embedding_path, "ais")
+            else:
+                state.autoseg_state = None
 
-        # Set the default settings for this model in the nd-segmentation widget if it is part of
-        # the currently used plugin.
-        if "segment_nd" in state.widgets:
-            vutil._sync_ndsegment_widget(state.widgets["segment_nd"], _model_type, self.custom_weights)
+        # Now that the (possibly tiled) embeddings are known, refresh the 'Batched' control on the
+        # segment/track widgets: batched prompting is unsupported with tiling, so it is hidden then.
+        for widget in state.widgets.values():
+            update_batched = getattr(widget, "_update_batched_visibility", None)
+            if callable(update_batched):
+                update_batched()
 
     def _create_settings_widget(self):
         setting_values = QtWidgets.QWidget()
         setting_values.setToolTip(get_tooltip("embedding", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
+        # The dropdown rows of this panel, collected so that they get a uniform layout at the end.
+        choice_rows = []
+
+        # Optional image dimensionality override. 'auto' detects 2d or 3d (including channels) from the
+        # selected image. '2d' and '3d' force the interpretation, e.g. to read a channels-first
+        # (C, H, W) array as a 2d multi-channel image.
+        if self.ndim_choice:
+            self.image_ndim_mode = "auto"
+            self.image_ndim_dropdown, ndim_layout = self._add_choice_param(
+                "image_ndim_mode", self.image_ndim_mode, ["auto", "2d", "3d"], title="image dimensions:",
+                tooltip=get_tooltip("embedding", "image_ndim"),
+            )
+            # Forcing '2d' on a volume removes the slices the batch would span.
+            self.image_ndim_dropdown.currentIndexChanged.connect(self._refresh_batch_size)
+            setting_values.layout().addLayout(ndim_layout)
+            choice_rows.append(ndim_layout)
+
+        # Create UI for tiling. A dropdown toggles whether the tool uses tiling. When you enable it,
+        # the tile shape and halo fields appear with sensible defaults.
+        self.tiling = "no"
+        self.tiling_dropdown, tiling_layout = self._add_choice_param(
+            "tiling",
+            self.tiling,
+            ["no", "yes"],
+            title="tiling:",
+            update=self._update_tiling_visibility,
+            tooltip=get_tooltip("embedding", "tiling"),
+        )
+        setting_values.layout().addLayout(tiling_layout)
+        choice_rows.append(tiling_layout)
+
+        # Container holding the tile shape and halo fields (hidden unless tiling is 'yes').
+        self._tiling_widget = QtWidgets.QWidget()
+        self._tiling_widget.setLayout(QtWidgets.QVBoxLayout())
+        self._tiling_widget.layout().setContentsMargins(0, 0, 0, 0)
+
+        # In-plane (xy) tile shape and halo, used when tiling is enabled. The defaults come from the
+        # central v2 tiling values. The z block / halo are not set here: they only affect 3d automatic
+        # segmentation (not the embeddings, which are tiled in-plane only), so they live in the
+        # automatic segmentation settings instead.
+        from micro_sam.v2.util import DEFAULT_TILE_SHAPE, DEFAULT_HALO
+        self.tile_x, self.tile_y = DEFAULT_TILE_SHAPE
+        self.tile_x_param, self.tile_y_param, tile_layout = self._add_shape_param(
+            ("tile_x", "tile_y"),
+            (self.tile_x, self.tile_y),
+            min_val=0,
+            max_val=2048,
+            step=16,
+            tooltip=get_tooltip("embedding", "tiling"),
+        )
+        self._tiling_widget.layout().addLayout(tile_layout)
+
+        self.halo_x, self.halo_y = DEFAULT_HALO
+        self.halo_x_param, self.halo_y_param, halo_layout = self._add_shape_param(
+            ("halo_x", "halo_y"),
+            (self.halo_x, self.halo_y),
+            min_val=0,
+            max_val=512,
+            title=("overlap_x", "overlap_y"),
+            tooltip=get_tooltip("embedding", "halo"),
+        )
+        self._tiling_widget.layout().addLayout(halo_layout)
+
+        self._tiling_widget.setVisible(False)
+        setting_values.layout().addWidget(self._tiling_widget)
+
         # Add the model size widget section.
-        layout = self._create_model_size_section()
-        setting_values.layout().addLayout(layout)
+        model_size_layout = self._create_model_size_section()
+        setting_values.layout().addLayout(model_size_layout)
+        choice_rows.append(model_size_layout)
 
         # Create UI for the device.
         self.device = "auto"
         device_options = ["auto"] + util._available_devices()
 
-        self.device_dropdown, layout = self._add_choice_param(
-            "device", self.device, device_options, tooltip=get_tooltip("embedding", "device")
+        self.device_dropdown, device_layout = self._add_choice_param(
+            "device",
+            self.device,
+            device_options,
+            tooltip=get_tooltip("embedding", "device"),
         )
-        setting_values.layout().addLayout(layout)
+        setting_values.layout().addLayout(device_layout)
+        choice_rows.append(device_layout)
+
+        # The batch size follows the model and the device until the user edits it, after which their
+        # value is kept. Until then it only previews what the backend will pick per device, see
+        # '_effective_batch_size'. Batching only helps on a GPU, so the control is hidden whenever the
+        # effective device is the CPU. Both visibility and value track the device dropdown, so they
+        # also update when the user switches devices or when 'auto' resolves to the CPU.
+        self.batch_size = 1
+        self._batch_size_is_auto = True
+        self.batch_size_param, batch_size_layout = self._add_int_param(
+            "batch_size", self.batch_size, min_val=1, max_val=64,
+            title="batch size",
+            tooltip=get_tooltip("embedding", "batch_size"),
+        )
+        self.batch_size_param.valueChanged.connect(self._on_batch_size_edited)
+        self._batch_size_widget = QtWidgets.QWidget()
+        self._batch_size_widget.setLayout(batch_size_layout)
+        setting_values.layout().addWidget(self._batch_size_widget)
+        self.device_dropdown.currentIndexChanged.connect(self._refresh_batch_size)
+        self._refresh_batch_size()
 
         # Create UI for the save path.
         self.embeddings_save_path = None
-        self.embeddings_save_path_param, layout = self._add_path_param(
-            "embeddings_save_path", self.embeddings_save_path, "directory", title="embeddings save path:",
-            tooltip=get_tooltip("embedding", "embeddings_save_path")
+        self.embeddings_save_path_param, save_layout = self._add_path_param(
+            "embeddings_save_path",
+            self.embeddings_save_path,
+            "directory",
+            title="embeddings save path:",
+            tooltip=get_tooltip("embedding", "embeddings_save_path"),
         )
-        setting_values.layout().addLayout(layout)
+        setting_values.layout().addLayout(save_layout)
 
         # Create UI for the custom weights.
         self.custom_weights = None
-        self.custom_weights_param, layout = self._add_path_param(
-            "custom_weights", self.custom_weights, "file", title="custom weights path:",
-            tooltip=get_tooltip("embedding", "custom_weights")
+        self.custom_weights_param, weights_layout = self._add_path_param(
+            "custom_weights",
+            self.custom_weights,
+            "file",
+            title="custom weights path:",
+            tooltip=get_tooltip("embedding", "custom_weights"),
         )
-        setting_values.layout().addLayout(layout)
+        setting_values.layout().addLayout(weights_layout)
 
-        # Create UI for the tile shape.
-        self.tile_x, self.tile_y = 0, 0
-        self.tile_x_param, self.tile_y_param, layout = self._add_shape_param(
-            ("tile_x", "tile_y"), (self.tile_x, self.tile_y), min_val=0, max_val=2048, step=16,
-            tooltip=get_tooltip("embedding", "tiling")
+        # Make the two path rows symmetric: equal label widths, so their text boxes match too.
+        self._align_widths([save_layout.itemAt(0).widget(), weights_layout.itemAt(0).widget()])
+        # Move the horizontal space trimmed from the text boxes into the browse buttons (rather than
+        # leaving a gap): widen them uniformly by that amount ('Select Directory' is wider than
+        # 'Select File', which would otherwise offset the rows).
+        path_button_extra = 20
+        save_button = save_layout.itemAt(save_layout.count() - 1).widget()
+        weights_button = weights_layout.itemAt(weights_layout.count() - 1).widget()
+        button_width = max(save_button.sizeHint().width(), weights_button.sizeHint().width()) + path_button_extra
+        for button in (save_button, weights_button):
+            button.setFixedWidth(button_width)
+
+        # Give the dropdowns a slightly larger share of their row than the labels, so that they extend
+        # a bit further to the left (their right edge stays at the panel margin).
+        for row in choice_rows:
+            row.setStretch(0, 4)
+            row.setStretch(1, 5)
+
+        # Opt-in disk caching of the automatic-segmentation state (off by default). When on, the state
+        # is precomputed to disk (next to the embeddings) while the embeddings are computed and reused
+        # across runs / sessions. The automatic segmentation widget reads this flag from here. Not
+        # offered by the classification tools (no automatic segmentation).
+        self.cache_state = False
+        if self.supports_state_caching:
+            self.cache_state_checkbox = self._add_boolean_param(
+                "cache_state", self.cache_state, title="cache automatic segmentation state",
+                tooltip=get_tooltip("embedding", "cache_state"),
+            )
+            setting_values.layout().addWidget(self.cache_state_checkbox)
+
+        # Hook for subclasses to add extra model controls at the end of the settings (no-op by default).
+        self._add_extra_model_settings(setting_values.layout())
+
+        settings = _make_collapsible(
+            setting_values, title="Embedding Settings", tooltip=get_tooltip("embedding", "settings"),
         )
-        setting_values.layout().addLayout(layout)
-
-        # Create UI for the halo.
-        self.halo_x, self.halo_y = 0, 0
-        self.halo_x_param, self.halo_y_param, layout = self._add_shape_param(
-            ("halo_x", "halo_y"), (self.halo_x, self.halo_y), min_val=0, max_val=512,
-            tooltip=get_tooltip("embedding", "halo")
-        )
-        setting_values.layout().addLayout(layout)
-
-        # Create UI for the choice of automatic segmentation mode.
-        self.automatic_segmentation_mode = "auto"
-        auto_seg_options = ["auto", "amg", "ais"]
-        self.automatic_segmentation_mode_dropdown, layout = self._add_choice_param(
-            "automatic_segmentation_mode", self.automatic_segmentation_mode, auto_seg_options,
-            title="automatic segmentation mode", tooltip=get_tooltip("embedding", "automatic_segmentation_mode")
-        )
-        setting_values.layout().addLayout(layout)
-
-        settings = _make_collapsible(setting_values, title="Embedding Settings")
         return settings
+
+    def _add_extra_model_settings(self, layout):
+        """Hook to add extra model controls to the embedding settings. It does nothing by default.
+        The classification embedding widget uses it to add the optional advanced-model selector."""
+        pass
+
+    def _apply_loaded_model_selection(self, model_name):
+        """Reflect a loaded model in the model family and size dropdowns. It does nothing by default:
+        the post-compute '_sync_embedding_widget' already syncs the SAM2-only widget, whose family
+        names match. Subclasses with custom family handling (classification) override this."""
+        pass
+
+    def _selected_image_shape(self):
+        # Spatial shape of the currently selected image layer (any channel axis removed), or None if
+        # no image is selected.
+        image = self.image_selection.get_value()
+        if image is None:
+            return None
+        return image.data.shape[:-1] if image.rgb else image.data.shape
+
+    def _selected_image_ndim(self):
+        # Spatial dimensionality of the currently selected image layer (2 or 3), or None if no image.
+        shape = self._selected_image_shape()
+        return None if shape is None else len(shape)
+
+    def _ndim_override(self):
+        # The user-selected image dimensionality override: None for 'auto', else 2 or 3. Read the
+        # dropdown directly so the value is correct regardless of signal ordering.
+        dropdown = getattr(self, "image_ndim_dropdown", None)
+        mode = dropdown.currentText() if dropdown is not None else "auto"
+        return {"auto": None, "2d": 2, "3d": 3}.get(mode)
+
+    def _update_tiling_visibility(self, index=None):
+        # Show the in-plane tile shape and halo fields only when tiling is enabled.
+        self.tiling = self.tiling_dropdown.currentText()
+        self._tiling_widget.setVisible(self.tiling == "yes")
+        # Tiling decides whether a 2d image has anything to batch over. This also runs on image
+        # selection, via '_set_default_tiling'.
+        if getattr(self, "_batch_size_widget", None) is not None:
+            self._refresh_batch_size()
+
+    def _batch_size_has_effect(self):
+        # Batching does not help on the CPU (so 'auto' resolving to the CPU counts as no effect), and
+        # the VFM encoders offered by the classifiers compute their embeddings unbatched.
+        from micro_sam.models.vfm import is_vfm_model
+
+        device = self.device
+        if device == "auto":
+            device = util._get_default_device()
+        if util.device_type(device) == "cpu" or is_vfm_model(getattr(self, "model_type", None)):
+            return False
+
+        # A 2d image without tiling is a single encoder call, so there is nothing to batch. Tiles and
+        # z slices are what the batch spans. An unknown dimensionality (no image yet) keeps the field.
+        ndim = self._ndim_override() or self._selected_image_ndim()
+        return not (ndim == 2 and self.tiling != "yes")
+
+    def _batch_size_is_tabulated(self):
+        # Whether the VRAM table covers the selected model. It is calibrated for the SAM2 encoders;
+        # SAM1 and the VFM encoders keep a batch of one.
+        from micro_sam.v2.util import SUPPORTED_MODELS
+
+        model_type = getattr(self, "model_type", None)
+        return bool(model_type) and str(model_type)[:6] in SUPPORTED_MODELS
+
+    def _effective_batch_size(self):
+        """The batch size handed to the backend, or None for it to choose one per device.
+
+        The displayed value is only a preview (see `_recommended_batch_size`), so while the user has
+        not edited it the SAM2 backend picks its own value per device, once the weights are placed
+        there. A value the user typed, or one where batching has no effect, is forwarded verbatim.
+        """
+        if not self._batch_size_has_effect():
+            return 1
+        if self._batch_size_is_auto and self._batch_size_is_tabulated():
+            return None
+        return self.batch_size
+
+    def _encoder_job_count(self):
+        # The number of encoder calls the selected image needs (tiles, z slices, or both), or None
+        # while no image is selected. Mirrors how the backend splits the input, so the preview is
+        # never larger than the work.
+        from bioimage_cpp.utils import Blocking
+
+        shape = self._selected_image_shape()
+        if shape is None:
+            return None
+
+        ndim = self._ndim_override() or len(shape)
+        n_slices = shape[0] if ndim == 3 else 1
+        if self.tiling != "yes":
+            return n_slices
+
+        tile_shape, _ = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
+        if tile_shape is None:
+            return n_slices
+        in_plane = shape[1:3] if ndim == 3 else shape[:2]
+        return Blocking([0, 0], list(in_plane), list(tile_shape)).number_of_blocks * n_slices
+
+    def _recommended_batch_size(self):
+        """The batch size the VRAM table suggests here, or one if the model is not tabulated.
+
+        This previews what the backend will pick rather than deciding it: it is read before the model
+        is loaded, and for 'auto' from the default device only, whereas the backend reads every device
+        it runs on after placing the weights there. It is capped by the total work; the backend also
+        caps it by the share of that work each device receives.
+        """
+        from micro_sam.v2.util import recommend_batch_size
+
+        if not self._batch_size_is_tabulated():
+            return 1
+
+        device = self.device
+        if device == "auto":
+            device = util._get_default_device()
+        return recommend_batch_size(self.model_type, device, n_jobs=self._encoder_job_count())
+
+    def _on_batch_size_edited(self, value):
+        # A value the user typed is theirs to keep, so stop tracking the model and device.
+        self._batch_size_is_auto = False
+
+    def _refresh_batch_size(self, index=None):
+        # Show the field only where it has an effect, and keep its value in step with the model and
+        # the device unless the user has set it themselves.
+        self._batch_size_widget.setVisible(self._batch_size_has_effect())
+        if not self._batch_size_is_auto:
+            return
+
+        recommended = self._recommended_batch_size()
+        self.batch_size_param.blockSignals(True)
+        self.batch_size_param.setValue(recommended)
+        self.batch_size_param.blockSignals(False)
+        self.batch_size = recommended
+
+    def _apply_default_tiling_for_shape(self, shape):
+        # Enable tiling by default for large in-plane images, using the central v2 tiling defaults.
+        # 'shape' is the spatial image shape (channel axis already removed). Shared by the layer-based
+        # auto-tiling and the batch launcher (which judges from the first file in the folder).
+        from micro_sam.v2.util import needs_default_tiling, DEFAULT_TILE_SHAPE, DEFAULT_HALO
+
+        if shape is not None and needs_default_tiling(shape):
+            self.tile_x, self.tile_y = DEFAULT_TILE_SHAPE
+            self.halo_x, self.halo_y = DEFAULT_HALO
+            self.tile_x_param.setValue(self.tile_x)
+            self.tile_y_param.setValue(self.tile_y)
+            self.halo_x_param.setValue(self.halo_x)
+            self.halo_y_param.setValue(self.halo_y)
+            self.tiling_dropdown.setCurrentText("yes")
+
+        # Refresh which tiling fields are visible now that the image (and its dimensionality) changed.
+        self._update_tiling_visibility()
+
+    def _set_default_tiling(self, *args):
+        shape = self._selected_image_shape()
+        if shape is not None:
+            self._apply_default_tiling_for_shape(shape)
+
+    def _reset_inputs_to_defaults(self):
+        """Reset the user inputs to their fresh-open defaults.
+
+        Called when the selected image changes, so a new image starts exactly as a freshly opened
+        tool would: the default model family/size, no custom weights, default tiling parameters and
+        no embeddings save path. The auto-tiling rule for the new image is re-applied at the end via
+        '_set_default_tiling' (which also refreshes field visibility), matching a fresh open.
+        """
+        # Clear custom weights first, then restore the default model family + size. (Setting custom
+        # weights blanks the family dropdown, so clearing it before re-selecting keeps them in sync.)
+        self.custom_weights_param.setText("")
+        default_family = {v: k for k, v in self.supported_dropdown_maps.items()}[self._default_model_choice[5:]]
+        default_size = self._model_size_map[self._default_model_choice[4]]
+        self.model_family_dropdown.setCurrentText(default_family)
+        self.model_size_dropdown.setCurrentText(default_size)
+
+        # Reset the in-plane tiling parameters to their creation defaults and the save path. Then
+        # '_set_default_tiling' decides the on or off state (auto-enabled for large images, as on a fresh open).
+        from micro_sam.v2.util import DEFAULT_TILE_SHAPE, DEFAULT_HALO
+        self.tile_x_param.setValue(DEFAULT_TILE_SHAPE[0])
+        self.tile_y_param.setValue(DEFAULT_TILE_SHAPE[1])
+        self.halo_x_param.setValue(DEFAULT_HALO[0])
+        self.halo_y_param.setValue(DEFAULT_HALO[1])
+        self.tiling_dropdown.setCurrentText("no")
+        self._batch_size_is_auto = True
+        self._refresh_batch_size()
+        self.embeddings_save_path_param.setText("")
+
+        # Reset the image-dimensionality override back to 'auto' so a new image is re-detected.
+        # Block the signal so this does not re-trigger the annotator's normalization mid-reset.
+        if getattr(self, "ndim_choice", False):
+            self.image_ndim_dropdown.blockSignals(True)
+            self.image_ndim_dropdown.setCurrentText("auto")
+            self.image_ndim_mode = "auto"
+            self.image_ndim_dropdown.blockSignals(False)
+
+        self._set_default_tiling()
 
     def _validate_inputs(self):
         """Validates the inputs for the annotation process and returns a dictionary
@@ -1347,16 +2287,21 @@ class EmbeddingWidget(_WidgetBase):
         # Check if we have an existing embedding path.
         # If yes we check the data signature of these embeddings against the selected image
         # and we ask the user if they want to load these embeddings.
-        if self.embeddings_save_path and os.listdir(self.embeddings_save_path):
+        if (
+            self.embeddings_save_path and os.path.isdir(self.embeddings_save_path)
+            and os.listdir(self.embeddings_save_path)
+        ):
             try:
-                f = zarr.open(self.embeddings_save_path, mode="a")
+                f = util._open_embeddings(self.embeddings_save_path, mode="a")
 
                 # Validate that the embeddings are complete.
                 # Note: 'input_size' is the last value set in the attrs of f,
                 # so we can use it as a proxy to check if the embeddings are fully computed
                 if "input_size" not in f.attrs:
-                    msg = (f"The embeddings at {self.embeddings_save_path} are incomplete. "
-                           "Specify a different path or remove them.")
+                    msg = (
+                        f"The embeddings at {self.embeddings_save_path} are incomplete. "
+                        "Specify a different path or remove them."
+                    )
                     return _generate_message("error", msg)
 
                 # Validate image data signature.
@@ -1367,48 +2312,128 @@ class EmbeddingWidget(_WidgetBase):
                         msg = f"The embeddings don't match with the image: {img_signature} {f.attrs['data_signature']}"
                         return _generate_message("error", msg)
 
-                # Load existing parameters.
-                self.model_type = f.attrs.get("model_name", f.attrs["model_type"])
+                # The model the saved embeddings were computed with.
+                saved_model = f.attrs.get("model_name") or f.attrs.get("model_type")
+                if saved_model is None:
+                    return _generate_message(
+                        "error", f"The embeddings at '{self.embeddings_save_path}' do not record a model."
+                    )
+
+                # Ask the user whether to load the saved embeddings or recompute them. The message
+                # reflects what changed vs the saved embeddings: a model swap, custom weights (whose
+                # identity we cannot verify here, so always flag them), or an exact match.
+                if self.custom_weights:
+                    message = (
+                        f"Saved embeddings use '{saved_model}'; custom weights are now selected. "
+                        "Load the saved embeddings or recompute?"
+                    )
+                elif saved_model != self.model_type:
+                    message = (
+                        f"Saved embeddings use '{saved_model}', but '{self.model_type}' is selected. "
+                        "Load the saved embeddings or recompute?"
+                    )
+                else:
+                    message = f"Embeddings for '{saved_model}' already exist. Load or recompute?"
+                choice = _ask_load_or_recompute(message)
+
+                if choice == "cancel":
+                    return True
+
+                if choice == "recompute":
+                    # Recompute with the user's current selection: clear the saved file so the backend
+                    # recomputes from scratch (works for any model and even when the model is unchanged).
+                    # Tiling and model stay as the user set them in the widget.
+                    util._open_embeddings(self.embeddings_save_path, mode="w")
+                    return False
+
+                # 'load': adopt the saved model and tiling, then load the existing embeddings. Clear any
+                # custom weights so the predictor matches the loaded embeddings ('saved_model'), not a
+                # mismatched custom checkpoint.
+                self.custom_weights = None
+                self.custom_weights_param.setText("")
+                self.model_type = saved_model
+                if self._validate_model_support():
+                    return True
+                # Reflect the loaded model in the model family / size dropdowns.
+                self._apply_loaded_model_selection(saved_model)
                 if "tile_shape" in f.attrs and f.attrs["tile_shape"] is not None:
                     self.tile_x, self.tile_y = f.attrs["tile_shape"]
                     self.halo_x, self.halo_y = f.attrs["halo"]
-                    val_results = {
-                        "message_type": "info",
-                        "message": (f"Load embeddings for model: {self.model_type} with tile shape: "
-                                    f"{self.tile_x}, {self.tile_y} and halo: {self.halo_x}, {self.halo_y}.")
-                    }
+                    # Reflect the loaded tiling parameters in the UI.
+                    self.tile_x_param.setValue(self.tile_x)
+                    self.tile_y_param.setValue(self.tile_y)
+                    self.halo_x_param.setValue(self.halo_x)
+                    self.halo_y_param.setValue(self.halo_y)
+                    self.tiling_dropdown.setCurrentText("yes")
                 else:
-                    self.tile_x, self.tile_y = 0, 0
-                    self.halo_x, self.halo_y = 0, 0
-                    val_results = {
-                        "message_type": "info",
-                        "message": f"Load embeddings for model: {self.model_type}."
-                    }
-
-                return _generate_message(val_results["message_type"], val_results["message"])
+                    self.tiling_dropdown.setCurrentText("no")
+                return False
 
             except RuntimeError as e:
                 val_results = {
                     "message_type": "error",
-                    "message": f"Failed to load image embeddings: {e}"
+                    "message": f"Failed to load image embeddings: {e}",
                 }
-                return _generate_message(val_results["message_type"], val_results["message"])
+                return _generate_message(
+                    val_results["message_type"], val_results["message"]
+                )
 
         # Otherwise we either don't have an embedding path or it is empty. We can proceed in both cases.
         return False
 
     def _validate_existing_embeddings(self, state):
+        # When an embeddings save path is set, '_validate_inputs' already offered load-vs-recompute,
+        # so don't prompt again here. This only handles the in-memory case (no save path).
+        if self.embeddings_save_path:
+            return False
         if state.image_embeddings is None:
             return False
-        else:
-            val_results = {
-                "message_type": "info",
-                "message": "Embeddings have already been precomputed. Press OK to recompute the embeddings."
-            }
-            return _generate_message(val_results["message_type"], val_results["message"])
+        return _generate_message(
+            "info", "Embeddings have already been precomputed. Press OK to recompute the embeddings."
+        )
+
+    @staticmethod
+    def _clear_autosegment_cache(state):
+        """Discard predictions derived from the embeddings that were just replaced."""
+        widget = state.widgets.get("autosegment")
+        if widget is not None:
+            widget._release_segmenter()
+            widget._drop_decoder_state()
+
+    def _n_tiles(self, tile_shape, shape):
+        """The number of tiles the embedding computation is split into (1 without tiling)."""
+        if tile_shape is None:
+            return 1
+        from bioimage_cpp.utils import Blocking
+        return Blocking([0, 0], list(shape[:2]), list(tile_shape)).number_of_blocks
+
+    def _maybe_warn_cpu(self, ndim, tile_shape, shape):
+        """Show a one-time-per-session info popup for expensive CPU computations (many tiles or 3D)."""
+        state = AnnotatorState()
+        if state.cpu_info_shown or not self.warn_on_cpu:
+            return
+        # 3D runs the encoder per slice. 2D is a single pass per tile, which only adds up for many tiles.
+        if ndim < 3 and self._n_tiles(tile_shape, shape) < self.cpu_warn_tiles:
+            return
+        if str(util.get_device(self.device)) != "cpu":
+            return
+        state.cpu_info_shown = True
+        data_kind = "timeseries" if self.is_timeseries else "3D"  # A timeseries uses the 3D compute path.
+        QtWidgets.QMessageBox.information(
+            self, "Running on CPU",
+            f"micro_sam runs on the CPU, so computations can be slow for tiled or {data_kind} data. "
+            "Using a GPU is recommended.",
+            QtWidgets.QMessageBox.Ok,
+        )
 
     def __call__(self, skip_validate=False):
         self._validate_model_type_and_custom_weights()
+        if self._validate_model_support():
+            return
+
+        # For gated advanced (DINO / UNI) models, check the backend package + HuggingFace access.
+        if self._validate_vfm_requirements():
+            return
 
         # Validate user inputs.
         if not skip_validate and self._validate_inputs():
@@ -1429,46 +2454,96 @@ class EmbeddingWidget(_WidgetBase):
         state.reset_state()
 
         # Get image dimensions.
-        if image.rgb:
-            ndim = image.data.ndim - 1
-            state.image_shape = image.data.shape[:-1]
-        else:
-            ndim = image.data.ndim
-            state.image_shape = image.data.shape
+        state.image_shape = self._selected_image_shape()
+        ndim = len(state.image_shape)
+        state.ndim = ndim
 
-        # Set layer scale
+        # The image is set only now, after the validation, so a cancel keeps the state of the current image.
         state.image_scale = tuple(image.scale)
+        state.image_name = image.name
 
-        # Process tile_shape and halo, set other data.
-        tile_shape, halo = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
-        save_path = None if self.embeddings_save_path == "" else self.embeddings_save_path
+        # Process tile_shape and halo, set other data. Tiling is only applied when enabled.
+        if self.tiling == "yes":
+            tile_shape, halo = _process_tiling_inputs(
+                self.tile_x, self.tile_y, self.halo_x, self.halo_y
+            )
+            # Reflect the values actually used (after normalization) back in the UI so they are retained.
+            if tile_shape is not None:
+                self.tile_x, self.tile_y = tile_shape
+                self.tile_x_param.setValue(self.tile_x)
+                self.tile_y_param.setValue(self.tile_y)
+            if halo is not None:
+                self.halo_x, self.halo_y = halo
+                self.halo_x_param.setValue(self.halo_x)
+                self.halo_y_param.setValue(self.halo_y)
+        else:
+            tile_shape, halo = None, None
+        save_path = (
+            None
+            if self.embeddings_save_path == ""
+            else self.embeddings_save_path
+        )
         image_data = image.data
 
+        # Warn CPU users once per session that processing can be slow.
+        self._maybe_warn_cpu(ndim, tile_shape, state.image_shape)
+
+        # Eager caching of the automatic-segmentation state: if the 'cache automatic segmentation state'
+        # option (in these embedding settings) is on, precompute the state to disk while computing the
+        # embeddings. It persists wherever the embeddings live on disk - the given save path, or the
+        # ephemeral zarr the eager setup creates for SAM2 volumes / tiled images (removed on reset).
+        # Plain in-memory 2d has no disk location, so it needs a save path to persist.
+        is_sam2 = self.model_type.startswith("hvit")
+        embeddings_on_disk = save_path is not None or (is_sam2 and (ndim == 3 or tile_shape is not None))
+        precompute_autoseg_state = self.cache_state and embeddings_on_disk
+        if self.cache_state and not embeddings_on_disk:
+            show_info("Set an embeddings save path to cache the automatic segmentation state.")
+
         # Set up progress bar and signals for using it within a threadworker.
-        pbar, pbar_signals = _create_pbar_for_threadworker()
+        # Model and decoder preparation happens before the backend knows the tile / slice count, so
+        # start with an indeterminate status instead of leaving napari's activity display empty.
+        pbar, pbar_signals = _create_pbar_for_threadworker("Computing image embeddings")
 
         # @thread_worker()
         def compute_image_embedding():
 
+            # The computation runs synchronously on the main thread, so pump the Qt event loop on
+            # every progress step. Otherwise the napari progress bar only repaints once at the end
+            # (it just jumps to 100%). This matters most for tiled embeddings (many tiles or slices).
             def pbar_init(total, description):
+                if self.is_timeseries:  # A timeseries goes through the 3D compute path; relabel it.
+                    description = description.replace("3D", "Timeseries")
+                # Reset the counter to 0 so each phase starts fresh: the embeddings, then (when caching
+                # is on) the automatic-segmentation state precompute reuse the same bar, and without a
+                # reset the second phase inherits the first's completed count and sits stuck at full.
+                pbar_signals.pbar_reset.emit()
                 pbar_signals.pbar_total.emit(total)
                 pbar_signals.pbar_description.emit(description)
+                QtWidgets.QApplication.processEvents()
 
-            # Whether to prefer decoder.
-            # With 'amg', it is set to 'False', else it is 'True' for the default 'auto' and 'ais' mode.
-            prefer_decoder = True
-            if self.automatic_segmentation_mode == "amg":
-                prefer_decoder = False
+            def pbar_update(update):
+                pbar_signals.pbar_update.emit(update)
+                QtWidgets.QApplication.processEvents()
 
             state.initialize_predictor(
-                image_data, model_type=self.model_type, save_path=save_path, ndim=ndim,
-                device=self.device, checkpoint_path=self.custom_weights, tile_shape=tile_shape, halo=halo,
-                prefer_decoder=prefer_decoder, pbar_init=pbar_init,
-                pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
+                image_data,
+                model_type=self.model_type,
+                save_path=save_path,
+                ndim=ndim,
+                device=self.device,
+                checkpoint_path=self.custom_weights,
+                tile_shape=tile_shape,
+                halo=halo,
+                batch_size=self._effective_batch_size(),
+                prefer_decoder=True,
+                precompute_autoseg_state=precompute_autoseg_state,
+                pbar_init=pbar_init,
+                pbar_update=pbar_update,
             )
             pbar_signals.pbar_stop.emit()
 
         compute_image_embedding()
+        self._clear_autosegment_cache(state)
         self._update_model(state)
         # worker = compute_image_embedding()
         # worker.returned.connect(self._update_model)
@@ -1476,143 +2551,580 @@ class EmbeddingWidget(_WidgetBase):
         # return worker
 
 
+class ClassificationEmbeddingWidget(EmbeddingWidget):
+    """Embedding widget for the classification tools (pixel and object classification).
+
+    The model selection mirrors the segmentation/tracking `EmbeddingWidget` exactly: the same single
+    'Model:' dropdown with the SAM2 'Natural Images' and 'Microscopy' families (same names and config).
+    Since classification operates directly on the image-encoder embeddings, it can additionally use
+    models beyond SAM2. An opt-in 'Advanced Models' checkbox in the embedding settings swaps that one
+    dropdown to the advanced families instead of adding a second dropdown. The advanced tier holds both
+    the SAM1 families and the VFM (DINO / UNI) families (`_advanced_family_suffixes` and `_dino_families`).
+    """
+
+    # The classification tools have no automatic segmentation, so the state-caching option is hidden.
+    supports_state_caching = False
+
+    size_order = ["tiny", "small", "base", "large", "huge", "giant"]
+
+    # The classifiers only run the image encoder and a lightweight classifier on top, so they stay
+    # fast on the CPU and don't need the info popup.
+    warn_on_cpu = False
+
+    # Advanced SAM1 families: UI label -> model-name suffix on the SAM1 'vit_' prefix, resolved in
+    # '_get_model_size_options'.
+    _advanced_family_suffixes = {
+        "Natural Images (SAM1)": "",
+        "Light Microscopy (µSAM)": "_lm",
+        "Electron Microscopy (µSAM)": "_em_organelles",
+        "Medical Imaging (MedicoSAM)": "_medical_imaging",
+        "Histopathology (PathoSAM)": "_histopathology",
+    }
+    _advanced_size_map = {"t": "tiny", "b": "base", "l": "large", "h": "huge"}
+    # Vision Foundation Model families beyond SAM: UI label -> the registry model_types in that family
+    # (ordered by size). Sizes/names come from 'micro_sam.models.vfm.VFM_MODELS'/'VFM_SIZE_LABELS', not the
+    # SAM1 naming scheme. DINOv2/v3 are natural-image (LVD-1689M) models. UNI/UNI2-h are histopathology.
+    _dino_families = {
+        "Natural Images (DINOv2)": ("vit_s_dinov2", "vit_b_dinov2", "vit_l_dinov2", "vit_g_dinov2"),
+        "Natural Images (DINOv3)": ("vit_s_dinov3", "vit_b_dinov3", "vit_l_dinov3"),
+        "Histopathology (UNI)": ("vit_uni", "vit_univ2"),
+        "Natural Images (SAM3)": ("vit_sam3",),
+    }
+    # Older saved classifiers stored the primary SAM2 families under '(SAM2)' labels. Map them to the
+    # current names so loading such a classifier still restores the right family.
+    _primary_family_aliases = {"Natural Images (SAM2)": "Natural Images", "Microscopy (SAM2)": "Microscopy"}
+
+    def _all_advanced_families(self):
+        # The advanced tier combines the SAM1 families and the VFM (DINO / UNI) families.
+        return list(self._advanced_family_suffixes) + list(self._dino_families)
+
+    def _is_dino_active(self):
+        return getattr(self, "model_family", None) in self._dino_families
+
+    def _advanced_active(self):
+        # The single 'Model:' dropdown holds either the primary or the advanced families, so the
+        # current family's membership is the source of truth (robust to the dropdown being blanked).
+        return getattr(self, "model_family", None) in self._all_advanced_families()
+
+    def _add_extra_model_settings(self, layout):
+        # 'Advanced Models' swaps the single 'Model:' dropdown above between the primary (SAM2) and the
+        # advanced (SAM1) families - one dropdown only, to avoid confusion. Added last in the settings.
+        self._primary_families = list(self.supported_dropdown_maps.keys())
+        # The default primary family ('Microscopy'), restored when advanced is switched back off.
+        self._default_primary_family = self.model_family
+        self.advanced = False
+        self.advanced_checkbox = self._add_boolean_param(
+            "advanced", self.advanced, title="Advanced Models",
+            tooltip=get_tooltip("embedding", "advanced_model"),
+        )
+        self.advanced_checkbox.stateChanged.connect(self._on_advanced_toggled)
+        layout.addWidget(self.advanced_checkbox)
+
+        # The inherited dropdowns auto-bind their attribute by indexing the option list captured at
+        # creation. We swap those lists (the families, and the per-family sizes), which makes the
+        # captured index stale (wrong value, or out of range). Drop that auto-bind and let
+        # '_update_model_type' (wired to 'currentTextChanged') sync the attribute from the text.
+        for dropdown in (self.model_family_dropdown, self.model_size_dropdown):
+            try:
+                dropdown.currentIndexChanged.disconnect()
+            except TypeError:
+                pass
+
+    def _set_family_choices(self, families, select=None):
+        # Replace the 'Model:' dropdown items, select 'select' (default first), then resolve the model.
+        if select not in families:
+            select = families[0]
+        self.model_family_dropdown.blockSignals(True)
+        self.model_family_dropdown.clear()
+        self.model_family_dropdown.addItems(families)
+        self.model_family_dropdown.setCurrentText(select)
+        self.model_family_dropdown.blockSignals(False)
+        self.model_family = select
+        self._update_model_type()
+
+    def _on_advanced_toggled(self, state):
+        advanced = self.advanced_checkbox.isChecked()
+        if advanced:
+            self._set_family_choices(self._all_advanced_families())
+        else:  # Back to the SAM2 families, defaulting to 'Microscopy' rather than the first entry.
+            self._set_family_choices(self._primary_families, select=self._default_primary_family)
+        # Reflect the active tier in the 'Model:' dropdown tooltip.
+        self.model_family_dropdown.setToolTip(
+            get_tooltip("embedding", "model_family_advanced" if advanced else "model_family")
+        )
+
+    def _reset_inputs_to_defaults(self):
+        # Turning off advanced mode restores the primary families. The base reset then selects the default.
+        if getattr(self, "advanced_checkbox", None) is not None and self.advanced_checkbox.isChecked():
+            self.advanced_checkbox.setChecked(False)
+        super()._reset_inputs_to_defaults()
+
+    def set_model_family_size(self, family, size):
+        """Restore a saved (family, size): swap the dropdown to the matching tier, then select it."""
+        family = self._primary_family_aliases.get(family, family)
+        self.advanced_checkbox.setChecked(family in self._all_advanced_families())
+        self.model_family_dropdown.setCurrentText(family)
+        if size:
+            self.model_size_dropdown.setCurrentText(size)
+
+    def _validate_model_support(self):
+        # The vit-tiny backbone needs MobileSAM. Warn (instead of crashing later) if it is selected
+        # without MobileSAM installed. The model stays selectable - we just block this compute.
+        from ..util import VIT_T_SUPPORT
+        if not VIT_T_SUPPORT and (self.model_type or "").startswith("vit_t"):
+            return _generate_message(
+                "error",
+                f"'{self.model_type}' (vit-tiny) requires MobileSAM. Install MobileSAM or pick another size.",
+            )
+        return False
+
+    def _family_and_size_for_model(self, model_name):
+        """Map a stored model name to its (family label, size label) for this widget's dropdowns."""
+        full_size_map = {"t": "tiny", "s": "small", "b": "base", "l": "large", "h": "huge"}
+        for family, models in self._dino_families.items():  # VFM families (DINO / UNI).
+            if model_name in models:
+                from ..models.vfm import VFM_SIZE_LABELS
+                return family, VFM_SIZE_LABELS.get(model_name)
+        if model_name.startswith("hvit_"):  # SAM2 (primary families).
+            size = full_size_map.get(model_name[5])
+            family = self._family_for_sam2_model(model_name)
+        else:  # SAM1 (advanced families): 'vit_<size><suffix>'.
+            size = full_size_map.get(model_name[4])
+            suffix = model_name[5:]
+            family = {v: k for k, v in self._advanced_family_suffixes.items()}.get(suffix, "Natural Images (SAM1)")
+        return family, size
+
+    def _apply_loaded_model_selection(self, model_name):
+        # Set the family (primary or advanced) and size dropdowns to match the loaded embeddings.
+        family, size = self._family_and_size_for_model(model_name)
+        self.set_model_family_size(family, size)
+
+    def _get_model_size_options(self):
+        # Primary (SAM2) sizes come from the inherited logic. Advanced families resolve to SAM1/DINO names.
+        if not self._advanced_active():
+            return super()._get_model_size_options()
+        if self._is_dino_active():
+            from ..models.vfm import VFM_SIZE_LABELS
+            models = self._dino_families[self.model_family]
+            self.model_size_mapping = {VFM_SIZE_LABELS[m]: m for m in models}
+            self.model_size_options = sorted(self.model_size_mapping.keys(), key=self.size_order.index)
+            return
+        from ..v1.util import get_model_names
+        suffix = self._advanced_family_suffixes[self.model_family]
+        available = {m for m in get_model_names() if not m.endswith("decoder")}
+        self.model_size_mapping = {}
+        for key, label in self._advanced_size_map.items():
+            name = f"vit_{key}{suffix}"
+            if name in available:
+                self.model_size_mapping[label] = name
+        self.model_size_options = sorted(self.model_size_mapping.keys(), key=self.size_order.index)
+
+    def _update_model_type(self):
+        # Sync the family from the dropdown first: the inherited auto-bind closure captures the original
+        # (primary) option list, so after the dropdown is swapped to the advanced families it can set a
+        # stale value. Re-reading the current text here is authoritative and decides the branch below.
+        self.model_family = self.model_family_dropdown.currentText() or self.model_family
+        # Primary mode defers to the inherited SAM2 logic. Advanced mode rebuilds the size dropdown for
+        # the current SAM1 family and resolves its model name.
+        if not self._advanced_active():
+            return super()._update_model_type()
+        current_selection = self.model_size_dropdown.currentText()
+        self._get_model_size_options()
+
+        self.model_size_dropdown.blockSignals(True)
+        self.model_size_dropdown.clear()
+        self.model_size_dropdown.addItems(self.model_size_options)
+        if current_selection in self.model_size_options:
+            self.model_size = current_selection
+        elif self.model_size_options:
+            self.model_size = self.model_size_options[0]
+        self.model_type = self.model_size_mapping.get(self.model_size)
+        self.model_size_dropdown.setCurrentText(self.model_size)
+        self.model_size_dropdown.update()
+        self.model_size_dropdown.blockSignals(False)
+        # This branch does not go through the inherited update, so refresh the batch size here too:
+        # the advanced families include the VFM encoders, which do not support batching.
+        if getattr(self, "_batch_size_widget", None) is not None:
+            self._refresh_batch_size()
+
+    def _validate_model_type_and_custom_weights(self):
+        # DINO families always resolve from the registry. DINOv3 weights load from HuggingFace using the
+        # user's own HF access (huggingface-cli login / HF_TOKEN), not the custom-weights field.
+        if self._is_dino_active():
+            self._get_model_size_options()
+            self.model_type = self.model_size_mapping.get(self.model_size, self.model_type)
+            return
+        # Advanced SAM1 mode (without custom weights): resolve the SAM1 model name from family + size.
+        if self._advanced_active() and not self.custom_weights:
+            self._get_model_size_options()
+            self.model_type = self.model_size_mapping.get(self.model_size, self.model_type)
+            return
+        # Primary mode, or custom weights: the inherited logic resolves the type and blanks the dropdown.
+        super()._validate_model_type_and_custom_weights()
+
+
 #
 # Functionality and widget for nd segmentation.
 #
 
 
-def _update_lineage(viewer):
-    """Updated the lineage after recording a division event.
-    This helper function is needed by 'track_object'.
+def _division_frame_for_track(point_layer, track_id):
+    """Frame at which 'track_id' is annotated to divide, or None.
+
+    A division is a point tagged with the 'division' track-state for this track; the earliest such
+    frame is the mother track's last frame (propagation is bounded above there).
+    """
+    props = point_layer.properties
+    if not len(point_layer.data) or "state" not in props or "track_id" not in props:
+        return None
+    states = np.asarray(props["state"])
+    track_ids_prop = np.asarray(props["track_id"])
+    z_all = np.round(point_layer.data[:, 0]).astype(int)
+    div_mask = (states == "division") & (track_ids_prop == str(track_id))
+    return int(z_all[div_mask].min()) if np.any(div_mask) else None
+
+
+def _mother_division_frame(point_layer, lineage, track_id):
+    """Division frame of 'track_id's mother, or None if it is not a daughter of a dividing track.
+
+    A daughter does not exist before its mother divides, so its mask must start the frame after.
+    """
+    for mother, daughters in lineage.items():
+        if track_id in daughters:
+            return _division_frame_for_track(point_layer, mother)
+    return None
+
+
+def _update_lineage(viewer, mother=None):
+    """Record a division for 'mother' by seeding two daughter track ids and refreshing the menus.
+
+    Args:
+        viewer: The napari viewer.
+        mother: The track id that divides. Defaults to the current track id.
     """
     state = AnnotatorState()
-    tracking_widget = state.widgets["tracking"]
+    tracking_widget = state.annotator._tracking_widget
 
-    mother = state.current_track_id
-    assert mother in state.lineage
-    assert len(state.lineage[mother]) == 0
+    if mother is None:
+        mother = state.current_track_id
+    # Only seed daughters once per division: skip unknown tracks or tracks that already divided.
+    if mother not in state.lineage or len(state.lineage[mother]) > 0:
+        return
 
-    daughter1, daughter2 = state.current_track_id + 1, state.current_track_id + 2
+    daughter1 = max(state.lineage.keys()) + 1
+    daughter2 = daughter1 + 1
     state.lineage[mother] = [daughter1, daughter2]
     state.lineage[daughter1] = []
     state.lineage[daughter2] = []
 
     # Update the choices in the track_id menu so that it contains the new track ids.
+    # (index 2: prompt, track_state, track_id).
     track_ids = list(map(str, state.lineage.keys()))
-    tracking_widget[1].choices = track_ids
+    tracking_widget[2].choices = track_ids
 
-    viewer.layers["point_prompts"].property_choices["track_id"] = [str(track_id) for track_id in track_ids]
-    viewer.layers["prompts"].property_choices["track_id"] = [str(track_id) for track_id in track_ids]
+    viewer.layers["point_prompts"].property_choices["track_id"] = list(track_ids)
+    viewer.layers["prompts"].property_choices["track_id"] = list(track_ids)
 
 
-class SegmentNDWidget(_WidgetBase):
-    def __init__(self, viewer, tracking, parent=None):
+class UnifiedSegmentWidget(_WidgetBase):
+    """Unified widget for 3D segmentation (per-slice and volumetric).
+    """
+
+    def __init__(self, viewer, tracking=False, parent=None):
+        """Initialize the unified segmentation widget.
+
+        Args:
+            viewer: The napari viewer.
+            tracking: Whether this is used for tracking (vs volumetric).
+            parent: Parent Qt widget.
+        """
         super().__init__(parent=parent)
         self._viewer = viewer
         self.tracking = tracking
 
-        # Add the settings.
-        self.settings = self._create_settings()
-        self.layout().addWidget(self.settings)
+        # Initialize volume mode state
+        self.apply_to_volume = False
 
-        # Add the run button.
-        button_title = "Segment All Frames [Shift-S]" if self.tracking else "Segment All Slices [Shift-S]"
-        self.run_button = QtWidgets.QPushButton(button_title)
+        # The progress bar pumps the Qt event loop, so a key press during a run would start a nested one.
+        self.is_running = False
+        # The key and result of the last volume propagation, so a re-press without changes reuses it.
+        self._last_volume_run = None
+
+        # Create the widget UI
+        self._create_widget()
+
+    def _create_widget(self):
+        """Create the widget UI elements."""
+        # 1. Add volume mode checkbox
+        volume_title = (
+            "Apply to All Frames" if self.tracking else "Apply to Volume"
+        )
+        self.volume_checkbox = self._add_boolean_param(
+            "apply_to_volume",
+            self.apply_to_volume,
+            title=volume_title,
+            tooltip=get_tooltip("unified_segment", "apply_to_volume"),
+        )
+        self.volume_checkbox.stateChanged.connect(self._on_volume_mode_changed)
+        self.layout().addWidget(self.volume_checkbox)
+
+        # 2. Add the batched checkbox. It stays hidden until the embeddings exist and are not tiled.
+        self.batched = False
+        self.batched_checkbox = self._add_boolean_param(
+            "batched",
+            self.batched,
+            title="Batched",
+            tooltip=get_tooltip("unified_segment", "batched"),
+        )
+        self.batched_checkbox.setVisible(False)  # Initially hidden
+        self.layout().addWidget(self.batched_checkbox)
+
+        # 3. Store the settings for volume propagation. The InteractiveSegmentationWidget shows the controls.
+        # 'early_stop_patience': the number of empty slices after which propagation stops (0 disables it).
+        # 'z_range': the inclusive (z_min, z_max) range for propagation, or None for the full volume.
+        self.early_stop_patience = 2
+        self.z_range = None
+
+        # 4. Add run button
+        self.run_button = QtWidgets.QPushButton(self._get_button_text())
+        self.run_button.setToolTip(get_tooltip("unified_segment", "segment_button"))
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
 
-    def _create_settings(self):
-        setting_values = QtWidgets.QWidget()
-        setting_values.setToolTip(get_tooltip("segmentnd", "settings"))
-        setting_values.setLayout(QtWidgets.QVBoxLayout())
+        # 5. Set the visibility of the batched checkbox.
+        self._update_batched_visibility()
 
-        # Create the UI for the projection modes.
-        self.projection = "single_point"
-        self.projection_dropdown, layout = self._add_choice_param(
-            "projection", self.projection, PROJECTION_MODES, tooltip=get_tooltip("segmentnd", "projection_dropdown")
-            )
-        setting_values.layout().addLayout(layout)
+    def _on_volume_mode_changed(self, state):
+        """Handle volume mode checkbox state change.
 
-        # Create the UI element for the IOU threshold.
-        self.iou_threshold = 0.5
-        self.iou_threshold_param, layout = self._add_float_param(
-            "iou_threshold", self.iou_threshold, tooltip=get_tooltip("segmentnd", "iou_threshold")
-            )
-        setting_values.layout().addLayout(layout)
+        Args:
+            state: Qt checkbox state (0=unchecked, 2=checked).
+        """
+        # Update button text
+        self.run_button.setText(self._get_button_text())
 
-        # Create the UI element for the box extension.
-        self.box_extension = 0.05
-        self.box_extension_param, layout = self._add_float_param(
-            "box_extension", self.box_extension, tooltip=get_tooltip("segmentnd", "box_extension")
-            )
-        setting_values.layout().addLayout(layout)
+        # Update batched checkbox visibility
+        self._update_batched_visibility()
 
-        # Create the UI element for the motion smoothing (if we have the tracking widget).
-        if self.tracking:
-            self.motion_smoothing = 0.5
-            self.motion_smoothing_param, layout = self._add_float_param(
-                "motion_smoothing", self.motion_smoothing, tooltip=get_tooltip("segmentnd", "motion_smoothing")
-                )
-            setting_values.layout().addLayout(layout)
-
-        settings = _make_collapsible(setting_values, title="Segmentation Settings")
-        return settings
-
-    def _run_tracking(self):
+    def _update_batched_visibility(self):
+        """Show the batched checkbox only for computed embeddings that are not tiled."""
         state = AnnotatorState()
-        pbar, pbar_signals = _create_pbar_for_threadworker()
 
-        # @thread_worker
-        def tracking_impl():
-            shape = state.image_shape
+        # Batched prompts do not work with tiled embeddings. They work in the slice and in the volume mode.
+        should_show = state.image_embeddings is not None and not _embeddings_are_tiled(state)
+        if not should_show and getattr(self, "batched", False):
+            self.batched_checkbox.setChecked(False)
+        self.batched_checkbox.setVisible(should_show)
 
-            pbar_signals.pbar_total.emit(shape[0])
-            pbar_signals.pbar_description.emit("Track object")
-
-            # Step 1: Segment all slices with prompts.
-            seg, slices, _, stop_upper = vutil.segment_slices_with_prompts(
-                state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
-                state.image_embeddings, shape, track_id=state.current_track_id,
-                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+    def _get_button_text(self):
+        """Get dynamic button text based on current mode."""
+        if self.tracking:
+            return (
+                "Segment All Frames [S]"
+                if self.apply_to_volume
+                else "Segment Frame [S]"
+            )
+        else:
+            return (
+                "Segment Volume [S]"
+                if self.apply_to_volume
+                else "Segment Slice [S]"
             )
 
-            # Step 2: Track the object starting from the lowest annotated slice.
-            seg, has_division = vutil.track_from_prompts(
-                self._viewer.layers["point_prompts"], self._viewer.layers["prompts"], seg,
-                state.predictor, slices, state.image_embeddings, stop_upper,
-                threshold=self.iou_threshold, projection=self.projection,
-                motion_smoothing=self.motion_smoothing,
-                box_extension=self.box_extension,
-                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+    def __call__(self, viewer=None):
+        """Execute segmentation based on current mode.
+
+        Args:
+            viewer: Optional napari viewer (for keybinding compatibility).
+        """
+        if self.is_running:
+            show_info("The segmentation is still running. Wait until it finishes.")
+            return None
+
+        # Validation
+        if _validate_embeddings(self._viewer):
+            return None
+        if _validate_layers(self._viewer):
+            return None
+
+        self.is_running = True
+        try:
+            # Route to appropriate implementation
+            if self.apply_to_volume:
+                if self.tracking:
+                    return self._run_tracking()
+                else:
+                    return self._run_volumetric_segmentation()
+            else:
+                if self.tracking:
+                    return self._run_frame_segmentation()
+                else:
+                    return self._run_slice_segmentation()
+        finally:
+            self.is_running = False
+
+    def reset_last_volume_run(self):
+        """Forget the last volume propagation, so the next run propagates again."""
+        self._last_volume_run = None
+
+    def _run_slice_segmentation(self):
+        """Execute per-slice segmentation.
+        """
+        shape = self._viewer.layers["current_object"].data.shape[1:]
+
+        z = vutil.current_slice(self._viewer, self._viewer.layers["point_prompts"])
+
+        prompt_layer = self._viewer.layers["prompts"]
+        prompts = vutil.collect_frame_prompts(
+            self._viewer.layers["point_prompts"], prompt_layer, shape, i=z,
+        )
+        # this is a stop prompt, we do nothing
+        if prompts.is_stop:
+            return
+
+        points, labels, boxes, masks = prompts.points, prompts.labels, prompts.boxes, prompts.masks
+        have_scribbles = prompts.have_scribbles
+        if have_scribbles and not boxes and not np.any(labels == 1):
+            return _generate_message(
+                "error",
+                "A negative scribble needs a positive point, positive scribble, box or mask prompt.",
             )
 
-            pbar_signals.pbar_stop.emit()
-            return seg, has_division
+        state = AnnotatorState()
+        batched = _batched_disabled_when_tiled(state, bool(self.batched))
+        if have_scribbles and batched:
+            show_info(
+                "Batched segmentation is not supported with scribble prompts. "
+                "It runs single-object segmentation instead."
+            )
+            batched = False
 
-        def update_segmentation(ret_val):
-            seg, has_division = ret_val
-            # If a division has occurred and it's the first time it occurred for this track
-            # then we need to create the two daughter tracks and update the lineage.
-            if has_division and (len(state.lineage[state.current_track_id]) == 0):
-                _update_lineage(self._viewer)
+        boxes = [box[[1, 0, 3, 2]] for box in boxes]
+        if batched:
+            seg = self._segment_slice_batched(z, points, labels, boxes, masks, shape)
+        else:
+            seg = state.interactive_segmenter.segment_slice(
+                frame_idx=z,
+                points=points[:, ::-1].copy(),
+                labels=labels,
+                boxes=boxes,
+                masks=masks,
+            )
 
-            # Clear the old track mask.
-            self._viewer.layers["current_object"].data[
-                self._viewer.layers["current_object"].data == state.current_track_id
-            ] = 0
-            # Set the new object mask.
-            self._viewer.layers["current_object"].data[seg == 1] = state.current_track_id
-            self._viewer.layers["current_object"].refresh()
+        # No prompts were given or prompts were invalid, skip segmentation.
+        if seg is None:
+            print(
+                "You either haven't provided any prompts or invalid prompts. The segmentation will be skipped."
+            )
+            return
 
-        ret_val = tracking_impl()
-        update_segmentation(ret_val)
-        # worker = tracking_impl()
-        # worker.returned.connect(update_segmentation)
-        # worker.start()
-        # return worker
+        self._viewer.layers["current_object"].data[z] = seg
+        self._viewer.layers["current_object"].refresh()
+
+    def _segment_slice_batched(self, z, points, labels, boxes, masks, shape):
+        """Batched multi-object segmentation for a single slice with SAM2.
+
+        Mirrors the 2d batched convention: one object per positive point (each combined with the
+        shared negative points) and one object per box. A box from a polygon/ellipse (its entry in
+        `masks` is not None) also carries its soft mask cue. The boxes are expected in the reordered
+        layout used by `segment_slice`.
+        """
+        state = AnnotatorState()
+        points = np.zeros((0, 2)) if points is None else np.asarray(points)
+        labels = np.zeros((0,), dtype=int) if labels is None else np.asarray(labels)
+        positive_points = points[labels == 1]
+        negative_points = points[labels != 1]
+        n_neg = len(negative_points)
+
+        seg = np.zeros(tuple(shape), dtype="uint32")
+        object_id = 0
+
+        # One object per positive point, each combined with the shared negative points.
+        for pos in positive_points:
+            pts = np.concatenate([pos[None], negative_points], axis=0) if n_neg else pos[None]
+            lbs = np.concatenate([[1], np.zeros(n_neg, dtype=int)]) if n_neg else np.array([1])
+            object_id += 1
+            mask = state.interactive_segmenter.segment_slice(
+                frame_idx=z, points=pts[:, ::-1].copy(), labels=lbs, object_id=object_id,
+            )
+            if mask is not None:
+                seg[mask > 0] = object_id
+
+        # One object per box (with its mask cue if it is a polygon/ellipse), each combined with the
+        # shared negative points.
+        for bidx, box in enumerate(boxes):
+            neg = negative_points[:, ::-1].copy() if n_neg else None
+            neg_labels = np.zeros(n_neg, dtype=int) if n_neg else None
+            object_id += 1
+            mask = state.interactive_segmenter.segment_slice(
+                frame_idx=z, points=neg, labels=neg_labels, boxes=[box],
+                masks=[masks[bidx]] if masks is not None else None, object_id=object_id,
+            )
+            if mask is not None:
+                seg[mask > 0] = object_id
+
+        return seg
+
+    def _segment_track_on_frame(self, state, t, track_id, shape):
+        """Segment a single track's object on frame 't'. Returns the binary mask or None."""
+        prompt_layer = self._viewer.layers["prompts"]
+        prompts = vutil.collect_frame_prompts(
+            self._viewer.layers["point_prompts"], prompt_layer, shape, i=t, track_id=track_id,
+        )
+        # A single negative point is a stop prompt: nothing to segment for this track here.
+        if prompts.is_stop:
+            return None
+
+        points, labels, boxes, masks = prompts.points, prompts.labels, prompts.boxes, prompts.masks
+        if prompts.have_scribbles and not boxes and not np.any(labels == 1):
+            show_info(
+                "A negative scribble alone cannot segment an object. "
+                "Add a positive point, positive scribble, box or mask prompt."
+            )
+            return None
+
+        # The tracking annotator is SAM2-only: segment the frame via the video predictor.
+        # Points are reordered to (x, y) and boxes to (x0, y0, x1, y1), matching the per-slice path.
+        sam2_boxes = [box[[1, 0, 3, 2]] for box in boxes]
+        seg = state.interactive_segmenter.segment_slice(
+            frame_idx=t,
+            points=points[:, ::-1].copy() if len(points) else points,
+            labels=labels,
+            boxes=sam2_boxes,
+            masks=masks,
+        )
+        return None if seg is None else (seg.squeeze() == 1)
+
+    def _run_frame_segmentation(self):
+        """Execute per-frame segmentation for the current track (tracking mode)."""
+        state = AnnotatorState()
+        shape = state.image_shape[1:]
+        t = vutil.current_slice(self._viewer, self._viewer.layers["current_object"])
+
+        track_id = state.current_track_id
+        new_mask = self._segment_track_on_frame(state, t, track_id, shape)
+        if new_mask is None:
+            print(
+                "You either haven't provided any prompts or invalid prompts. The segmentation will be skipped."
+            )
+            return
+
+        # Clear the old segmentation for this track id, then set the new one.
+        layer = self._viewer.layers["current_object"]
+        layer.data[t][layer.data[t] == track_id] = 0
+        layer.data[t][new_mask] = track_id
+        layer.refresh()
 
     def _run_volumetric_segmentation(self):
+        """Execute volumetric segmentation.
+        """
         pbar, pbar_signals = _create_pbar_for_threadworker()
+
+        def emit_progress(update):
+            # The run is synchronous, so pump the Qt event loop to repaint the bar live instead of
+            # only updating the terminal tqdm.
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
 
         # @thread_worker
         def volumetric_segmentation_impl():
@@ -1622,24 +3134,108 @@ class SegmentNDWidget(_WidgetBase):
             pbar_signals.pbar_total.emit(shape[0])
             pbar_signals.pbar_description.emit("Segment object")
 
-            # Step 1: Segment all slices with prompts.
-            seg, slices, stop_lower, stop_upper = vutil.segment_slices_with_prompts(
-                state.predictor, self._viewer.layers["point_prompts"], self._viewer.layers["prompts"],
-                state.image_embeddings, shape,
-                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
-            )
+            # Prepare the prompts
+            point_prompts = self._viewer.layers["point_prompts"]
+            box_prompts = self._viewer.layers["prompts"]
+            z_values_points = np.round(point_prompts.data[:, 0])
+            z_values_scribbles = vutil.get_scribble_slices(box_prompts)
+            have_scribbles = len(z_values_scribbles) > 0
+            z_values_boxes = np.round(
+                np.asarray([
+                    shape[0, 0]
+                    for shape, shape_type in zip(box_prompts.data, box_prompts.shape_type)
+                    if shape_type not in vutil.SCRIBBLE_SHAPE_TYPES
+                ])
+            ).astype("int")
 
-            # Step 2: Segment the rest of the volume based on projecting prompts.
-            seg, (z_min, z_max) = segment_mask_in_volume(
-                seg, state.predictor, state.image_embeddings, slices,
-                stop_lower, stop_upper,
-                iou_threshold=self.iou_threshold, projection=self.projection,
-                box_extension=self.box_extension,
-                update_progress=lambda update: pbar_signals.pbar_update.emit(update),
+            # Whether the user decide to provide batched prompts for multi-object segmentation.
+            is_batched = _batched_disabled_when_tiled(state, bool(self.batched))
+            if have_scribbles and is_batched:
+                show_info(
+                    "Batched segmentation is not supported with scribble prompts. "
+                    "It runs single-object segmentation instead."
+                )
+                is_batched = False
+
+            # Collect every prompt first: a slice's negative points must be known when the boxes
+            # and masks on that slice are assigned their object ids, and the complete set is
+            # needed to detect prompts that changed since the last run.
+            shape_yx = state.image_shape[-2:]
+            point_slices = np.unique(np.concatenate([z_values_points, z_values_scribbles])).astype("int")
+            merged_prompts, shape_prompts, stop_slices = {}, {}, []
+            for curr_z in np.unique(np.concatenate([point_slices, z_values_boxes])).astype("int"):
+                prompts = vutil.collect_frame_prompts(point_prompts, box_prompts, shape_yx, i=curr_z)
+                # A slice whose only prompt is a single negative point is a 'stop' annotation.
+                if prompts.is_stop:
+                    stop_slices.append(int(curr_z))
+                elif len(prompts.points):
+                    merged_prompts[int(curr_z)] = (prompts.points, prompts.labels)
+                rect_boxes, poly_masks = prompts.split_shapes()
+                if rect_boxes or poly_masks:
+                    shape_prompts[int(curr_z)] = (rect_boxes, poly_masks)
+
+            have_positive_points = any(np.any(labels == 1) for _, labels in merged_prompts.values())
+            have_shape_cue = len(shape_prompts) > 0
+            if have_scribbles and not have_positive_points and not have_shape_cue:
+                pbar_signals.pbar_stop.emit()
+                _generate_message(
+                    "error",
+                    "A negative scribble needs a positive point, positive scribble, box or mask prompt.",
+                )
+                return None
+            if is_batched and not have_positive_points and not have_shape_cue:
+                # A batched object needs a positive cue; a negative point only corrects one.
+                pbar_signals.pbar_stop.emit()
+                _generate_message(
+                    "error",
+                    "Batched segmentation needs a positive point, box or mask prompt.",
+                )
+                return None
+
+            # Plan the whole round before touching the state: the object each prompt is routed to
+            # depends on the prompt set as a whole, and the sync below needs that routing.
+            plan = _plan_volume_prompts(merged_prompts, shape_prompts, is_batched)
+            signatures = _volume_prompt_signatures(plan)
+
+            # A patience of 0 disables early stopping (propagate through the whole volume).
+            early_stop_patience = self.early_stop_patience if self.early_stop_patience > 0 else None
+            prompted_slices = set(merged_prompts) | set(shape_prompts)
+            z_range, ignored_stops = _bound_z_range_by_stops(
+                prompted_slices, stop_slices, shape[0], self.z_range
             )
+            if ignored_stops:
+                show_info(
+                    f"Ignoring the stop annotation (single negative point) in slice(s) {ignored_stops}: "
+                    "a stop must lie below or above all prompted slices."
+                )
+
+            # Propagating the same prompts again costs a full pass and drifts from the first result.
+            run_key = (
+                id(state.interactive_segmenter), is_batched, frozenset(signatures), z_range, early_stop_patience
+            )
+            if self._last_volume_run is not None and self._last_volume_run[0] == run_key:
+                pbar_signals.pbar_stop.emit()
+                return self._last_volume_run[1].copy()
+
+            # Rebuild the persistent state when a prompt was deleted, moved, relabelled or routed
+            # to a different object since the last run. A round that only adds prompts and leaves
+            # the existing routing intact keeps the state, so only the new prompts are pushed.
+            state.interactive_segmenter.sync_prompt_state(signatures)
+            _push_volume_prompts(state.interactive_segmenter, plan)
+
+            # Propagate the prompts throughout the volume and combine the propagated segmentations.
+            # Tiled segmenters count one step per slice in each tile activated above.
+            n_propagation_steps = state.interactive_segmenter.get_progress_total(z_range)
+            pbar_signals.pbar_total.emit(n_propagation_steps)
+            pbar_signals.pbar_description.emit("Propagate in volume")
+            seg = state.interactive_segmenter.predict(
+                update_progress=emit_progress,
+                early_stop_patience=early_stop_patience, z_range=z_range,
+            )
+            self._last_volume_run = (run_key, seg.copy())
+
             pbar_signals.pbar_stop.emit()
 
-            state.z_range = (z_min, z_max)
             return seg
 
         def update_segmentation(seg):
@@ -1647,6 +3243,8 @@ class SegmentNDWidget(_WidgetBase):
             self._viewer.layers["current_object"].refresh()
 
         seg = volumetric_segmentation_impl()
+        if seg is None:
+            return None
         self._viewer.layers["current_object"].data = seg
         self._viewer.layers["current_object"].refresh()
         # worker = volumetric_segmentation_impl()
@@ -1654,16 +3252,530 @@ class SegmentNDWidget(_WidgetBase):
         # worker.start()
         # return worker
 
-    def __call__(self):
-        if _validate_embeddings(self._viewer):
-            return None
-        if _validate_layers(self._viewer):
-            return None
+    def _run_tracking(self):
+        """Execute interactive tracking by propagating the current track's prompts across frames.
 
-        if self.tracking:
-            return self._run_tracking()
+        Design boundary: SAM2 only does per-object mask propagation across frames. It has no concept
+        of a division / lineage event and never signals one. Everything division-related here is
+        mechanistic orchestration on top of the model (reading the user's 'division' annotation,
+        bounding propagation, seeding daughters, recording lineage edges) - none of it is a SAM2
+        capability. Genuine automatic division detection lives in the automatic-tracking path via
+        trackastra, which predicts lineages from per-frame segmentations; it is not SAM2.
+        """
+        state = AnnotatorState()
+        pbar, pbar_signals = _create_pbar_for_threadworker()
+
+        def emit_progress(update):
+            # Synchronous run: pump the Qt event loop so the bar repaints live, not only in the terminal.
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
+
+        def propagate_track(track_id, division_frame):
+            # Propagate a single track's prompts forward in time with the SAM2 predictor. Tracking
+            # is forward-only: it starts at the first prompted frame and never runs to earlier
+            # frames. A frame whose only prompt for this track is a single negative point is a
+            # 'stop' annotation. A stop on the highest annotated frame bounds propagation above.
+            shape = state.image_shape
+            point_layer = self._viewer.layers["point_prompts"]
+            box_layer = self._viewer.layers["prompts"]
+
+            # Reset so a re-run does not accumulate prompts from a previous propagation.
+            state.interactive_segmenter.reset_predictor()
+            pbar_signals.pbar_description.emit(f"Track object {track_id}")
+
+            # Add the point and scribble prompts for this track, one frame at a time, recording the
+            # prompted frames and the stop annotations. A scribble expands into several point prompts
+            # on its frame, in the same (y, x) order as the point prompts.
+            prompted_frames, stop_frames = [], []
+            z_points = (
+                np.unique(np.round(point_layer.data[:, 0]).astype(int))
+                if len(point_layer.data) else np.zeros(0, dtype=int)
+            )
+            z_scribbles = vutil.get_scribble_slices(box_layer, track_id=track_id)
+            have_positive_cue = False
+            for t in sorted({int(t) for t in z_points} | {int(t) for t in z_scribbles}):
+                # Exclude division markers: they signal a lineage event and bound propagation
+                # (see below), but must not be fed to SAM2 as conditioning prompts - doing so
+                # adds a second conditioning frame that corrupts the mother track's propagation.
+                prompts = vutil.collect_frame_prompts(
+                    point_layer, box_layer, shape[1:], i=t, track_id=track_id,
+                    exclude_states=("division",),
+                )
+                if prompts.is_stop:  # Single negative point: a stop annotation for this track.
+                    stop_frames.append(t)
+                    continue
+                if len(prompts.points) == 0:  # This track has no point prompts on this frame.
+                    continue
+                have_positive_cue = have_positive_cue or bool(np.any(prompts.labels == 1))
+                state.interactive_segmenter.add_point_prompts(
+                    frame_ids=t, points=prompts.points, point_labels=prompts.labels,
+                )
+                prompted_frames.append(t)
+
+            # Add the box prompts for this track.
+            z_boxes = (
+                np.unique(np.concatenate([box[:1, 0] for box in box_layer.data]).round().astype(int))
+                if box_layer.data else np.zeros(0, dtype=int)
+            )
+            for t in z_boxes:
+                boxes, _ = vutil.shape_layer_to_prompts(box_layer, shape=shape[1:], i=int(t), track_id=track_id)
+                for box in boxes:
+                    state.interactive_segmenter.add_box_prompts(frame_ids=int(t), boxes=[box])
+                if boxes:
+                    have_positive_cue = True
+                    prompted_frames.append(int(t))
+
+            if not prompted_frames:
+                return None
+            if not have_positive_cue:
+                show_info(
+                    "Negative prompts alone cannot track an object. "
+                    "Add a positive point, positive scribble or box prompt."
+                )
+                return None
+
+            # Forward-only propagation: start at the first prompted frame and never go to earlier
+            # frames. A stop annotation on the highest annotated frame bounds propagation above
+            # ('predict' enforces the z-range); a division bounds the mother at the division frame -
+            # its last frame (only reached when the mother is not segmented yet, see 'tracking_impl').
+            annotated = sorted(set(prompted_frames) | set(stop_frames))
+            stop_upper = annotated[-1] in stop_frames
+            z_lo = min(prompted_frames)
+            z_hi = max(prompted_frames) if stop_upper else shape[0] - 1
+            if division_frame is not None:  # The division frame is the mother's last frame.
+                z_hi = min(z_hi, division_frame)
+
+            if z_hi < z_lo:  # The division precedes the track's first frame: nothing to segment.
+                return None
+
+            pbar_signals.pbar_total.emit(
+                state.interactive_segmenter.get_progress_total((z_lo, z_hi))
+            )
+            seg = state.interactive_segmenter.predict(
+                update_progress=emit_progress,
+                early_stop_patience=None, z_range=(z_lo, z_hi),
+            )
+            return seg
+
+        def tracking_impl():
+            # Propagate the current track. Its propagated mask is labelled with its track id.
+            track_ids = [state.current_track_id]
+            point_layer = self._viewer.layers["point_prompts"]
+            seg_layer = self._viewer.layers["current_object"]
+            results = {}
+            for track_id in track_ids:
+                division_frame = _division_frame_for_track(point_layer, track_id)
+                # A division is a cleanup, not a (re)segmentation: when the mother is already
+                # segmented, its frames up to and including the division are correct (tracking is
+                # forward-only), so we just erase it AFTER the division frame and seed the daughters
+                # - no SAM2 re-run. Only when the mother is not segmented yet do we fall back to a
+                # bounded propagation so it still gets created up to the division frame.
+                segmented = division_frame is not None and bool(
+                    np.any(seg_layer.data[:division_frame + 1] == track_id)
+                )
+                if segmented:
+                    results[track_id] = {"truncate_from": division_frame + 1}
+                    _update_lineage(self._viewer, mother=track_id)
+                    continue
+
+                seg = propagate_track(track_id, division_frame)
+                if seg is not None:
+                    res = {"seg": seg}
+                    # A daughter must not occupy its mother's frames: clip its mask to start the
+                    # frame after the mother's division, no matter where the user prompted it.
+                    mother_division = _mother_division_frame(point_layer, state.lineage, track_id)
+                    if mother_division is not None:
+                        res["min_frame"] = mother_division + 1
+                    results[track_id] = res
+                # A division seeds two daughter tracks, so the user can continue from the division.
+                if division_frame is not None:
+                    _update_lineage(self._viewer, mother=track_id)
+            pbar_signals.pbar_stop.emit()
+            return results
+
+        def update_segmentation(results):
+            if not results:
+                print("No prompts were given for the track(s). The tracking will be skipped.")
+                return
+
+            layer = self._viewer.layers["current_object"]
+            for track_id, res in results.items():
+                if "truncate_from" in res:
+                    # Division cleanup: erase the mother after the division frame, leaving its
+                    # frames up to and including the division (already correct) untouched.
+                    f = res["truncate_from"]
+                    layer.data[f:][layer.data[f:] == track_id] = 0
+                else:
+                    # Clear the old mask for this track, then set the propagated one. A daughter is
+                    # clipped to start the frame after its mother's division (it did not exist yet).
+                    seg = res["seg"]
+                    min_frame = res.get("min_frame")
+                    if min_frame is not None:
+                        seg = seg.copy()
+                        seg[:min_frame] = 0
+                    layer.data[layer.data == track_id] = 0
+                    layer.data[seg == 1] = track_id
+            layer.refresh()
+
+        results = tracking_impl()
+        update_segmentation(results)
+
+
+#
+# The widgets for interactive segmentation and tracking.
+#
+
+
+class InteractiveSegmentationWidget(_WidgetBase):
+    """Interactive segmentation widget combining the prompt menu, segmentation and clearing.
+
+    This widget adapts to the data dimensionality and works with both SAM and SAM2 models.
+    For 3d data it exposes a single 'Apply to Volume' checkbox that governs both segmentation and
+    clearing (current slice vs. the whole volume / all slices), plus a batched toggle (SAM2 volume
+    mode) for multi-object segmentation.
+
+    Args:
+        viewer: The napari viewer.
+        ndim: The number of spatial dimensions of the data (2 or 3).
+        prompt_widget: The point prompt label menu created by `create_prompt_menu`.
+        parent: The parent Qt widget.
+    """
+
+    segment_requested = Signal()
+
+    def __init__(self, viewer, ndim, prompt_widget, parent=None):
+        super().__init__(parent=parent)
+        self._viewer = viewer
+        self._ndim = ndim
+        self._prompt_widget = prompt_widget
+        self.batched = False
+        self.apply_to_volume = False
+        self._segment_widget = None
+        self._propagation_settings = None
+        self._create_widget()
+
+    def _create_widget(self):
+        # Prompt label menu.
+        self.layout().addWidget(self._prompt_widget.native)
+
+        self.clear_button = QtWidgets.QPushButton("Clear Annotations [Shift + C]")
+        self.clear_button.setToolTip(get_tooltip("unified_segment", "clear_button"))
+        self.clear_button.clicked.connect(lambda: self.clear())
+
+        self.segment_button = QtWidgets.QPushButton("Segment Object [S]")
+        self.segment_button.setToolTip(get_tooltip("unified_segment", "segment_button"))
+        self.segment_button.clicked.connect(lambda: self.segment())
+
+        # Segmentation controls.
+        if self._ndim == 2:
+            # 2d: a 'batched' toggle above the side-by-side segment and clear buttons.
+            self.batched_checkbox = self._add_boolean_param(
+                "batched",
+                self.batched,
+                title="Batched",
+                tooltip=get_tooltip("unified_segment", "batched"),
+            )
+            self.layout().addWidget(self.batched_checkbox)
         else:
-            return self._run_volumetric_segmentation()
+            # 3d: use the volumetric segmentation widget purely as the segmentation engine.
+            # It does not show its own controls. The interactive widget owns the 'Apply to Volume'
+            # and 'Batched' checkboxes and drives the engine's attributes. The 'Apply to Volume'
+            # checkbox governs both segmentation (slice vs. volume) and clearing (current slice
+            # vs. all slices). It is kept hidden but parented so it does not float as a window.
+            self._segment_widget = UnifiedSegmentWidget(self._viewer, tracking=False)
+            self._segment_widget.setVisible(False)
+            self.layout().addWidget(self._segment_widget)
+
+            # Batched multi-object segmentation. Works for both a single slice and the whole
+            # volume, so it is always available.
+            self.batched_checkbox = self._add_boolean_param(
+                "batched",
+                self.batched,
+                title="Batched",
+                tooltip=get_tooltip("unified_segment", "batched"),
+            )
+            self.batched_checkbox.stateChanged.connect(self._on_batched_changed)
+
+            self.apply_to_volume_checkbox = self._add_boolean_param(
+                "apply_to_volume",
+                self.apply_to_volume,
+                title="Apply to Volume",
+                tooltip=get_tooltip("unified_segment", "apply_to_volume"),
+            )
+            self.apply_to_volume_checkbox.stateChanged.connect(self._on_apply_to_volume_changed)
+
+            # Place the two checkboxes side by side: 'Batched' on the left, 'Apply to Volume'
+            # pushed to the right.
+            checkbox_row = QtWidgets.QHBoxLayout()
+            checkbox_row.addWidget(self.batched_checkbox)
+            checkbox_row.addStretch()
+            checkbox_row.addWidget(self.apply_to_volume_checkbox)
+            self.layout().addLayout(checkbox_row)
+
+            # SAM2 volume-mode propagation controls (early stopping + z-range). Hidden until the
+            # user enables 'Apply to Volume' with a SAM2 model. The controls drive the engine.
+            self._propagation_settings = self._create_propagation_settings()
+            self._propagation_settings.setVisible(False)
+            self.layout().addWidget(self._propagation_settings)
+
+        # Place the segment and clear buttons side by side.
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addWidget(self.segment_button)
+        button_row.addWidget(self.clear_button)
+        self.layout().addLayout(button_row)
+
+        # Scribbles describe corrections for one object and cannot be assigned unambiguously to
+        # separate objects in batched mode. Keep the control in sync as scribbles are added or
+        # removed from the shared prompt layer.
+        self._viewer.layers["prompts"].events.data.connect(self._update_batched_visibility)
+
+        # Hide the batched control if the (already loaded) embeddings are tiled.
+        self._update_batched_visibility()
+
+    def _update_batched_visibility(self, event=None):
+        """Disable batched segmentation while one or more scribble prompts are present."""
+        super()._update_batched_visibility()
+
+        prompt_layer = self._viewer.layers["prompts"]
+        have_scribbles = any(
+            shape_type in vutil.SCRIBBLE_SHAPE_TYPES for shape_type in prompt_layer.shape_type
+        )
+        if have_scribbles and self.batched_checkbox.isChecked():
+            self.batched_checkbox.setChecked(False)
+
+        self.batched_checkbox.setEnabled(not have_scribbles)
+        tooltip_key = "batched_scribble_disabled" if have_scribbles else "batched"
+        self.batched_checkbox.setToolTip(get_tooltip("unified_segment", tooltip_key))
+
+    def _create_propagation_settings(self):
+        """Build the SAM2 volume-mode propagation controls (early stopping + z-range slider).
+
+        The controls live on the visible interactive widget and write their values into the hidden
+        'UnifiedSegmentWidget' engine, which reads 'early_stop_patience' and 'z_range' at run time.
+        """
+        container = QtWidgets.QWidget()
+        container.setLayout(QtWidgets.QVBoxLayout())
+
+        # Stop after this many consecutive empty slices (0 disables early stopping).
+        self.early_stop_patience = 2
+        self.early_stop_patience_param, layout = self._add_int_param(
+            "early_stop_patience", self.early_stop_patience, min_val=0, max_val=100,
+            title="Stop after empty slices", tooltip=get_tooltip("segmentnd", "early_stop_patience"),
+        )
+        self.early_stop_patience_param.valueChanged.connect(self._sync_propagation_settings)
+        container.layout().addLayout(layout)
+
+        # Full-volume propagation (default) vs. a restricted z-range.
+        self.use_full_z_range = True
+        self.full_z_range_checkbox = self._add_boolean_param(
+            "use_full_z_range", self.use_full_z_range,
+            title="Propagate through all slices",
+            tooltip=get_tooltip("segmentnd", "use_full_z_range"),
+        )
+        container.layout().addWidget(self.full_z_range_checkbox)
+
+        # The labeled range slider collapses to zero height when sharing a row with a text label,
+        # so it gets its own full-width row with the caption above it and a minimum height.
+        z_range_label = QtWidgets.QLabel("Propagation z-range")
+        z_range_label.setToolTip(get_tooltip("segmentnd", "z_range"))
+        container.layout().addWidget(z_range_label)
+        self.z_range_slider = QLabeledRangeSlider(Qt.Orientation.Horizontal)
+        self.z_range_slider.setRange(0, 1)
+        self.z_range_slider.setValue((0, 1))
+        self.z_range_slider.setToolTip(get_tooltip("segmentnd", "z_range"))
+        self.z_range_slider.setEnabled(not self.use_full_z_range)
+        self.z_range_slider.setMinimumHeight(40)
+        self.z_range_slider.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        container.layout().addWidget(self.z_range_slider)
+
+        self.full_z_range_checkbox.stateChanged.connect(self._on_full_z_range_changed)
+        self.z_range_slider.valueChanged.connect(self._sync_propagation_settings)
+
+        return _make_collapsible(
+            container, title="Volume Propagation Settings", tooltip=get_tooltip("segmentnd", "settings"),
+        )
+
+    def _on_full_z_range_changed(self, state):
+        """Enable/disable the z-range slider and push the change to the engine."""
+        self.use_full_z_range = bool(state)
+        self.z_range_slider.setEnabled(not self.use_full_z_range)
+        self._sync_propagation_settings()
+
+    def _update_z_range_slider(self):
+        """Match the z-range slider extent to the depth of the loaded volume."""
+        state = AnnotatorState()
+        if state.image_shape is None:
+            return
+        z_max = int(state.image_shape[0]) - 1
+        if z_max < 0:
+            return
+        lo, hi = self.z_range_slider.value()
+        self.z_range_slider.setRange(0, z_max)
+        if not self.use_full_z_range and hi <= z_max and lo < hi:
+            self.z_range_slider.setValue((lo, hi))
+        else:
+            self.z_range_slider.setValue((0, z_max))
+
+    def _sync_propagation_settings(self, *args):
+        """Write the propagation controls into the hidden segmentation engine."""
+        if self._segment_widget is None:
+            return
+        self._segment_widget.early_stop_patience = int(self.early_stop_patience_param.value())
+        if bool(self.use_full_z_range):
+            self._segment_widget.z_range = None
+        else:
+            self._segment_widget.z_range = tuple(int(v) for v in self.z_range_slider.value())
+
+    def _on_apply_to_volume_changed(self, state):
+        """Sync the shared volume mode to the segmentation engine."""
+        self.apply_to_volume = bool(state)
+        self._segment_widget.apply_to_volume = self.apply_to_volume
+
+        # Show the propagation controls only in volume mode with a loaded model. Then fit the slider to the volume.
+        if self._propagation_settings is not None:
+            show = self.apply_to_volume and AnnotatorState().predictor is not None
+            self._propagation_settings.setVisible(show)
+            if show:
+                self._update_z_range_slider()
+                self._sync_propagation_settings()
+
+    def _on_batched_changed(self, state):
+        """Sync the batched mode to the segmentation engine."""
+        self.batched = bool(state)
+        self._segment_widget.batched = self.batched
+
+    def segment(self, viewer=None):
+        """Run interactive segmentation for the current prompts."""
+        self.segment_requested.emit()
+        if self._ndim == 2:
+            _segment_object_2d(self._viewer, batched=bool(self.batched))
+        else:
+            self._sync_propagation_settings()
+            self._segment_widget(self._viewer)
+
+    def clear(self, viewer=None):
+        """Clear the current annotations."""
+        if self._segment_widget is not None:
+            if self._segment_widget.is_running:
+                show_info("The segmentation is still running. Wait until it finishes.")
+                return
+            self._segment_widget.reset_last_volume_run()
+
+        if self._ndim == 2 or self.apply_to_volume:
+            vutil.clear_annotations(self._viewer)
+        else:
+            i = vutil.current_slice(self._viewer, self._viewer.layers["current_object"])
+            vutil.clear_annotations_slice(self._viewer, i=i)
+
+        # If this is a SAM2 promptable segmentation workflow,
+        # reset the prompts after the user clears the annotations.
+        state = AnnotatorState()
+        if state.interactive_segmenter is not None:
+            state.interactive_segmenter.reset_predictor()
+
+        gc.collect()
+
+
+class InteractiveTrackingWidget(_WidgetBase):
+    """Merged interactive widget for the tracking annotator.
+
+    Combines the prompt label menu, the track id / track state menus and the segment / clear
+    controls into a single container, mirroring the segmentation annotator's
+    'InteractiveSegmentationWidget'. The 'Apply to All Frames' checkbox governs both segmentation
+    (current frame vs. propagating across the whole video) and clearing (current frame vs. all
+    frames). A hidden 'UnifiedSegmentWidget' is used purely as the segmentation engine.
+
+    Args:
+        viewer: The napari viewer.
+        tracking_widget: The combined prompt label / track id / track state menu created by
+            'create_tracking_menu'.
+        parent: The parent Qt widget.
+    """
+
+    segment_requested = Signal()
+
+    def __init__(self, viewer, tracking_widget, parent=None):
+        super().__init__(parent=parent)
+        self._viewer = viewer
+        self._tracking_widget = tracking_widget
+        self.apply_to_volume = False
+        self._segment_widget = None
+        self._create_widget()
+
+    def _create_widget(self):
+        # The combined prompt label / track id / track state menus (one container so the three
+        # dropdowns share an aligned label column). Lay each row out as label-left, box-right.
+        self.layout().addWidget(self._tracking_widget.native)
+        self._align_menu_rows()
+
+        # Hidden segmentation engine: owns the per-frame and propagation logic, driven via its
+        # 'apply_to_volume' attribute. Its own controls are not shown.
+        self._segment_widget = UnifiedSegmentWidget(self._viewer, tracking=True)
+        self._segment_widget.setVisible(False)
+        self.layout().addWidget(self._segment_widget)
+
+        # 'Apply to All Frames' toggles between segmenting the current frame and propagating the track.
+        self.apply_to_volume_checkbox = self._add_boolean_param(
+            "apply_to_volume", self.apply_to_volume, title="Apply to All Frames",
+            tooltip=get_tooltip("unified_segment", "apply_to_volume"),
+        )
+        self.apply_to_volume_checkbox.stateChanged.connect(self._on_apply_to_volume_changed)
+        self.layout().addWidget(self.apply_to_volume_checkbox)
+
+        # 'Segment Object' / 'Clear Annotations' side by side.
+        self.segment_button = QtWidgets.QPushButton("Segment Object [S]")
+        self.segment_button.setToolTip(get_tooltip("unified_segment", "segment_button"))
+        self.segment_button.clicked.connect(lambda: self.segment())
+        self.clear_button = QtWidgets.QPushButton("Clear Annotations [Shift + C]")
+        self.clear_button.setToolTip(get_tooltip("unified_segment", "clear_button"))
+        self.clear_button.clicked.connect(lambda: self.clear())
+        button_row = QtWidgets.QHBoxLayout()
+        button_row.addWidget(self.segment_button)
+        button_row.addWidget(self.clear_button)
+        self.layout().addLayout(button_row)
+
+    def _align_menu_rows(self):
+        # Each menu row is a QHBoxLayout of [QLabel, QComboBox]. Insert a stretch between them so the
+        # label stays left and the (fixed-width) combo box is right-aligned. Idempotent, since the
+        # menu container persists across layout rebuilds.
+        container_layout = self._tracking_widget.native.layout()
+        for i in range(container_layout.count()):
+            row = container_layout.itemAt(i).widget()
+            row_layout = None if row is None else row.layout()
+            if row_layout is None or row_layout.count() < 2:
+                continue
+            combo = row_layout.itemAt(row_layout.count() - 1).widget()
+            if combo is not None:
+                combo.setFixedWidth(300)
+            if row_layout.count() < 3:  # No stretch inserted yet.
+                row_layout.insertStretch(1)
+
+    def _on_apply_to_volume_changed(self, state):
+        self.apply_to_volume = bool(state)
+        self._segment_widget.apply_to_volume = self.apply_to_volume
+
+    def segment(self, viewer=None):
+        """Run interactive tracking segmentation for the current prompts."""
+        self.segment_requested.emit()
+        self._segment_widget(self._viewer)
+
+    def clear(self, viewer=None):
+        """Clear the annotations: the current frame, or all frames in 'Apply to All Frames' mode."""
+        if self._segment_widget.is_running:
+            show_info("The segmentation is still running. Wait until it finishes.")
+            return
+
+        if self.apply_to_volume:
+            _reset_tracking_state(self._viewer)
+            vutil.clear_annotations(self._viewer)
+        else:
+            i = vutil.current_slice(self._viewer, self._viewer.layers["current_object"])
+            vutil.clear_annotations_slice(self._viewer, i=i)
+
+        state = AnnotatorState()
+        if state.interactive_segmenter is not None:
+            state.interactive_segmenter.reset_predictor()
+        gc.collect()
 
 
 #
@@ -1671,430 +3783,1052 @@ class SegmentNDWidget(_WidgetBase):
 #
 
 
-# Messy amg state handling, would be good to refactor this properly at some point.
-def _handle_amg_state(state, i, pbar_init, pbar_update):
-    if state.amg is None:
-        is_tiled = state.image_embeddings["input_size"] is None
-        state.amg = instance_segmentation.get_instance_segmentation_generator(
-            state.predictor, is_tiled=is_tiled, decoder=state.decoder
+# Every automatic segmentation mode runs off the UniSAM2 decoder predictions, so a model without a
+# decoder has no automatic segmentation at all.
+NO_DECODER_MESSAGE = (
+    "Automatic segmentation requires a UniSAM2 model with a decoder. Load one via the model dropdown "
+    "or the 'custom weights' path in the embedding widget. A model trained for interactive segmentation "
+    "only has no decoder."
+)
+
+# APG prompts the SAM2 video predictor with every candidate, which needs an accelerator to finish in
+# a reasonable time. This applies to a whole volume and to tracking (which prompts per frame); plain
+# 2d APG on an image or a single slice has no such restriction and runs on the CPU like the other
+# modes. This is an annotator-level restriction only - 'micro_sam.v2.automatic_prompt_generation' and
+# the CLI still run wherever they are pointed.
+APG_ACCELERATORS = ("cuda", "mps")
+
+
+def _apg_runs_on_this_device(state):
+    """Whether APG's video-predictor path can run on the device the model is loaded on.
+
+    Args:
+        state: The annotator state, holding the loaded decoder.
+
+    Returns:
+        Whether the device is one APG's volume / tracking path supports.
+    """
+    return util.device_type(next(state.decoder.parameters()).device) in APG_ACCELERATORS
+
+
+def _apg_error(state, volumetric, is_tracking=False):
+    """Why APG cannot run in the annotator for this data, if it cannot.
+
+    The device rule is per data kind, not per run: volumetric data and a timeseries go through the
+    video predictor, so APG is unavailable for the whole widget on the CPU - a single slice or frame
+    of them included. A plain 2d image prompts the image predictor and runs anywhere. Tiled embeddings
+    are no restriction, because `TiledAutomaticPromptGenerator` segments a tiled volume block by block.
+
+    Args:
+        state: The annotator state, holding the loaded decoder.
+        volumetric: Whether the widget's data is volumetric (a volume or a timeseries).
+        is_tracking: Whether this is the automatic tracking widget.
+
+    Returns:
+        The error message, or None if the APG run is supported.
+    """
+    if (volumetric or is_tracking) and not _apg_runs_on_this_device(state):
+        data_kind = "tracking" if is_tracking else "volumetric data"
+        return (
+            f"APG is not available for {data_kind} on the CPU, since it prompts the video predictor "
+            "for every candidate. Use the 'sparse' or 'dense' mode instead."
         )
-
-    shape = state.image_shape
-
-    # Further optimization: refactor parts of this so that we can also use it in the automatic 3d segmentation fucnction
-    # For 3D we store the amg state in a dict and check if it is computed already.
-    if state.amg_state is not None:
-        assert i is not None
-        if i in state.amg_state:
-            amg_state_i = state.amg_state[i]
-            state.amg.set_state(amg_state_i)
-
-        else:
-            dummy_image = np.zeros(shape[-2:], dtype="uint8")
-            state.amg.initialize(
-                dummy_image, image_embeddings=state.image_embeddings, i=i,
-                verbose=pbar_init is not None, pbar_init=pbar_init, pbar_update=pbar_update,
-            )
-            amg_state_i = state.amg.get_state()
-            state.amg_state[i] = amg_state_i
-
-            cache_folder = state.amg_state.get("cache_folder", None)
-            if cache_folder is not None:
-                cache_path = os.path.join(cache_folder, f"state-{i}.pkl")
-                with open(cache_path, "wb") as f:
-                    pickle.dump(amg_state_i, f)
-
-            cache_path = state.amg_state.get("cache_path", None)
-            if cache_path is not None:
-                save_key = f"state-{i}"
-                with h5py.File(cache_path, "a") as f:
-                    g = f.create_group(save_key)
-                    g.create_dataset("foreground", data=amg_state_i["foreground"], compression="gzip")
-                    g.create_dataset("boundary_distances", data=amg_state_i["boundary_distances"], compression="gzip")
-                    g.create_dataset("center_distances", data=amg_state_i["center_distances"], compression="gzip")
-
-    # Otherwise (2d segmentation) we just check if the amg is initialized or not.
-    elif not state.amg.is_initialized:
-        assert i is None
-        # We don't need to pass the actual image data here, since the embeddings are passed.
-        # (The image data is only used by the amg to compute image embeddings, so not needed here.)
-        dummy_image = np.zeros(shape, dtype="uint8")
-        state.amg.initialize(
-            dummy_image, image_embeddings=state.image_embeddings,
-            verbose=pbar_init is not None, pbar_init=pbar_init, pbar_update=pbar_update
-        )
-
-
-def _instance_segmentation_impl(min_object_size, i=None, pbar_init=None, pbar_update=None, **kwargs):
-    state = AnnotatorState()
-    _handle_amg_state(state, i, pbar_init, pbar_update)
-    seg = state.amg.generate(**kwargs)
-    assert isinstance(seg, np.ndarray)
-    return seg
+    return None
 
 
 class AutoSegmentWidget(_WidgetBase):
+    """Automatic segmentation widget for SAM2 with the APG, sparse and dense modes.
+
+    Subclasses set `_is_tracking = True` to hide the z-tiling controls (tracking segments per frame
+    in 2d, so z-tiling does not apply).
+
+    All modes need a UniSAM2 decoder. Automatic prompt generation (APG) derives point prompts from
+    the decoder predictions and applies them to the interactive branch; it is the default on CUDA
+    and MPS. The sparse mode (AIS) is the CPU default. Sparse and dense modes post-process the
+    decoder predictions directly. Without a decoder there is no automatic segmentation: the run
+    button is disabled until a model that has one is loaded.
+
+    Disk-backed caching of the state is opted into via the 'cache automatic segmentation state'
+    checkbox in the embedding settings (read here through the embedding widget); when off, the state
+    is kept in memory only.
+
+    Args:
+        viewer: The napari viewer.
+        with_decoder: Whether the loaded model has a UniSAM2 decoder for automatic segmentation.
+        volumetric: Whether the data is volumetric (3d).
+        parent: The parent Qt widget.
+    """
+
+    segmentation_finished = Signal()
+
+    _is_tracking = False
+    MODES = ("apg", "sparse", "dense")
+    # The (section, name) of the run button's tooltip; the tracking subclass has its own.
+    _RUN_TOOLTIP = ("autosegment", "run_button")
+
     def __init__(self, viewer, with_decoder, volumetric, parent=None):
         super().__init__(parent)
-
         self._viewer = viewer
         self.with_decoder = with_decoder
         self.volumetric = volumetric
+        # Every mode needs a decoder. APG additionally needs an accelerator for volumetric data and
+        # for tracking, so it is dropped from the list there - see '_available_modes'.
+        self.mode = self._default_mode()
+        self.settings = None
+        # z block / halo for 3d decoder inference: the volume is decoded in z chunks to bound memory.
+        # These only matter for volumetric decoder modes. Set 'tile_z' >= the slice count for no z-tiling.
+        from micro_sam.v2.util import DEFAULT_TILE_Z, DEFAULT_HALO_Z
+        self.tile_z, self.halo_z = DEFAULT_TILE_Z, DEFAULT_HALO_Z
+        # Cache of the (initialized) segmentation generator so changing post-processing parameters
+        # only re-runs 'generate', not the expensive UniSAM2 inference. Keyed by the inputs.
+        self._segmenter = None
+        self._segmenter_key = None
+        # The decoder prediction the generator is built from. It does not depend on the mode, so it
+        # outlives the generator and is shared by 'sparse', 'dense' and 'apg'.
+        self._decoder_state = None
+        self._decoder_state_key = None
+        self._decoder_state_save_path = None
+        # The APG proposals, so that changing only the merge parameters skips the prompting.
+        self._proposals = None
+        self._proposals_key = None
         self._create_widget()
 
-    def _create_widget(self):
-        # Add the switch for segmenting the slice vs. the volume if we have a volume.
-        if self.volumetric:
-            self.layout().addWidget(self._create_volumetric_switch())
-
-        # Add the nested settings widget.
-        self.settings = self._create_settings()
-        self.layout().addWidget(self.settings)
-
-        # Add the run button.
-        self.run_button = QtWidgets.QPushButton("Automatic Segmentation")
-        self.run_button.clicked.connect(self.__call__)
-        self.run_button.setToolTip(get_tooltip("autosegment", "run_button"))
-        self.layout().addWidget(self.run_button)
-
-    def _reset_segmentation_mode(self, with_decoder):
-        # If we already have the same segmentation mode we don't need to do anything.
-        if with_decoder == self.with_decoder:
-            return
-
-        # Otherwise we change the value of with_decoder.
-        self.with_decoder = with_decoder
-
-        # Then we clear the whole widget.
-        layout = self.layout()
-        while layout.count():
-            child = layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
-        # And then we reset it.
-        self._create_widget()
-
-    def _create_volumetric_switch(self):
-        self.apply_to_volume = False
-        return self._add_boolean_param(
-            "apply_to_volume", self.apply_to_volume, title="Apply to Volume",
-            tooltip=get_tooltip("autosegment", "apply_to_volume")
-        )
-
-    def _add_common_settings(self, settings):
-        # Create the UI element for min object size.
-        self.min_object_size = 100
-        self.min_object_size_param, layout = self._add_int_param(
-            "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4),
-            tooltip=get_tooltip("autosegment", "min_object_size")
-        )
-        settings.layout().addLayout(layout)
-
-        # Add extra settings for volumetric segmentation: gap_closing and min_extent.
-        if self.volumetric:
-            self.gap_closing = 2
-            self.gap_closing_param, layout = self._add_int_param(
-                "gap_closing", self.gap_closing, min_val=0, max_val=10,
-                tooltip=get_tooltip("autosegment", "gap_closing")
-                )
-            settings.layout().addLayout(layout)
-
-            self.min_extent = 2
-            self.min_extent_param, layout = self._add_int_param(
-                "min_extent", self.min_extent, min_val=0, max_val=10,
-                tooltip=get_tooltip("autosegment", "min_extent")
-                )
-            settings.layout().addLayout(layout)
-
-    def _ais_settings(self):
-        settings = QtWidgets.QWidget()
-        settings.setLayout(QtWidgets.QVBoxLayout())
-
-        # Create the UI element for center_distance_threshold.
-        self.center_distance_thresh = 0.5
-        self.center_distance_thresh_param, layout = self._add_float_param(
-            "center_distance_thresh", self.center_distance_thresh,
-            tooltip=get_tooltip("autosegment", "center_distance_thresh")
-        )
-        settings.layout().addLayout(layout)
-
-        # Create the UI element for boundary_distance_threshold.
-        self.boundary_distance_thresh = 0.5
-        self.boundary_distance_thresh_param, layout = self._add_float_param(
-            "boundary_distance_thresh", self.boundary_distance_thresh,
-            tooltip=get_tooltip("autosegment", "boundary_distance_thresh")
-        )
-        settings.layout().addLayout(layout)
-
-        # Add min_object_size.
-        self._add_common_settings(settings)
-
-        return settings
-
-    def _amg_settings(self):
-        settings = QtWidgets.QWidget()
-        settings.setLayout(QtWidgets.QVBoxLayout())
-
-        # Create the UI element for pred_iou_thresh.
-        self.pred_iou_thresh = 0.88
-        self.pred_iou_thresh_param, layout = self._add_float_param(
-            "pred_iou_thresh", self.pred_iou_thresh,
-            tooltip=get_tooltip("autosegment", "pred_iou_thresh")
-            )
-        settings.layout().addLayout(layout)
-
-        # Create the UI element for stability score thresh.
-        self.stability_score_thresh = 0.95
-        self.stability_score_thresh_param, layout = self._add_float_param(
-            "stability_score_thresh", self.stability_score_thresh,
-            tooltip=get_tooltip("autosegment", "stability_score_thresh")
-        )
-        settings.layout().addLayout(layout)
-
-        # Create the UI element for box nms thresh.
-        self.box_nms_thresh = 0.7
-        self.box_nms_thresh_param, layout = self._add_float_param(
-            "box_nms_thresh", self.box_nms_thresh,
-            tooltip=get_tooltip("autosegment", "box_nms_thresh")
-            )
-        settings.layout().addLayout(layout)
-
-        # Add min_object_size.
-        self._add_common_settings(settings)
-
-        return settings
-
-    def _create_settings(self):
-        setting_values = self._ais_settings() if self.with_decoder else self._amg_settings()
-        settings = _make_collapsible(setting_values, title="Automatic Segmentation Settings")
-        return settings
-
-    def _empty_segmentation_warning(self):
-        msg = "The automatic segmentation result does not contain any objects."
-        msg += "Setting a smaller value for 'min_object_size' may help."
-        if not self.with_decoder:
-            msg += "Setting smaller values for 'pred_iou_thresh' and 'stability_score_thresh' may also help."
-        val_results = {"message_type": "error", "message": msg}
-        return _generate_message(val_results["message_type"], val_results["message"])
-
-    def _run_segmentation_2d(self, kwargs, i=None):
-        pbar, pbar_signals = _create_pbar_for_threadworker()
-
-        # @thread_worker
-        def seg_impl():
-            def pbar_init(total, description):
-                pbar_signals.pbar_total.emit(total)
-                pbar_signals.pbar_description.emit(description)
-
-            seg = _instance_segmentation_impl(
-                self.min_object_size, i=i, pbar_init=pbar_init,
-                pbar_update=lambda update: pbar_signals.pbar_update.emit(update),
-                **kwargs
-            )
-            pbar_signals.pbar_stop.emit()
-            return seg
-
-        def update_segmentation(seg):
-            is_empty = seg.max() == 0
-            if is_empty:
-                self._empty_segmentation_warning()
-
-            if i is None:
-                self._viewer.layers["auto_segmentation"].data = seg
-            else:
-                self._viewer.layers["auto_segmentation"].data[i] = seg
-            self._viewer.layers["auto_segmentation"].refresh()
-
-        # Validate all layers.
-        _validate_layers(self._viewer, automatic_segmentation=True)
-
-        seg = seg_impl()
-        update_segmentation(seg)
-        # worker = seg_impl()
-        # worker.returned.connect(update_segmentation)
-        # worker.start()
-        # return worker
-
-    # We refuse to run 3D segmentation with the AMG unless we have a GPU or all embeddings
-    # are precomputed. Otherwise this would take too long.
-    def _allow_segment_3d(self):
-        if self.with_decoder:
+    def _apg_is_available(self):
+        # A plain 2d image prompts the image predictor and runs anywhere. Volumetric data and a
+        # timeseries go through the video predictor, which needs an accelerator. Before the model is
+        # loaded ('Compute Embeddings') the device is not known yet, so APG is offered and the sync
+        # afterwards ('_reset_segmentation_mode') settles it.
+        if not (self.volumetric or self._is_tracking):
             return True
         state = AnnotatorState()
-        predictor = state.predictor
-        if str(predictor.device) == "cpu" or str(predictor.device) == "mps":
-            n_slices = self._viewer.layers["auto_segmentation"].data.shape[0]
-            embeddings_are_precomputed = (state.amg_state is not None) and (len(state.amg_state) > n_slices)
-            if not embeddings_are_precomputed:
-                return False
-        return True
+        return state.decoder is None or _apg_runs_on_this_device(state)
 
-    def _run_segmentation_3d(self, kwargs):
-        allow_segment_3d = self._allow_segment_3d()
-        if not allow_segment_3d:
-            val_results = {
-                "message_type": "error",
-                "message": "Volumetric segmentation with AMG is only supported if you have a GPU."
-            }
-            return _generate_message(val_results["message_type"], val_results["message"])
+    def _available_modes(self):
+        """The modes offered for this widget's data on the loaded device.
 
-        pbar, pbar_signals = _create_pbar_for_threadworker()
+        Returns:
+            The mode names, in dropdown order. The first is the default.
+        """
+        from micro_sam._model_settings import DEFAULT_POSTPROCESSING
+        from micro_sam.v2.util import DEFAULT_MODEL, parameter_family
 
-        # @thread_worker
-        def seg_impl():
-            segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
-            offset = 0
+        # Only a model with dense defaults segments neurites, e.g. not the EM organelle models.
+        model_type = getattr(self, "model_type", None) or DEFAULT_MODEL
+        has_dense = "dense" in DEFAULT_POSTPROCESSING.get(parameter_family(model_type), {}).get(model_type[:6], {})
+        modes = self.MODES if has_dense else tuple(mode for mode in self.MODES if mode != "dense")
+        if not self._apg_is_available():
+            return tuple(mode for mode in modes if mode != "apg")
 
-            def pbar_init(total, description):
-                pbar_signals.pbar_total.emit(total)
-                pbar_signals.pbar_description.emit(description)
+        # Tiled APG can take hours on CPU. Prefer the direct decoder post-processing there,
+        # while retaining APG as an explicit choice for 2d images. Before model loading, use
+        # the available hardware; afterwards the decoder's device is authoritative, including
+        # when the user explicitly chose CPU on a machine with an accelerator.
+        state = AnnotatorState()
+        device = util.get_device() if state.decoder is None else next(state.decoder.parameters()).device
+        if util.device_type(device) not in APG_ACCELERATORS:
+            return ("sparse", *(mode for mode in modes if mode != "sparse"))
+        return modes
 
-            pbar_init(segmentation.shape[0], "Segment volume")
+    def _default_mode(self):
+        return self._available_modes()[0]
 
-            # Further optimization: parallelize if state is precomputed for all slices
-            for i in range(segmentation.shape[0]):
-                seg = _instance_segmentation_impl(self.min_object_size, i=i, **kwargs)
-                seg_max = seg.max()
-                if seg_max == 0:
-                    continue
-                seg[seg != 0] += offset
-                offset = seg_max + offset
-                segmentation[i] = seg
-                pbar_signals.pbar_update.emit(1)
+    def _mode_choices(self):
+        return tuple(self.mode_dropdown.itemText(i) for i in range(self.mode_dropdown.count()))
 
-            pbar_signals.pbar_reset.emit()
-            segmentation = merge_instance_segmentation_3d(
-                segmentation, beta=0.5,  gap_closing=self.gap_closing, min_z_extent=self.min_extent,
-                verbose=True, pbar_init=pbar_init, pbar_update=lambda update: pbar_signals.pbar_update.emit(1),
+    def _create_widget(self):
+        # Top row: the mode dropdown on the left, the 'Apply to Volume' switch (3d only) on the right.
+        top_row = QtWidgets.QHBoxLayout()
+
+        self.mode_dropdown, mode_layout = self._add_choice_param(
+            "mode",
+            self.mode,
+            list(self._available_modes()),
+            title="mode:",
+            update=self._on_mode_changed,
+            tooltip=get_tooltip("autosegment", "mode"),
+        )
+        # Keep the label at its text width so that the dropdown starts right after it and covers
+        # the rest of the row.
+        mode_layout.setStretch(0, 0)
+        mode_layout.setStretch(1, 1)
+        top_row.addLayout(mode_layout)
+
+        if self.volumetric:
+            self.apply_to_volume = False
+            self.apply_to_volume_checkbox = self._add_boolean_param(
+                "apply_to_volume",
+                self.apply_to_volume,
+                title="Apply to Volume",
+                tooltip=get_tooltip("autosegment", "apply_to_volume"),
             )
-            pbar_signals.pbar_stop.emit()
-            return segmentation
+            # The handler reads 'apply_to_volume', so it must run after the checkbox updates it.
+            self.apply_to_volume_checkbox.stateChanged.connect(self._on_apply_to_volume_changed)
+            top_row.addWidget(self.apply_to_volume_checkbox)
 
-        def update_segmentation(segmentation):
-            is_empty = segmentation.max() == 0
-            if is_empty:
-                self._empty_segmentation_warning()
-            self._viewer.layers["auto_segmentation"].data = segmentation
-            self._viewer.layers["auto_segmentation"].refresh()
+        self.layout().addLayout(top_row)
 
-        seg = seg_impl()
-        update_segmentation(seg)
-        # worker = seg_impl()
-        # worker.returned.connect(update_segmentation)
-        # worker.start()
-        # return worker
+        # Advanced post-processing settings, shown inline and refreshed on mode change.
+        self.settings = self._make_settings_widget()
+        self.layout().addWidget(self.settings)
+
+        # Run button. It is only active with a decoder, since every mode needs one.
+        self.run_button = QtWidgets.QPushButton("Automatic Segmentation")
+        self.run_button.clicked.connect(self.__call__)
+        self.layout().addWidget(self.run_button)
+        self._update_run_button()
+
+    def _update_run_button(self):
+        # Without a decoder none of the modes can run, so the button is disabled and says why.
+        self.run_button.setEnabled(self.with_decoder)
+        self.run_button.setToolTip(
+            get_tooltip(*self._RUN_TOOLTIP) if self.with_decoder else NO_DECODER_MESSAGE
+        )
+
+    def _reset_segmentation_mode(self, with_decoder, model_type=None):
+        # If neither the decoder availability, the offered modes nor the model changed there is nothing
+        # to rebuild. The device can change the offered modes (volumes/tracking) or their order
+        # (the CPU default is sparse, even for 2d), triggering a reset to the new default. The model
+        # selects the default parameters, see 'default_postprocessing' and 'default_prompt_generation'.
+        modes = self._available_modes()
+        model_changed = model_type is not None and model_type != getattr(self, "model_type", None)
+        if with_decoder == self.with_decoder and modes == self._mode_choices() and not model_changed:
+            return
+        if model_type is not None:
+            self.model_type = model_type
+            modes = self._available_modes()
+        self.with_decoder = with_decoder
+        self._update_run_button()
+
+        # Rebuild the list and go back to the default mode for the newly loaded model.
+        self.mode_dropdown.blockSignals(True)
+        self.mode_dropdown.clear()
+        self.mode_dropdown.addItems(list(modes))
+        self.mode_dropdown.setCurrentText(self._default_mode())
+        self.mode_dropdown.blockSignals(False)
+
+        # Drop the cached segmenter and the decoder prediction, since the loaded model (and so its
+        # predictions) changed, and refresh the settings panel to match the new default mode.
+        self._release_segmenter()
+        self._drop_decoder_state()
+        self._on_mode_changed()
+
+    def _on_mode_changed(self, index=None):
+        self.mode = self.mode_dropdown.currentText()
+        new_settings = self._make_settings_widget()
+        self.layout().replaceWidget(self.settings, new_settings)
+        self.settings.deleteLater()
+        self.settings = new_settings
+
+    def _make_settings_widget(self):
+        # All hyperparameters (except mode and apply-to-volume) live in one collapsible
+        # 'Advanced Settings' panel. The z block / halo (3d decoder modes) sit at the very top.
+        advanced = QtWidgets.QWidget()
+        advanced.setLayout(QtWidgets.QVBoxLayout())
+        advanced.layout().setContentsMargins(0, 0, 0, 0)
+        self._add_z_tiling_params(advanced)
+        if self.mode == "apg":
+            self._apg_settings(advanced)
+        elif self.mode == "dense":
+            self._dense_settings(advanced)
+        else:
+            self._sparse_settings(advanced)
+
+        settings = QtWidgets.QWidget()
+        settings.setLayout(QtWidgets.QVBoxLayout())
+        settings.layout().setContentsMargins(0, 0, 0, 0)
+        advanced_tooltip = get_tooltip("autosegment", "advanced_settings")
+        settings.layout().addWidget(
+            _make_collapsible(advanced, title="Advanced Settings", tooltip=advanced_tooltip)
+        )
+        return settings
+
+    def _add_density_threshold(self, settings):
+        self.density_threshold_param, layout = self._add_float_param(
+            "density_threshold", self.density_threshold, min_val=0.0, max_val=100.0, step=1.0,
+            tooltip=get_tooltip("autosegment", "density_threshold"),
+        )
+        settings.layout().addLayout(layout)
+
+    def _add_z_tiling_params(self, settings):
+        # 3d decoder inference decodes the volume in z blocks (with a halo for context) to bound
+        # memory. 'tile_z' and 'halo_z' sit side by side at the top of the settings. Only for
+        # volumetric segmentation - not 2d and not tracking (which segments each frame in 2d).
+        if not self.volumetric or self._is_tracking:
+            return
+        row = QtWidgets.QHBoxLayout()
+        self.tile_z_param, _ = self._add_int_param(
+            "tile_z", self.tile_z, min_val=1, max_val=512, title="tile_z:",
+            tooltip=get_tooltip("autosegment", "tile_z"), layout=row,
+        )
+        self.halo_z_param, _ = self._add_int_param(
+            "halo_z", self.halo_z, min_val=0, max_val=128, title="overlap_z:",
+            tooltip=get_tooltip("autosegment", "halo_z"), layout=row,
+        )
+        settings.layout().addLayout(row)
+
+    def _add_flow_integration_params(self, settings, n_iter, dt=0.5, sigma=1.0):
+        self.n_iter = n_iter
+        self.n_iter_param, layout = self._add_int_param(
+            "n_iter", self.n_iter, min_val=1, max_val=1000, tooltip=get_tooltip("autosegment", "n_iter"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.dt = dt
+        self.dt_param, layout = self._add_float_param(
+            "dt", self.dt, min_val=0.0, max_val=5.0, step=0.1, tooltip=get_tooltip("autosegment", "dt"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.sigma = sigma
+        self.sigma_param, layout = self._add_float_param(
+            "sigma", self.sigma, min_val=0.0, max_val=10.0, step=0.1, tooltip=get_tooltip("autosegment", "sigma"),
+        )
+        settings.layout().addLayout(layout)
+
+        # Default to 8 threads for the post-processing flow/multicut backends (a sensible default that
+        # does not oversubscribe. The user can raise it up to the spinbox maximum).
+        self.n_threads = min(8, mp.cpu_count())
+        self.n_threads_param, layout = self._add_int_param(
+            "n_threads", self.n_threads, min_val=1, max_val=64, tooltip=get_tooltip("autosegment", "n_threads"),
+        )
+        settings.layout().addLayout(layout)
+
+    def _sparse_settings(self, settings):
+        # Flow-based instance segmentation parameters (LM data).
+        from micro_sam.v2.postprocessing import default_postprocessing
+        from micro_sam.v2.util import DEFAULT_MODEL
+        defaults = default_postprocessing(
+            getattr(self, "model_type", None) or DEFAULT_MODEL, "sparse", is_volume=self._run_ndim() == 3,
+        )
+
+        self.foreground_threshold = defaults["foreground_threshold"]
+        self.foreground_threshold_param, layout = self._add_float_param(
+            "foreground_threshold", self.foreground_threshold, min_val=0.0, max_val=1.0, step=0.05,
+            tooltip=get_tooltip("autosegment", "foreground_threshold"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.density_threshold = defaults["density_threshold"]
+        self._add_density_threshold(settings)
+
+        self.min_object_size = defaults["min_size"]
+        self.min_object_size_param, layout = self._add_int_param(
+            "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4),
+            tooltip=get_tooltip("autosegment", "min_object_size"),
+        )
+        settings.layout().addLayout(layout)
+
+        self._add_flow_integration_params(
+            settings,
+            n_iter=defaults["n_iter"],
+            dt=defaults["dt"],
+            sigma=defaults["sigma"],
+        )
+
+    def _dense_settings(self, settings):
+        # Multicut-based instance segmentation parameters (EM data, 2d and 3d).
+        from micro_sam.v2.postprocessing import default_postprocessing
+        from micro_sam.v2.util import DEFAULT_MODEL
+        defaults = default_postprocessing(getattr(self, "model_type", None) or DEFAULT_MODEL, "dense")
+
+        self.beta = defaults["beta"]
+        self.beta_param, layout = self._add_float_param(
+            "beta", self.beta, min_val=0.0, max_val=1.0, step=0.05,
+            tooltip=get_tooltip("autosegment", "beta"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.density_threshold = defaults["density_threshold"]
+        self._add_density_threshold(settings)
+
+        self._add_flow_integration_params(
+            settings,
+            n_iter=defaults["n_iter"],
+            dt=defaults["dt"],
+            sigma=defaults["sigma"],
+        )
+
+    # The APG parameters with other defaults for a volume, as (widget attribute, key of the defaults).
+    _APG_DIMENSION_PARAMS = (
+        ("candidate_threshold", "candidate_threshold"), ("min_candidate_size", "min_candidate_size"),
+        ("score_threshold", "score_threshold"), ("max_overlap", "max_overlap"),
+        ("min_object_size", "min_size"), ("sigma", "sigma"), ("foreground_threshold", "foreground_threshold"),
+    )
+
+    def _apg_default_values(self, is_volume):
+        """The defaults of the APG parameters that depend on the dimensionality of the run.
+
+        Args:
+            is_volume: Whether the run segments a whole volume rather than an image or a slice.
+
+        Returns:
+            The default values, keyed by the widget attribute.
+        """
+        from micro_sam.v2.util import DEFAULT_MODEL
+        from micro_sam.v2.automatic_prompt_generation import default_prompt_generation
+        model_type = getattr(self, "model_type", None) or DEFAULT_MODEL
+        defaults = default_prompt_generation(model_type, is_volume=is_volume)
+        values = {attribute: defaults[key] for attribute, key in self._APG_DIMENSION_PARAMS}
+        if is_volume:  # A volume has a (low, high) pair of candidate thresholds.
+            values["candidate_threshold"], values["candidate_threshold_high"] = defaults["candidate_threshold"]
+        values["refine_with_box_prompts"] = defaults["refinement"] == "boxes"
+        return values
+
+    def _on_apply_to_volume_changed(self, state=None):
+        # Show the parameters of the next run. A slice run and a volume run keep their own values.
+        if self.mode != "apg" or len(self._apg_values) < 2:
+            return
+        is_volume = self._run_ndim() == 3
+        previous = self._apg_values[not is_volume]
+        for attribute in previous:
+            previous[attribute] = getattr(self, attribute)
+        for attribute, value in self._apg_values[is_volume].items():
+            if attribute == "refine_with_box_prompts":
+                self.refine_with_box_prompts_checkbox.setChecked(bool(value))  # also updates the attribute
+            else:
+                getattr(self, f"{attribute}_param").setValue(value)  # also updates the attribute
+        self.candidate_threshold_high_row.setVisible(is_volume)
+
+    def _apg_settings(self, settings):
+        from micro_sam.v2.automatic_prompt_generation import (
+            DEFAULT_PROMPT_GENERATION, DEFAULT_REFINEMENT, default_prompt_generation,
+        )
+        from micro_sam.v2.util import DEFAULT_MODEL
+        model_type = getattr(self, "model_type", None) or DEFAULT_MODEL
+        defaults = default_prompt_generation(model_type, is_volume=False)
+
+        # The parameters of a slice run (False) and of a volume run (True).
+        self._apg_values = {False: self._apg_default_values(is_volume=False)}
+        if self.volumetric and not self._is_tracking:
+            self._apg_values[True] = self._apg_default_values(is_volume=True)
+        is_volume = self._run_ndim() == 3
+        values = self._apg_values[is_volume]
+
+        self.candidate_threshold = values["candidate_threshold"]
+        self.candidate_threshold_param, layout = self._add_float_param(
+            "candidate_threshold", self.candidate_threshold, min_val=0.0, max_val=100.0, step=0.1,
+            tooltip=get_tooltip("autosegment", "candidate_threshold"),
+        )
+        settings.layout().addLayout(layout)
+
+        if self.volumetric and not self._is_tracking:
+            # Only a volume run uses the second threshold.
+            self.candidate_threshold_high = self._apg_values[True]["candidate_threshold_high"]
+            self.candidate_threshold_high_param, layout = self._add_float_param(
+                "candidate_threshold_high", self.candidate_threshold_high, min_val=0.0, max_val=100.0, step=0.1,
+                tooltip=get_tooltip("autosegment", "candidate_threshold_high"),
+            )
+            layout.setContentsMargins(0, 0, 0, 0)
+            self.candidate_threshold_high_row = QtWidgets.QWidget()
+            self.candidate_threshold_high_row.setLayout(layout)
+            self.candidate_threshold_high_row.setVisible(is_volume)
+            settings.layout().addWidget(self.candidate_threshold_high_row)
+
+        self.foreground_threshold = values["foreground_threshold"]
+        self.foreground_threshold_param, layout = self._add_float_param(
+            "foreground_threshold", self.foreground_threshold, min_val=0.0, max_val=1.0, step=0.05,
+            tooltip=get_tooltip("autosegment", "foreground_threshold"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.min_candidate_size = values["min_candidate_size"]
+        self.min_candidate_size_param, layout = self._add_int_param(
+            "min_candidate_size", self.min_candidate_size, min_val=0, max_val=int(1e4),
+            tooltip=get_tooltip("autosegment", "min_candidate_size"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.score_threshold = values["score_threshold"]
+        self.score_threshold_param, layout = self._add_float_param(
+            "score_threshold", self.score_threshold, min_val=0.0, max_val=1.0, step=0.05,
+            tooltip=get_tooltip("autosegment", "score_threshold"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.max_overlap = values["max_overlap"]
+        self.max_overlap_param, layout = self._add_float_param(
+            "max_overlap", self.max_overlap, min_val=0.0, max_val=1.0, step=0.05,
+            tooltip=get_tooltip("autosegment", "max_overlap"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.min_object_size = values["min_object_size"]
+        self.min_object_size_param, layout = self._add_int_param(
+            "min_object_size", self.min_object_size, min_val=0, max_val=int(1e4),
+            tooltip=get_tooltip("autosegment", "min_object_size"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.multimasking = DEFAULT_PROMPT_GENERATION["multimasking"]
+        self.multimasking_checkbox = self._add_boolean_param(
+            "multimasking", self.multimasking, tooltip=get_tooltip("autosegment", "multimasking"),
+        )
+        settings.layout().addWidget(self.multimasking_checkbox)
+
+        self.refine_with_box_prompts = values["refine_with_box_prompts"]
+        self.refine_with_box_prompts_checkbox = self._add_boolean_param(
+            "refine_with_box_prompts", self.refine_with_box_prompts,
+            tooltip=get_tooltip("autosegment", "refine_with_box_prompts"),
+        )
+        settings.layout().addWidget(self.refine_with_box_prompts_checkbox)
+
+        self.box_extension = DEFAULT_REFINEMENT["box_extension"]
+        self.box_extension_param, layout = self._add_int_param(
+            "box_extension", self.box_extension, min_val=0, max_val=100,
+            tooltip=get_tooltip("autosegment", "box_extension"),
+        )
+        settings.layout().addLayout(layout)
+
+        self.prompt_batch_size = DEFAULT_PROMPT_GENERATION["batch_size"]
+        self.prompt_batch_size_param, layout = self._add_int_param(
+            "prompt_batch_size", self.prompt_batch_size, min_val=1, max_val=1024,
+            tooltip=get_tooltip("autosegment", "prompt_batch_size"),
+        )
+        settings.layout().addLayout(layout)
+
+        if self.volumetric and not self._is_tracking:
+            self.n_objects_per_pass = DEFAULT_PROMPT_GENERATION["n_objects_per_pass"]
+            self.n_objects_per_pass_param, layout = self._add_int_param(
+                "n_objects_per_pass", self.n_objects_per_pass, min_val=1, max_val=1024,
+                tooltip=get_tooltip("autosegment", "n_objects_per_pass"),
+            )
+            settings.layout().addLayout(layout)
+
+            self.early_stop_patience = DEFAULT_PROMPT_GENERATION["early_stop_patience"]
+            self.early_stop_patience_param, layout = self._add_int_param(
+                "early_stop_patience", self.early_stop_patience, min_val=0, max_val=1024,
+                tooltip=get_tooltip("autosegment", "early_stop_patience"),
+            )
+            settings.layout().addLayout(layout)
+
+        self._add_flow_integration_params(
+            settings, n_iter=defaults["n_iter"], dt=DEFAULT_PROMPT_GENERATION["dt"], sigma=values["sigma"],
+        )
+
+    def _postproc_kwargs(self):
+        if self.mode == "dense":
+            return dict(
+                beta=self.beta, density_threshold=self.density_threshold, n_iter=self.n_iter,
+                dt=self.dt, sigma=self.sigma, n_threads=self.n_threads,
+            )
+        return dict(
+            foreground_threshold=self.foreground_threshold, density_threshold=self.density_threshold,
+            min_size=self.min_object_size, n_iter=self.n_iter, dt=self.dt, sigma=self.sigma,
+            n_threads=self.n_threads,
+        )
+
+    def _apg_kwargs(self, ndim):
+        candidate_threshold = self.candidate_threshold
+        if ndim == 3:
+            candidate_threshold = (candidate_threshold, self.candidate_threshold_high)
+        refinement = "boxes" if self.refine_with_box_prompts else None
+        refinement_kwargs = {"box_extension": self.box_extension} if refinement is not None else None
+
+        kwargs = dict(
+            candidate_threshold=candidate_threshold, foreground_threshold=self.foreground_threshold,
+            min_candidate_size=self.min_candidate_size, score_threshold=self.score_threshold,
+            max_overlap=self.max_overlap, min_size=self.min_object_size,
+            refinement=refinement, refinement_kwargs=refinement_kwargs,
+            multimasking=bool(self.multimasking), batch_size=self.prompt_batch_size,
+            n_iter=self.n_iter, dt=self.dt, sigma=self.sigma, n_threads=self.n_threads,
+        )
+        if ndim == 3:
+            kwargs["n_objects_per_pass"] = self.n_objects_per_pass
+            kwargs["early_stop_patience"] = self.early_stop_patience or None
+        return kwargs
+
+    def _apg_propose_kwargs(self):
+        # The prompting stage: everything that decides which candidates are prompted, and how.
+        return dict(
+            candidate_threshold=self.candidate_threshold, foreground_threshold=self.foreground_threshold,
+            n_iter=self.n_iter, dt=self.dt, sigma=self.sigma, min_candidate_size=self.min_candidate_size,
+            multimasking=bool(self.multimasking), batch_size=self.prompt_batch_size, n_threads=self.n_threads,
+        )
+
+    def _apg_select_kwargs(self):
+        # The merge stage: post-processing of the proposals, cheap next to the prompting.
+        refinement = "boxes" if self.refine_with_box_prompts else None
+        refinement_kwargs = {"box_extension": self.box_extension} if refinement is not None else None
+        return dict(
+            score_threshold=self.score_threshold, max_overlap=self.max_overlap, min_size=self.min_object_size,
+            refinement=refinement, refinement_kwargs=refinement_kwargs,
+            batch_size=self.prompt_batch_size,
+        )
+
+    def _run_ndim(self):
+        # The dimensionality of the next run: 3 only for a volume segmented as a whole. Tracking
+        # segments each frame in 2d, so it stays 2 there even with 'Track Timeseries' on.
+        if self.volumetric and not self._is_tracking and getattr(self, "apply_to_volume", False):
+            return 3
+        return 2
+
+    def commit_settings(self):
+        """The parameters of the current automatic segmentation, for the commit history.
+
+        Returns:
+            A json-serializable dict with the mode and the parameters that mode runs with.
+        """
+        settings = {"mode": self.mode}
+        if self.mode == "apg":
+            settings.update(self._apg_kwargs(self._run_ndim()))
+        else:
+            settings.update(self._postproc_kwargs())
+
+        if self.volumetric:
+            settings["apply_to_volume"] = bool(getattr(self, "apply_to_volume", False))
+        # The z block / halo exist only while the z-tiling controls are shown, see '_add_z_tiling_params'.
+        if hasattr(self, "tile_z_param"):
+            settings["tile_z"], settings["halo_z"] = self.tile_z, self.halo_z
+
+        return settings
+
+    def _z_tiling(self, n_slices):
+        # The z block / halo for 3d decoder inference. 'tile_z' >= the slice count means no z-tiling
+        # (the whole volume is decoded in one z block).
+        z_block = self.tile_z if 0 < self.tile_z < n_slices else n_slices
+        z_halo = self.halo_z if z_block < n_slices else 0
+        return z_block, z_halo
+
+    def _state_save_path(self, state):
+        # The state cache is opted into via the embedding settings' 'cache automatic segmentation state'
+        # checkbox. When on, it persists next to the embeddings, else in-memory only ('_segmenter' cache).
+        embed_widget = state.widgets.get("embeddings")
+        return state.embedding_path if getattr(embed_widget, "cache_state", False) else None
+
+    def _release_segmenter(self):
+        # Dropping the reference is not enough: the volumetric prompt generator holds a SAM2 video
+        # inference state and an ephemeral embedding store, which only 'clear_state' releases.
+        if self._segmenter is not None:
+            self._segmenter.clear_state()
+        self._segmenter = None
+        self._segmenter_key = None
+        self._proposals = None
+        self._proposals_key = None
+
+    def _decoder_key(self, state, ndim, z, is_tiled, z_block, z_halo):
+        # What the decoder prediction depends on. The mode is deliberately absent: the same
+        # prediction feeds the 'sparse' and 'dense' post-processing and the 'apg' prompt generation.
+        return (state.data_signature, ndim, z, is_tiled, z_block, z_halo)
+
+    def _cached_decoder_state(self, key):
+        return self._decoder_state if self._decoder_state_key == key else None
+
+    def _store_decoder_state(self, key, decoder_state, save_path=None):
+        self._decoder_state = dict(decoder_state)
+        self._decoder_state_key = key
+        self._decoder_state_save_path = save_path
+
+    def _persist_decoder_state(self, decoder_state, save_path, state_index, model_type):
+        if save_path is None or getattr(self, "_decoder_state_save_path", None) == save_path:
+            return
+        from micro_sam.precompute_state import save_ais_state
+        save_ais_state(decoder_state, save_path, state_index=state_index, model_type=model_type)
+        self._decoder_state_save_path = save_path
+
+    def _drop_decoder_state(self):
+        # Only for a new input or a new model: the prediction is derived from both.
+        self._decoder_state = None
+        self._decoder_state_key = None
+        self._decoder_state_save_path = None
+
+    def _run_unisam2(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
+        from micro_sam.precompute_state import cache_autoseg_state
+
+        device = next(state.decoder.parameters()).device
+        model_type = getattr(state.predictor, "model_type", None)
+        save_path = self._state_save_path(state)
+
+        # All decoder auto-seg cases reuse the precomputed embeddings and run the decoder on them (no
+        # encoder re-run). The in-plane tiling is taken from the embeddings (tiled embeddings have a
+        # top-level 'input_size' of None), so only the z entry of 'tile_shape'/'halo' below matters -
+        # the y, x entries are filler, ignored by the decoder-from-embeddings path. This covers 2d
+        # and 3d, tiled and untiled.
+        tile_shape, halo = None, None
+        z_block, z_halo = None, None
+        if not self.volumetric or ndim == 3:
+            # Plain 2d image, or the whole 3d volume: the precomputed embeddings match directly.
+            image_embeddings = state.image_embeddings
+            is_tiled = image_embeddings["input_size"] is None
+            if ndim == 3:  # the decoder pass is z-chunked using the auto-seg z block / halo controls.
+                z_block, z_halo = self._z_tiling(int(run_raw.shape[0]))
+                tile_shape = (z_block, run_raw.shape[1], run_raw.shape[2])
+                halo = (z_halo, 0, 0)
+        else:
+            # A single slice of a 3d volume: reuse that slice's features (no re-encode). For untiled
+            # embeddings, build the slice's 2d embedding. For tiled embeddings, pass the tiled 3d
+            # embeddings + slice index 'z' and let the segmenter reconstruct each tile's slice.
+            emb3d = state.image_embeddings
+            if emb3d is not None and emb3d.get("input_size") is not None:
+                image_embeddings = {
+                    "features": np.asarray(emb3d["features"][z:z + 1]),
+                    "input_size": emb3d["input_size"], "original_size": emb3d["original_size"],
+                }
+                is_tiled = False
+            else:
+                image_embeddings, is_tiled = emb3d, True
+
+        # The in-memory cache avoids re-running the model when only the post-processing parameters
+        # change. 'cache_autoseg_state' additionally persists the decoder predictions in the
+        # embedding Zarr so a later run or session reuses them. The whole volume is
+        # cached under one key ('state'); a single segmented slice under 'state-{z}'.
+        cache_key = (
+            state.data_signature, "unisam2", ndim, z, tile_shape, halo, z_block, z_halo,
+            image_embeddings is not None, save_path,
+        )
+        decoder_key = self._decoder_key(state, ndim, z, is_tiled, z_block, z_halo)
+        if self._segmenter is None or self._segmenter_key != cache_key:
+            self._release_segmenter()
+            decoder_state = self._cached_decoder_state(decoder_key)
+            if decoder_state is None:
+                self._segmenter = cache_autoseg_state(
+                    "ais", state.decoder, run_raw, image_embeddings, save_path, ndim=ndim,
+                    model_type=model_type,
+                    i=z, state_index=(None if ndim == 3 else z), is_tiled=is_tiled,
+                    tile_shape=tile_shape, halo=halo, device=device, devices=state.inference_devices,
+                    pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
+                )
+                decoder_state = self._segmenter.get_state()
+                self._store_decoder_state(decoder_key, decoder_state, save_path=save_path)
+            else:
+                from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
+                self._segmenter = get_unisam2_segmentation_generator(
+                    state.decoder, is_tiled=is_tiled, device=device, inference_device=state.inference_devices,
+                )
+                self._segmenter.set_state(decoder_state)
+            self._persist_decoder_state(
+                decoder_state, save_path, state_index=(None if ndim == 3 else z), model_type=model_type,
+            )
+            self._segmenter_key = cache_key
+
+        return self._segmenter.generate(mode=self.mode, **self._postproc_kwargs())
+
+    def _run_apg(self, state, run_raw, ndim, z, pbar_init=None, pbar_update=None):
+        from micro_sam.precompute_state import cache_autoseg_state
+        from micro_sam.v2.instance_segmentation import get_instance_segmentation_generator
+
+        model = getattr(state.predictor, "model", state.predictor)
+        model_type = getattr(state.predictor, "model_type", None)
+        device = next(state.decoder.parameters()).device
+        save_path = self._state_save_path(state)
+        image_embeddings = state.image_embeddings
+        is_tiled = image_embeddings is not None and image_embeddings.get("input_size") is None
+        decoder_embeddings = image_embeddings
+        if z is not None and not is_tiled:
+            decoder_embeddings = {
+                "features": np.asarray(image_embeddings["features"][z:z + 1]),
+                "input_size": image_embeddings["input_size"],
+                "original_size": image_embeddings["original_size"],
+            }
+
+        tile_shape, halo = None, None
+        if is_tiled:
+            attrs = image_embeddings["features"].attrs
+            tile_shape = tuple(int(value) for value in attrs["tile_shape"])
+            halo = tuple(int(value) for value in attrs["halo"])
+
+        z_block, z_halo = None, None
+        decoder_tile_shape, decoder_halo = tile_shape, halo
+        if ndim == 3:
+            z_block, z_halo = self._z_tiling(int(run_raw.shape[0]))
+            # The decoder's z chunk goes in front; y, x are the in-plane tiling above, or filler
+            # (ignored by the decoder-from-embeddings path) when there is none.
+            decoder_tile_shape = (z_block, *(tile_shape or run_raw.shape[1:3]))
+            decoder_halo = (z_halo, *(halo or (0, 0)))
+
+        cache_key = (
+            state.data_signature, "apg", ndim, z, tile_shape, halo, z_block, z_halo,
+            image_embeddings is not None, save_path,
+        )
+        if self._segmenter is None or self._segmenter_key != cache_key:
+            self._release_segmenter()
+            self._segmenter = get_instance_segmentation_generator(
+                model=model, decoder=state.decoder, is_tiled=is_tiled, segmentation_mode="apg",
+                device=device, inference_device=state.inference_devices, ndim=ndim,
+            )
+            if is_tiled:
+                # The blocks use the tiling of the embeddings, so each block reads its tile.
+                self._segmenter.initialize(
+                    run_raw, ndim=ndim, tile_shape=decoder_tile_shape, halo=decoder_halo, verbose=False,
+                    image_embeddings=image_embeddings, i=z,
+                )
+            else:
+                decoder_key = self._decoder_key(state, ndim, z, is_tiled, z_block, z_halo)
+                decoder_state = self._cached_decoder_state(decoder_key)
+                if decoder_state is None:
+                    decoder_segmenter = cache_autoseg_state(
+                        "ais", state.decoder, run_raw, decoder_embeddings, save_path, ndim=ndim,
+                        model_type=model_type, i=z, state_index=(None if ndim == 3 else z),
+                        is_tiled=False, tile_shape=decoder_tile_shape, halo=decoder_halo, device=device,
+                        devices=state.inference_devices,
+                        pbar_init=pbar_init, pbar_update=pbar_update, verbose=False,
+                    )
+                    decoder_state = decoder_segmenter.get_state()
+                    self._store_decoder_state(decoder_key, decoder_state, save_path=save_path)
+                self._persist_decoder_state(
+                    decoder_state, save_path, state_index=(None if ndim == 3 else z), model_type=model_type,
+                )
+                apg_state = dict(decoder_state)
+                apg_state["image_embeddings"] = image_embeddings
+                if z is not None:
+                    apg_state["i"] = z
+                if ndim == 3:
+                    apg_state["volume"] = run_raw
+                self._segmenter.set_state(apg_state)
+            self._segmenter_key = cache_key
+
+        if is_tiled:
+            return self._segmenter.generate(
+                **self._apg_kwargs(ndim), pbar_init=pbar_init, pbar_update=pbar_update,
+            )
+
+        if ndim == 3:  # One pass: the volumetric stages are not separable the way the 2d ones are.
+            return self._segmenter.generate(
+                **self._apg_kwargs(ndim), pbar_init=pbar_init, pbar_update=pbar_update,
+            )
+
+        # 'propose' does the prompting and 'select' only merges, so re-running with a different
+        # score / overlap / size replays the merge instead of prompting the model again.
+        propose_kwargs = self._apg_propose_kwargs()
+        proposals_key = (cache_key, tuple(sorted(propose_kwargs.items())))
+        if self._proposals is None or self._proposals_key != proposals_key:
+            self._proposals = self._segmenter.propose(
+                **propose_kwargs, pbar_init=pbar_init, pbar_update=pbar_update,
+            )
+            self._proposals_key = proposals_key
+        if pbar_init is not None:
+            pbar_init(1, "APG: merging masks")
+        segmentation = self._segmenter.select(self._proposals, **self._apg_select_kwargs())
+        if pbar_update is not None:
+            pbar_update(1)
+        return segmentation
 
     def __call__(self):
+        state = AnnotatorState()
+        if not self.with_decoder or state.decoder is None:
+            return _generate_message("error", NO_DECODER_MESSAGE)
+        if _validate_layers(self._viewer, automatic_segmentation=True):
+            return
+        # Every mode reuses the precomputed image embeddings, so they must exist and match
+        # the current image. If embeddings were reset (e.g. after an image change) this prompts the
+        # user to recompute them instead of segmenting with stale embeddings.
         if _validate_embeddings(self._viewer):
-            return None
+            return
 
-        if self.with_decoder:
-            kwargs = {
-                "center_distance_threshold": self.center_distance_thresh,
-                "boundary_distance_threshold": self.boundary_distance_thresh,
-                "min_size": self.min_object_size,
-            }
+        # Get the raw image and determine the run dimensionality.
+        image_name = state.get_image_name(self._viewer)
+        raw = np.asarray(self._viewer.layers[image_name].data)
+
+        apply_to_volume = self.volumetric and getattr(self, "apply_to_volume", False)
+        z = None
+        if apply_to_volume:
+            run_raw, ndim = raw, 3
+        elif self.volumetric:  # segment only the current slice
+            z = vutil.current_slice(self._viewer, self._viewer.layers[image_name])
+            run_raw, ndim = raw[z], 2
         else:
-            kwargs = {
-                "pred_iou_thresh": self.pred_iou_thresh,
-                "stability_score_thresh": self.stability_score_thresh,
-                "box_nms_thresh": self.box_nms_thresh,
-            }
-        if self.volumetric and self.apply_to_volume:
-            worker = self._run_segmentation_3d(kwargs)
-        elif self.volumetric and not self.apply_to_volume:
-            i = int(self._viewer.dims.point[0])
-            worker = self._run_segmentation_2d(kwargs, i=i)
+            run_raw, ndim = raw, 2
+
+        if self.mode == "apg":
+            apg_error = _apg_error(state, self.volumetric, is_tracking=self._is_tracking)
+            if apg_error is not None:
+                return _generate_message("error", apg_error)
+
+        # Show progress in the napari activity dock: decoder tiles/slices, then APG prompt batches,
+        # scoring slices or propagation passes. Each stage resets the count and total.
+        # This tool disables thread workers (see top of module), so the run is
+        # synchronous. We drive the bar via callbacks the backends call between units and pump the Qt
+        # event loop with 'processEvents' on each update so it repaints live. It is always closed in
+        # the 'finally' block. Batched 3d inference forwards completed tile-slice increments from its
+        # worker threads to this calling thread so napari can repaint them safely.
+        pbar, pbar_signals = _create_pbar_for_threadworker()
+
+        def pbar_init(total, description):
+            pbar_signals.pbar_reset.emit()
+            pbar_signals.pbar_total.emit(total)
+            pbar_signals.pbar_description.emit(description)
+            QtWidgets.QApplication.processEvents()
+
+        def pbar_update(update=1):
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
+
+        pbar_signals.pbar_description.emit(f"Running automatic segmentation ({self.mode})")
+        QtWidgets.QApplication.processEvents()
+        try:
+            if self.mode == "apg":
+                seg = self._run_apg(state, run_raw, ndim, z, pbar_init=pbar_init, pbar_update=pbar_update)
+            else:
+                seg = self._run_unisam2(state, run_raw, ndim, z, pbar_init=pbar_init, pbar_update=pbar_update)
+        finally:
+            pbar_signals.pbar_stop.emit()
+
+        if z is None:
+            self._viewer.layers["auto_segmentation"].data = seg
         else:
-            worker = self._run_segmentation_2d(kwargs)
+            self._viewer.layers["auto_segmentation"].data[z] = seg
+        self._viewer.layers["auto_segmentation"].refresh()
         _select_layer(self._viewer, "auto_segmentation")
-        return worker
+        self.segmentation_finished.emit()
 
 
 class AutoTrackWidget(AutoSegmentWidget):
-    def _create_tracking_switch(self):
-        self.apply_to_volume = False
-        return self._add_boolean_param(
-            "apply_to_volume", self.apply_to_volume, title="Track Timeseries",
-            tooltip=get_tooltip("autotrack", "run_tracking")
-        )
+    _is_tracking = True
+    _RUN_TOOLTIP = ("autotrack", "run_button")
 
     def _create_widget(self):
-        # Add the switch for segmenting the slice vs. tracking the timeseries.
-        self.layout().addWidget(self._create_tracking_switch())
+        # Top row: the 'Track Timeseries' switch on the left, the mode dropdown on the right.
+        top_row = QtWidgets.QHBoxLayout()
 
-        # Add the nested settings widget.
-        self.settings = self._create_settings()
+        self.apply_to_volume = False
+        self.apply_to_volume_checkbox = self._add_boolean_param(
+            "apply_to_volume",
+            self.apply_to_volume,
+            title="Track Timeseries",
+            tooltip=get_tooltip("autotrack", "run_tracking"),
+        )
+        top_row.addWidget(self.apply_to_volume_checkbox)
+
+        self.mode_dropdown, mode_layout = self._add_choice_param(
+            "mode",
+            self.mode,
+            list(self._available_modes()),
+            title="mode:",
+            update=self._on_mode_changed,
+            tooltip=get_tooltip("autosegment", "mode"),
+        )
+        # Keep the label at its text width so that the dropdown starts right after it and covers
+        # the rest of the row.
+        mode_layout.setStretch(0, 0)
+        mode_layout.setStretch(1, 1)
+        top_row.addLayout(mode_layout)
+
+        self.layout().addLayout(top_row)
+
+        self.settings = self._make_settings_widget()
         self.layout().addWidget(self.settings)
 
-        # Add the run button.
+        # The run button is only active with a decoder, since every mode needs one.
         self.run_button = QtWidgets.QPushButton("Automatic Tracking")
         self.run_button.clicked.connect(self.__call__)
-        self.run_button.setToolTip(get_tooltip("autotrack", "run_button"))
         self.layout().addWidget(self.run_button)
+        self._update_run_button()
 
-    def _run_segmentation_3d(self, kwargs):
-        allow_segment_3d = self._allow_segment_3d()
-        if not allow_segment_3d:
-            return _generate_message("error", "Tracking with AMG is only supported if you have a GPU.")
+    def _empty_tracking_warning(self):
+        return _generate_message(
+            "error",
+            "The automatic tracking result does not contain any objects. "
+            "Try adjusting the automatic tracking settings.",
+        )
 
-        state = AnnotatorState()
-        if len(state.committed_lineages) > 0:
-            return _generate_message(
-                "error",
-                "Automatic tracking can only be called if you haven't commited results from interactive tracking yet."
-            )
+    def _run_frame_segmentation(self, state, frame, frame_id, pbar_init=None, pbar_update=None):
+        # Forward the progress callbacks so a frame advances the overall bar per tile (tiled) or by
+        # one step (untiled). The caller passes a no-op 'pbar_init' so a frame cannot reset the total.
+        if self.mode == "apg":
+            return self._run_apg(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
+        return self._run_unisam2(state, frame, 2, frame_id, pbar_init=pbar_init, pbar_update=pbar_update)
+
+    def _n_inplane_tiles(self, state, raw):
+        # In-plane tiles per frame for the current run (1 if not tiled). The auto-tracking bar
+        # advances per tile, so its total is this times the number of frames.
+        from bioimage_cpp.utils import Blocking
+
+        # The modes reuse the precomputed embeddings; tiled ones have no top-level input_size.
+        emb = state.image_embeddings
+        tile_shape = None
+        if emb is not None and emb.get("input_size") is None:
+            tile_shape = tuple(int(s) for s in emb["features"].attrs["tile_shape"])
+        if tile_shape is None:
+            return 1
+        return Blocking([0, 0], list(raw.shape[1:3]), list(tile_shape)).number_of_blocks
+
+    def _track_timeseries(self, state, raw):
+        segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
         pbar, pbar_signals = _create_pbar_for_threadworker()
+        offset = 0
 
-        # @thread_worker
-        def seg_impl():
-            image_name = state.get_image_name(self._viewer)
-            timeseries = self._viewer.layers[image_name].data
-            segmentation = np.zeros_like(self._viewer.layers["auto_segmentation"].data)
-            offset = 0
+        def tracking_pbar_init(total, description):
+            pbar_signals.pbar_total.emit(total)
+            pbar_signals.pbar_description.emit(description)
+            QtWidgets.QApplication.processEvents()
 
-            def pbar_init(total, description):
-                pbar_signals.pbar_total.emit(total)
-                pbar_signals.pbar_description.emit(description)
+        def tracking_pbar_update(update=1):
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
 
-            pbar_init(segmentation.shape[0], "Run tracking")
+        # Decoder modes share a total over all frames. APG has candidate-dependent stages,
+        # so reset for each stage and keep the frame number in its description.
+        def frame_pbar_init(total, description):
+            # APG reports several stages per frame, whose totals depend on its candidates.
+            if self.mode == "apg":
+                pbar_signals.pbar_reset.emit()
+                tracking_pbar_init(total, f"Frame {frame_id + 1}/{len(raw)} - {description}")
 
-            # Further optimization: parallelize if state is precomputed for all slices
-            for i in range(segmentation.shape[0]):
-                seg = _instance_segmentation_impl(self.min_object_size, i=i, **kwargs)
-                seg_max = seg.max()
-                if seg_max == 0:
-                    continue
-                seg[seg != 0] += offset
-                offset = seg_max + offset
-                segmentation[i] = seg
-                pbar_signals.pbar_update.emit(1)
+        n_tiles = self._n_inplane_tiles(state, raw)
+        try:
+            # Decoder modes advance per tile (or once per untiled frame). APG replaces this
+            # initial total as soon as its first stage starts.
+            pbar_signals.pbar_total.emit(n_tiles * len(raw))
+            QtWidgets.QApplication.processEvents()
+            for frame_id, frame in enumerate(raw):
+                pbar_signals.pbar_description.emit(
+                    f"Automatic segmentation ({self.mode}): frame {frame_id + 1}/{len(raw)}"
+                )
+                QtWidgets.QApplication.processEvents()
+                seg = self._run_frame_segmentation(
+                    state, frame, frame_id, pbar_init=frame_pbar_init, pbar_update=tracking_pbar_update,
+                )
+                seg_max = int(seg.max())
+                if seg_max != 0:
+                    seg[seg != 0] += offset
+                    offset += seg_max
+                    segmentation[frame_id] = seg
+
+            if offset == 0:
+                self._viewer.layers["auto_segmentation"].data = segmentation
+                self._viewer.layers["auto_segmentation"].refresh()
+                return self._empty_tracking_warning()
 
             pbar_signals.pbar_reset.emit()
             segmentation, lineages = track_across_frames(
-                timeseries, segmentation,
-                verbose=True, pbar_init=pbar_init,
-                pbar_update=lambda update: pbar_signals.pbar_update.emit(1),
+                raw,
+                segmentation,
+                verbose=True,
+                pbar_init=tracking_pbar_init,
+                pbar_update=tracking_pbar_update,
             )
+        finally:
             pbar_signals.pbar_stop.emit()
-            return (segmentation, lineages)
 
-        def update_segmentation(result):
-            segmentation, lineages = result
-            is_empty = segmentation.max() == 0
-            if is_empty:
-                self._empty_segmentation_warning()
+        state.auto_lineages = lineages
+        self._viewer.layers["auto_segmentation"].data = segmentation
+        self._viewer.layers["auto_segmentation"].refresh()
+        _select_layer(self._viewer, "auto_segmentation")
+        self.segmentation_finished.emit()
 
-            state = AnnotatorState()
-            state.lineage = lineages
+    def __call__(self):
+        state = AnnotatorState()
+        if not self.with_decoder or state.decoder is None:
+            return _generate_message("error", NO_DECODER_MESSAGE)
+        # Tracking prompts the video predictor per frame, so APG needs an accelerator here for a
+        # single frame just as much as for the whole timeseries. Checked before the single-frame
+        # delegation below so both paths are covered.
+        if self.mode == "apg":
+            apg_error = _apg_error(state, self.volumetric, is_tracking=True)
+            if apg_error is not None:
+                return _generate_message("error", apg_error)
 
-            self._viewer.layers["auto_segmentation"].data = segmentation
-            self._viewer.layers["auto_segmentation"].refresh()
+        if not (self.volumetric and getattr(self, "apply_to_volume", False)):
+            return super().__call__()
+        if _validate_layers(self._viewer, automatic_segmentation=True):
+            return None
+        if state.committed_lineages:
+            return _generate_message(
+                "error",
+                "Automatic tracking can only be called if you have not committed interactive tracking results yet.",
+            )
 
-        result = seg_impl()
-        update_segmentation(result)
-        # worker = seg_impl()
-        # worker.returned.connect(update_segmentation)
-        # worker.start()
-        # return worker
+        image_name = state.get_image_name(self._viewer)
+        raw = np.asarray(self._viewer.layers[image_name].data)
+        if raw.ndim != 3:
+            return _generate_message("error", "Automatic tracking expects a 2d timeseries.")
+        return self._track_timeseries(state, raw)

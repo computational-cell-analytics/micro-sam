@@ -197,12 +197,28 @@ iterative_prompting_results/
 *MACOSX
 hela_ctc
 clf-test-data
-*.h5
 .claude/
+*.pdf
+*.h5
 .codex
+*.npy
 
 # Related to i2k workshop folders.
 data/
 embeddings/
 *.zarr
 
+# Trained classifier exports.
+*.joblib
+
+# Local JSON outputs, e.g. the data counter cache.
+*.json
+
+# Local handoff notes.
+HANDOFF*.md
+
+# Curation figures and notes of the mito / nucleus EM generalists (kept locally).
+mito_nuc_figures/
+
+# Generated paper figures and results tables (kept locally).
+scripts/plotting/v2/for_paper/figures/

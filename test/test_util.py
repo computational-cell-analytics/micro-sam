@@ -2,14 +2,19 @@ import os
 import unittest
 from shutil import rmtree
 
-import numpy as np
-import requests
-import torch
 import zarr
+import z5py
+import torch
+import pytest
+import requests
+import numpy as np
 
+from bioimage_cpp.segmentation import label
 from skimage.data import binary_blobs
-from skimage.measure import label
-from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory, get_sam_model, set_precomputed
+from micro_sam.v1.util import get_sam_model, set_precomputed
+from micro_sam.util import VIT_T_SUPPORT, SamPredictor, get_cache_directory, _compute_data_signature, _open_embeddings
+
+ZARR_MAJOR = int(zarr.__version__.split(".")[0])
 
 
 class TestUtil(unittest.TestCase):
@@ -23,8 +28,9 @@ class TestUtil(unittest.TestCase):
         rmtree(self.tmp_folder)
 
     # Check that the URLs for all models are valid.
+    @pytest.mark.v1
     def test_model_registry(self):
-        from micro_sam.util import models
+        from micro_sam.v1.util import models
 
         def check_url(url):
             try:
@@ -41,8 +47,9 @@ class TestUtil(unittest.TestCase):
             url_exists = check_url(registry.get_url(name))
             self.assertTrue(url_exists)
 
+    @pytest.mark.v1
     def test_get_sam_model(self):
-        from micro_sam.util import get_sam_model
+        from micro_sam.v1.util import get_sam_model
 
         def check_predictor(predictor):
             self.assertTrue(isinstance(predictor, SamPredictor))
@@ -78,6 +85,329 @@ class TestUtil(unittest.TestCase):
             x1, x2 = (np.random.rand(32, 32) > 0.5), (np.random.rand(32, 32) > 0.5)
             self.assertTrue(0.0 < compute_iou(x1, x2) < 1.0)
 
+    def test_normalize_raw(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        raw = np.arange(10_000, dtype="float32").reshape(100, 100)
+        raw[-1, -1] = 10_000  # An outlier must not determine the useful intensity range.
+
+        normalized = normalize_raw(raw)
+        self.assertEqual(normalized.dtype, np.float32)
+        self.assertGreaterEqual(normalized.min(), 0.0)
+        self.assertLessEqual(normalized.max(), 1.0)
+        self.assertEqual(normalized[-1, -1], 1.0)
+        self.assertGreater(normalized[50, 0], 0.45)
+
+        # An integer output dtype rescales the same normalized data to the full dtype range.
+        normalized_uint8 = normalize_raw(raw, output_dtype="uint8")
+        self.assertEqual(normalized_uint8.dtype, np.uint8)
+        self.assertTrue(np.array_equal(normalized_uint8, np.round(normalized * 255).astype("uint8")))
+
+        empty = normalize_raw(np.empty((0, 4), dtype="uint16"))
+        self.assertEqual(empty.shape, (0, 4))
+        self.assertEqual(empty.dtype, np.float32)
+
+    def test_normalize_raw_dtypes(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        raw = np.arange(10_000, dtype="float32").reshape(100, 100)
+
+        # Floating and 8-/16-bit integer output dtypes are all supported.
+        for dtype in ["float16", "float32", "float64", "uint8", "int8", "uint16", "int16"]:
+            normalized = normalize_raw(raw, output_dtype=dtype)
+            self.assertEqual(normalized.dtype, np.dtype(dtype))
+
+        # 32-/64-bit integer, boolean and complex output dtypes are rejected.
+        for dtype in ["int32", "uint32", "int64", "uint64", "bool", "complex64", "complex128"]:
+            with self.assertRaises(ValueError):
+                normalize_raw(raw, output_dtype=dtype)
+
+    def test_normalize_raw_output_ranges(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        raw = np.arange(10_000, dtype="float32").reshape(100, 100)
+
+        # Integer output dtypes are normalized to their full representable range.
+        full_ranges = {"uint8": (0, 255), "int8": (-128, 127), "uint16": (0, 65535), "int16": (-32768, 32767)}
+        for dtype, (low, high) in full_ranges.items():
+            normalized = normalize_raw(raw, output_dtype=dtype)
+            self.assertEqual(normalized.min(), low)
+            self.assertEqual(normalized.max(), high)
+
+        # Floating output dtypes are normalized to [0, 1].
+        for dtype in ["float16", "float32", "float64"]:
+            normalized = normalize_raw(raw, output_dtype=dtype)
+            self.assertAlmostEqual(float(normalized.min()), 0.0, places=3)
+            self.assertAlmostEqual(float(normalized.max()), 1.0, places=3)
+
+    def test_normalize_raw_input_ranges(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        # Common microscopy input dtypes over sensible ranges normalize to [0, 1].
+        ranges = {
+            "uint8": (0, 255),
+            "int8": (-128, 127),
+            "uint16": (0, 65535),
+            "int16": (-32768, 32767),
+            "float16": (0.0, 1.0),
+            "float32": (0.0, 1.0),
+            "float64": (-5.0, 5.0),
+        }
+        for dtype, (low, high) in ranges.items():
+            raw = np.linspace(low, high, 10_000, dtype=dtype).reshape(100, 100)
+            normalized = normalize_raw(raw)
+            self.assertEqual(normalized.dtype, np.float32)
+            self.assertGreaterEqual(normalized.min(), 0.0)
+            self.assertLessEqual(normalized.max(), 1.0)
+            # A monotonic input ramp stays monotonic after normalization.
+            self.assertTrue(np.all(np.diff(normalized.ravel()) >= 0))
+
+    def test_normalize_raw_percentile_params(self):
+        from micro_sam.v2.normalization import normalize_raw
+
+        raw = np.arange(10_000, dtype="float32").reshape(100, 100)
+
+        # Explicit defaults match the hard-coded 2nd/98th percentiles.
+        default = normalize_raw(raw)
+        explicit = normalize_raw(raw, lower_percentile=2.0, upper_percentile=98.0)
+        self.assertTrue(np.array_equal(default, explicit))
+
+        # Wider percentiles clip less, so intermediate values differ.
+        wide = normalize_raw(raw, lower_percentile=0.0, upper_percentile=100.0)
+        self.assertFalse(np.array_equal(default, wide))
+        self.assertGreaterEqual(wide.min(), 0.0)
+        self.assertLessEqual(wide.max(), 1.0)
+
+    def test_normalize_raw_per_channel(self):
+        from micro_sam.v2.normalization import normalize_raw, to_image
+        from micro_sam.util import _to_image
+
+        channel = np.arange(100, dtype="float32").reshape(10, 10)
+        image = np.stack([channel, channel * 100 + 42], axis=-1)
+        normalized = normalize_raw(image, axis=(0, 1))
+        self.assertTrue(np.allclose(normalized[..., 0], normalized[..., 1]))
+
+        rgb = to_image(image)
+        self.assertEqual(rgb.shape, (10, 10, 3))
+        self.assertEqual(rgb.dtype, np.uint8)
+        self.assertTrue(np.array_equal(rgb[..., 0], rgb[..., 1]))
+        self.assertFalse(np.any(rgb[..., 2]))
+        self.assertTrue(np.array_equal(rgb[..., :2], normalize_raw(image, axis=(0, 1), output_dtype="uint8")))
+        # The legacy SAM1 conversion remains min-max; SAM2 follows percentile-normalized training.
+        self.assertFalse(np.array_equal(rgb, _to_image(image)))
+
+    def test_normalization_invalidates_incompatible_embeddings(self):
+        from types import SimpleNamespace
+
+        from micro_sam.util import _get_embedding_signature
+        from micro_sam.v2.normalization import IMAGE_PREPROCESSING, VIDEO_PREPROCESSING
+        from micro_sam.v2.util import _check_saved_embeddings, _normalization_bounds_digest
+
+        self.assertEqual(IMAGE_PREPROCESSING, "percentile_2_98_per_channel_uint8_v2")
+        self.assertEqual(VIDEO_PREPROCESSING, "percentile_2_98_per_channel_torch_resize_v3")
+
+        predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test", device="cpu")
+        raw = np.arange(100).reshape(10, 10)
+        signature = _get_embedding_signature(raw, predictor, tile_shape=None, halo=None)
+
+        def run(embeddings, preprocessing, norm_bounds=None):
+            return _check_saved_embeddings(
+                raw, predictor, embeddings, "cache.zarr", None, None, preprocessing, norm_bounds,
+            )
+
+        def full_cache(normalization, norm_bounds=None):
+            attrs = {"input_size": [10, 10], "precision": "fp32", **signature}
+            if normalization is not None:
+                attrs["normalization"] = normalization
+            if norm_bounds is not None:
+                attrs["normalization_bounds_digest"] = _normalization_bounds_digest(norm_bounds)
+            return SimpleNamespace(attrs=attrs)
+
+        norm_bounds = (np.array([[[2.0]]]), np.array([[[98.0]]]))
+        other_norm_bounds = (np.array([[[5.0]]]), np.array([[[95.0]]]))
+
+        # A complete cache is reused only under the policy it was written with.
+        self.assertFalse(run(full_cache(IMAGE_PREPROCESSING), IMAGE_PREPROCESSING))
+        self.assertFalse(run(full_cache(VIDEO_PREPROCESSING, norm_bounds), VIDEO_PREPROCESSING, norm_bounds))
+        # Min-max embeddings from older versions must be recomputed, including partial caches.
+        self.assertTrue(run(full_cache("minmax_per_channel"), IMAGE_PREPROCESSING))
+        # Image and volume preprocessing policies remain distinct.
+        self.assertTrue(run(full_cache(IMAGE_PREPROCESSING), VIDEO_PREPROCESSING, norm_bounds))
+        self.assertTrue(run(full_cache(VIDEO_PREPROCESSING, norm_bounds), IMAGE_PREPROCESSING))
+        # A missing tag is stale.
+        self.assertTrue(run(full_cache(None), IMAGE_PREPROCESSING))
+        self.assertTrue(run(full_cache(VIDEO_PREPROCESSING), VIDEO_PREPROCESSING, norm_bounds))
+        self.assertTrue(
+            run(full_cache(VIDEO_PREPROCESSING, norm_bounds), VIDEO_PREPROCESSING, other_norm_bounds)
+        )
+
+        class PartialEmbeddings(dict):
+            def __init__(self, normalization=None, norm_bounds=None):
+                super().__init__(features=object())
+                self.attrs = {} if normalization is None else {"normalization": normalization}
+                if norm_bounds is not None:
+                    self.attrs["normalization_bounds_digest"] = _normalization_bounds_digest(norm_bounds)
+
+        # Partial caches (no 'input_size') resume only when the tag matches the requested policy.
+        self.assertTrue(run(PartialEmbeddings(), IMAGE_PREPROCESSING))
+        self.assertTrue(run(PartialEmbeddings("minmax_per_channel"), IMAGE_PREPROCESSING))
+        self.assertTrue(run(PartialEmbeddings(VIDEO_PREPROCESSING), IMAGE_PREPROCESSING))
+        self.assertFalse(run(PartialEmbeddings(IMAGE_PREPROCESSING), IMAGE_PREPROCESSING))
+        self.assertFalse(
+            run(PartialEmbeddings(VIDEO_PREPROCESSING, norm_bounds), VIDEO_PREPROCESSING, norm_bounds)
+        )
+        self.assertTrue(
+            run(PartialEmbeddings(VIDEO_PREPROCESSING, norm_bounds), VIDEO_PREPROCESSING, other_norm_bounds)
+        )
+
+        # An empty cache (no features) is never stale.
+        empty_cache = PartialEmbeddings(IMAGE_PREPROCESSING)
+        del empty_cache["features"]
+        self.assertFalse(run(empty_cache, IMAGE_PREPROCESSING))
+
+    def test_read_cached_tiling(self):
+        from types import SimpleNamespace
+
+        from micro_sam.util import read_cached_tiling, _write_embedding_signature, _open_embeddings
+
+        predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test", device="cpu")
+        raw = np.arange(100).reshape(10, 10)
+
+        # Nothing to read: no path, loaded embeddings, or a path that does not exist.
+        self.assertIsNone(read_cached_tiling(None))
+        self.assertIsNone(read_cached_tiling({"features": raw}))
+        self.assertIsNone(read_cached_tiling(os.path.join(self.tmp_folder, "missing.zarr")))
+
+        # An embeddings container without a completed signature does not advertise a tiling.
+        partial = os.path.join(self.tmp_folder, "partial.zarr")
+        f = _open_embeddings(partial, mode="a")
+        f.attrs["normalization"] = "test"
+        getattr(f, "file", f).close()
+        self.assertIsNone(read_cached_tiling(partial))
+
+        # Tiled and untiled caches both report what they were computed with.
+        tiled = os.path.join(self.tmp_folder, "tiled.zarr")
+        f = _open_embeddings(tiled, mode="a")
+        _write_embedding_signature(f, raw, predictor, (420, 420), (64, 64), input_size=None, original_size=None)
+        getattr(f, "file", f).close()
+        self.assertEqual(read_cached_tiling(tiled), ((420, 420), (64, 64)))
+
+        untiled = os.path.join(self.tmp_folder, "untiled.zarr")
+        f = _open_embeddings(untiled, mode="a")
+        _write_embedding_signature(f, raw, predictor, None, None, input_size=[10, 10], original_size=[10, 10])
+        getattr(f, "file", f).close()
+        self.assertEqual(read_cached_tiling(untiled), (None, None))
+
+    def test_resolve_default_tiling(self):
+        from types import SimpleNamespace
+
+        from micro_sam.util import _write_embedding_signature, _open_embeddings
+        from micro_sam.v2.util import resolve_default_tiling, DEFAULT_TILE_SHAPE, DEFAULT_HALO
+
+        large, small = (2048, 2048), (512, 512)
+
+        # Without a cache the in-plane size decides, and explicit settings always win.
+        self.assertEqual(resolve_default_tiling(large, None, None), (DEFAULT_TILE_SHAPE, DEFAULT_HALO))
+        self.assertEqual(resolve_default_tiling(small, None, None), (None, None))
+        self.assertEqual(resolve_default_tiling(large, (256, 256), (32, 32)), ((256, 256), (32, 32)))
+        self.assertEqual(resolve_default_tiling(large, None, (32, 32)), (DEFAULT_TILE_SHAPE, (32, 32)))
+        # Tiling without an overlap cuts objects at the tile borders, so it falls back to the default.
+        self.assertEqual(resolve_default_tiling(small, (256, 256), None), ((256, 256), DEFAULT_HALO))
+        # 3d only considers the in-plane axes.
+        self.assertEqual(resolve_default_tiling((2048, 64, 64), None, None), (None, None))
+        self.assertEqual(resolve_default_tiling((4, 2048, 64), None, None), (DEFAULT_TILE_SHAPE, DEFAULT_HALO))
+
+        predictor = SimpleNamespace(model_type="hvit_t", model_name="hvit_t", _hash="test", device="cpu")
+        raw = np.arange(100).reshape(10, 10)
+
+        def write_cache(name, tile_shape, halo):
+            path = os.path.join(self.tmp_folder, name)
+            f = _open_embeddings(path, mode="a")
+            _write_embedding_signature(
+                f, raw, predictor, tile_shape, halo, input_size=None, original_size=None,
+            )
+            getattr(f, "file", f).close()
+            return path
+
+        # A cached tiling is reused, so an existing embedding path is not recomputed for nothing.
+        tiled = write_cache("cached_tiled.zarr", (420, 420), (64, 64))
+        self.assertEqual(resolve_default_tiling(large, None, None, tiled), ((420, 420), (64, 64)))
+        self.assertEqual(resolve_default_tiling(small, None, None, tiled), ((420, 420), (64, 64)))
+        # Explicit settings still win over the cache, per field.
+        self.assertEqual(resolve_default_tiling(large, (256, 256), None, tiled), ((256, 256), DEFAULT_HALO))
+        self.assertEqual(resolve_default_tiling(large, None, (32, 32), tiled), ((420, 420), (32, 32)))
+
+        # An untiled cache is kept for a small image, but not for one that needs tiling: running a
+        # large image untiled is exactly what the default guards against.
+        untiled = write_cache("cached_untiled.zarr", None, None)
+        self.assertEqual(resolve_default_tiling(small, None, None, untiled), (None, None))
+        self.assertEqual(resolve_default_tiling(large, None, None, untiled), (DEFAULT_TILE_SHAPE, DEFAULT_HALO))
+
+    def test_resolve_default_tiling_cutoff(self):
+        from micro_sam.v2.util import resolve_default_tiling, DEFAULT_TILING_THRESHOLD, DEFAULT_TILE_SHAPE
+
+        # Automatic tiling kicks in strictly above the cutoff, so exactly 768 still runs in one piece.
+        cutoff = DEFAULT_TILING_THRESHOLD
+        self.assertEqual(cutoff, 768)
+        self.assertIsNone(resolve_default_tiling((cutoff, cutoff), None, None)[0])
+        self.assertEqual(resolve_default_tiling((cutoff, cutoff + 1), None, None)[0], DEFAULT_TILE_SHAPE)
+        self.assertEqual(resolve_default_tiling((cutoff + 1, cutoff), None, None)[0], DEFAULT_TILE_SHAPE)
+        # For 3d only the in-plane axes count, never the leading z / t axis.
+        self.assertIsNone(resolve_default_tiling((4096, cutoff, cutoff), None, None)[0])
+        self.assertEqual(resolve_default_tiling((4, cutoff + 1, cutoff), None, None)[0], DEFAULT_TILE_SHAPE)
+
+    def test_resolve_default_tiling_turned_off(self):
+        from micro_sam.v2.util import resolve_default_tiling, tiling_is_turned_off
+
+        self.assertTrue(tiling_is_turned_off((0, 0)))
+        self.assertTrue(tiling_is_turned_off((0, 0, 0)))
+        self.assertFalse(tiling_is_turned_off(None))  # 'not set', which is not the same as 'off'
+        self.assertFalse(tiling_is_turned_off((512, 512)))
+        self.assertFalse(tiling_is_turned_off(()))
+
+        # An all-zero tile shape runs a large image in one piece, overriding the size cutoff.
+        large = (2048, 2048)
+        self.assertEqual(resolve_default_tiling(large, (0, 0), None), (None, None))
+        self.assertEqual(resolve_default_tiling(large, (0, 0), (0, 0)), (None, None))
+        self.assertEqual(resolve_default_tiling(large, (0, 0, 0), (0, 0, 0)), (None, None))
+        # An all-zero halo with a real tile shape is a tiled run without an overlap, not 'off'.
+        self.assertEqual(resolve_default_tiling(large, (256, 256), (0, 0)), ((256, 256), (0, 0)))
+        # Turning tiling off while asking for an overlap is contradictory.
+        with self.assertRaises(ValueError):
+            resolve_default_tiling(large, (0, 0), (64, 64))
+
+    def test_resolve_inference_tiling(self):
+        from micro_sam.v2.automatic_segmentation import _resolve_tiling
+        from micro_sam.v2.util import DEFAULT_TILE_SHAPE, DEFAULT_HALO, DEFAULT_TILE_Z, DEFAULT_HALO_Z
+
+        # 2d (and 3d AMG, which segments a volume slice by slice) stays in-plane.
+        self.assertEqual(
+            _resolve_tiling((2048, 2048), None, None, with_z_axis=False),
+            (DEFAULT_TILE_SHAPE, DEFAULT_HALO, True),
+        )
+        self.assertEqual(_resolve_tiling((512, 512), None, None, with_z_axis=False), (None, None, False))
+        self.assertEqual(_resolve_tiling((2048, 2048), (0, 0), (0, 0), with_z_axis=False), (None, None, False))
+
+        # Decoder-based inference on a volume takes the full (z, y, x); the z entry is the chunk the
+        # untiled path would have picked for itself.
+        n_slices = 32
+        self.assertEqual(
+            _resolve_tiling((n_slices, 2048, 2048), None, None, with_z_axis=True),
+            ((DEFAULT_TILE_Z, *DEFAULT_TILE_SHAPE), (DEFAULT_HALO_Z, *DEFAULT_HALO), True),
+        )
+        # A volume shorter than the default z chunk is one block, so it needs no z halo.
+        self.assertEqual(
+            _resolve_tiling((2, 2048, 2048), None, None, with_z_axis=True),
+            ((2, *DEFAULT_TILE_SHAPE), (0, *DEFAULT_HALO), True),
+        )
+        # Without in-plane tiling the z chunking keeps deciding for itself, i.e. stays None.
+        self.assertEqual(_resolve_tiling((n_slices, 512, 512), None, None, with_z_axis=True), (None, None, False))
+        # An explicit (z, y, x) is kept as given.
+        self.assertEqual(
+            _resolve_tiling((n_slices, 2048, 2048), (8, 256, 256), (2, 32, 32), with_z_axis=True),
+            ((8, 256, 256), (2, 32, 32), True),
+        )
+
     def test_apply_nms_tiled_border_masks(self):
         from micro_sam.util import apply_nms
 
@@ -103,6 +433,35 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(segmentation.shape, (4, 7))
         self.assertEqual(segmentation.max(), 2)
 
+    def test_mask_data_to_segmentation_leftovers(self):
+        from micro_sam.util import mask_data_to_segmentation
+
+        def to_mask_data(*masks):
+            return [{"segmentation": mask, "area": int(mask.sum())} for mask in masks]
+
+        shape = (16, 16)
+        # A bar crossing the mask merged before it is cut into a left (24 px) and a right (20 px) piece.
+        first = np.zeros(shape, dtype=bool)
+        first[:, 6:10] = True
+        bar = np.zeros(shape, dtype=bool)
+        bar[6:10, :15] = True
+        segmentation = mask_data_to_segmentation(to_mask_data(first, bar), shape=shape)
+        self.assertEqual(segmentation.max(), 3)  # each piece becomes an object of its own
+        segmentation = mask_data_to_segmentation(to_mask_data(first, bar), shape=shape, keep_largest_component=True)
+        self.assertEqual(segmentation.max(), 2)
+        self.assertTrue(segmentation[6:10, :6].all() and not segmentation[6:10, 10:].any())
+
+        # A near duplicate of a larger mask, which only pokes out of it by a one pixel sliver.
+        large = np.zeros(shape, dtype=bool)
+        large[2:12, 2:12] = True
+        duplicate = np.zeros(shape, dtype=bool)
+        duplicate[1:9, 3:11] = True
+        segmentation = mask_data_to_segmentation(to_mask_data(large, duplicate), shape=shape)
+        self.assertEqual(segmentation.max(), 2)  # the sliver becomes an object
+        segmentation = mask_data_to_segmentation(to_mask_data(large, duplicate), shape=shape, max_overlap=0.2)
+        self.assertEqual(segmentation.max(), 1)
+        self.assertEqual(int((segmentation == 1).sum()), int(large.sum()))
+
     def _check_predictor_initialization(self, predictor, embeddings, i=None, tile_id=None):
         # We need to do a full reset of the predictor; the orginal_size and input_size
         # are not being reset.
@@ -120,8 +479,9 @@ class TestUtil(unittest.TestCase):
         predictor.input_size = None
         predictor.original_size = None
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings(self):
-        from micro_sam.util import precompute_image_embeddings
+        from micro_sam.v1.util import precompute_image_embeddings
 
         # Load model and create test data.
         predictor = get_sam_model(model_type=self.model_type)
@@ -138,7 +498,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, mode="r")
+        f = _open_embeddings(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(f["features"].shape, (1, 256, 64, 64))
 
@@ -146,8 +506,9 @@ class TestUtil(unittest.TestCase):
         embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path)
         self._check_predictor_initialization(predictor, embeddings)
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings_3d(self):
-        from micro_sam.util import precompute_image_embeddings
+        from micro_sam.v1.util import precompute_image_embeddings
 
         # Load model and create test data.
         predictor = get_sam_model(model_type=self.model_type)
@@ -167,7 +528,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, mode="r")
+        f = _open_embeddings(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(f["features"].shape, (3, 1, 256, 64, 64))
 
@@ -176,8 +537,9 @@ class TestUtil(unittest.TestCase):
         for i in range(input_.shape[0]):
             self._check_predictor_initialization(predictor, embeddings, i=i)
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings_tiled(self):
-        from micro_sam.util import precompute_image_embeddings
+        from micro_sam.v1.util import precompute_image_embeddings
 
         # Load model and create test data.
         predictor = get_sam_model(model_type=self.model_type)
@@ -198,7 +560,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, mode="r")
+        f = _open_embeddings(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(len(f["features"]), 4)
 
@@ -207,8 +569,9 @@ class TestUtil(unittest.TestCase):
         for tile_id in range(4):
             self._check_predictor_initialization(predictor, embeddings, tile_id=tile_id)
 
+    @pytest.mark.v1
     def test_precompute_image_embeddings_tiled_3d(self):
-        from micro_sam.util import precompute_image_embeddings
+        from micro_sam.v1.util import precompute_image_embeddings
 
         # Load model and create test data.
         predictor = get_sam_model(model_type=self.model_type)
@@ -233,7 +596,7 @@ class TestUtil(unittest.TestCase):
 
         # Check the contents of the saved embeddings.
         self.assertTrue(os.path.exists(save_path))
-        f = zarr.open(save_path, mode="r")
+        f = _open_embeddings(save_path, mode="r")
         self.assertIn("features", f)
         self.assertEqual(len(f["features"]), 4)
 
@@ -244,6 +607,27 @@ class TestUtil(unittest.TestCase):
         for i in range(2):
             for tile_id in range(4):
                 self._check_predictor_initialization(predictor, embeddings, i=i, tile_id=tile_id)
+
+    @pytest.mark.v1
+    def test_precompute_image_embeddings_automatic_batch_size(self):
+        # The automatic batch size ('None', the default of the entry points that dispatch across the
+        # model families) has no per-device lookup for SAM1, so it runs a single tile / slice.
+        from micro_sam.v1.util import precompute_image_embeddings
+
+        predictor = get_sam_model(model_type=self.model_type)
+        tile_shape, halo = (256, 256), (16, 16)
+
+        input_ = np.random.rand(512, 512).astype("float32")
+        embeddings = precompute_image_embeddings(
+            predictor, input_, tile_shape=tile_shape, halo=halo, batch_size=None
+        )
+        for tile_id in range(4):
+            self._check_predictor_initialization(predictor, embeddings, tile_id=tile_id)
+
+        input_ = np.random.rand(2, 512, 512).astype("float32")
+        embeddings = precompute_image_embeddings(predictor, input_, ndim=3, batch_size=None)
+        for i in range(2):
+            self._check_predictor_initialization(predictor, embeddings, i=i)
 
     def test_segmentation_to_one_hot(self):
         from micro_sam.util import segmentation_to_one_hot
@@ -261,6 +645,8 @@ class TestUtil(unittest.TestCase):
         self.assertTrue(np.allclose(mask, expected_mask))
 
     def test_get_device(self):
+        from unittest import mock
+
         from micro_sam.util import get_device
 
         # check that device without argument works
@@ -274,6 +660,378 @@ class TestUtil(unittest.TestCase):
         device = get_device(torch.device("cpu"))
         self.assertTrue(isinstance(device, torch.device))
         self.assertEqual(device.type, "cpu")
+
+        # Indexed accelerator strings are valid device selections too.
+        with mock.patch.object(torch.cuda, "is_available", return_value=True):
+            self.assertEqual(get_device("cuda:1"), "cuda:1")
+
+    def test_available_devices_lists_every_gpu_by_index(self):
+        """Only an index pins inference to one GPU, so each visible GPU has to be selectable."""
+        from unittest import mock
+
+        from micro_sam.util import _available_devices
+
+        with mock.patch.object(torch.cuda, "is_available", return_value=True), \
+                mock.patch.object(torch.backends.mps, "is_available", return_value=False), \
+                mock.patch.object(torch.cuda, "device_count", return_value=2):
+            self.assertEqual(_available_devices(), ["cuda:0", "cuda:1", "cpu"])
+
+        # A single GPU is unambiguous, so it stays the plain backend name.
+        with mock.patch.object(torch.cuda, "is_available", return_value=True), \
+                mock.patch.object(torch.backends.mps, "is_available", return_value=False), \
+                mock.patch.object(torch.cuda, "device_count", return_value=1):
+            self.assertEqual(_available_devices(), ["cuda", "cpu"])
+
+    def test_device_type(self):
+        from micro_sam.util import device_type
+
+        self.assertEqual(device_type("cpu"), "cpu")
+        self.assertEqual(device_type(torch.device("cpu")), "cpu")
+
+        # Indexed accelerators must report the plain type: torch reports a model's parameters as
+        # living on 'mps:0' / 'cuda:0', so 'str(device) == "mps"' silently fails.
+        self.assertEqual(device_type("mps"), "mps")
+        self.assertEqual(device_type(torch.device("mps")), "mps")
+        self.assertEqual(device_type(torch.device("mps", 0)), "mps")
+        self.assertEqual(device_type(torch.device("cuda", 3)), "cuda")
+
+    def test_configure_mps_memory(self):
+        from micro_sam.util import _configure_mps_memory
+
+        key = "PYTORCH_MPS_HIGH_WATERMARK_RATIO"
+        original = os.environ.get(key)
+        try:
+            # non-mps devices must not touch the watermark
+            os.environ.pop(key, None)
+            _configure_mps_memory("cpu")
+            self.assertNotIn(key, os.environ)
+            _configure_mps_memory(torch.device("cpu"))
+            self.assertNotIn(key, os.environ)
+
+            # mps disables the watermark when it is unset
+            _configure_mps_memory("mps")
+            self.assertEqual(os.environ.get(key), "0.0")
+
+            # an explicit user-provided value is kept
+            os.environ[key] = "1.9"
+            _configure_mps_memory("mps")
+            self.assertEqual(os.environ[key], "1.9")
+        finally:
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+
+
+try:
+    import sam2  # noqa
+    SAM2_SUPPORT = True
+except ImportError:
+    SAM2_SUPPORT = False
+
+
+@unittest.skipUnless(SAM2_SUPPORT, "Requires the sam2 package.")
+class TestSAM2Util(unittest.TestCase):
+    model_type = "hvit_t"
+    tmp_folder = "tmp-files-sam2"
+
+    def setUp(self):
+        os.makedirs(self.tmp_folder, exist_ok=True)
+
+    def tearDown(self):
+        rmtree(self.tmp_folder)
+
+    def _get_predictor(self, ndim):
+        # Build the SAM2 predictor exactly as the precompute CLI / annotator do.
+        from micro_sam.util import _get_sam_model
+        predictor, _ = _get_sam_model(
+            model_type=self.model_type, ndim=ndim, device="cpu",
+            checkpoint_path=None, decoder_path=None, use_cli=True,
+        )
+        return predictor
+
+    def _check_predictor_initialization_2d(self, predictor, embeddings):
+        from micro_sam.v2.util import set_precomputed
+        predictor.reset_predictor()
+        set_precomputed(predictor, embeddings)
+        self.assertTrue(predictor._is_image_set)
+        self.assertIsNotNone(predictor._features)
+        self.assertIsNotNone(predictor._orig_hw)
+        predictor.reset_predictor()
+
+    def _check_video_predictor_initialization_3d(self, predictor, embeddings, volume):
+        """Read every frame's features back out of the embeddings, the way propagation does.
+
+        The saved form stores a frame as (1, C, h, w) where the in-memory form stores (C, h, w), so
+        this is the layout that only reaches '_get_image_feature' through a store.
+        """
+        state = predictor.init_state(volume=volume, volume_embeddings=embeddings, device="cpu")
+        self.assertEqual(state["num_frames"], volume.shape[0])
+        self.assertEqual(state["cached_features"], {})
+
+        batch_size = 2
+        for i in range(volume.shape[0]):
+            _, _, feats, pos_embeds, feat_sizes = predictor._get_image_feature(state, i, batch_size)
+            self.assertEqual(len(feats), len(pos_embeds))
+            self.assertEqual(len(feats), len(feat_sizes))
+            for feat, pos, (h, w) in zip(feats, pos_embeds, feat_sizes):
+                # Flattened to (h * w, batch, channels) and expanded to the tracked object count.
+                self.assertEqual(tuple(feat.shape[:2]), (h * w, batch_size))
+                self.assertEqual(tuple(pos.shape[:2]), (h * w, batch_size))
+                self.assertTrue(torch.isfinite(feat).all())
+            self.assertIn(i, state["cached_features"])
+
+        predictor.reset_state(state)
+
+    def test_precompute_image_embeddings_2d(self):
+        from micro_sam.v2.normalization import IMAGE_PREPROCESSING
+        from micro_sam.v2.util import precompute_image_embeddings
+
+        predictor = self._get_predictor(ndim=2)
+        input_ = np.random.rand(512, 512).astype("float32")
+
+        # Compute the image embeddings without save path.
+        embeddings = precompute_image_embeddings(predictor, input_, ndim=2)
+        for key in ("features", "high_res_feats", "input_size", "original_size"):
+            self.assertIn(key, embeddings)
+        self.assertEqual(embeddings["features"].ndim, 4)
+        self.assertEqual(embeddings["features"].shape, (1, 256, 64, 64))
+        self._check_predictor_initialization_2d(predictor, embeddings)
+
+        # Compute the image embeddings with save path.
+        save_path = os.path.join(self.tmp_folder, "embed.zarr")
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=2)
+        self._check_predictor_initialization_2d(predictor, embeddings)
+
+        # Check the contents of the saved embeddings.
+        self.assertTrue(os.path.exists(save_path))
+        f = _open_embeddings(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertIn("high_res_feats", f)
+        self.assertEqual(f["features"].shape, (1, 256, 64, 64))
+        # The signature is written so the GUI / CLI can validate a reload.
+        self.assertEqual(f.attrs["model_name"], self.model_type)
+        self.assertIn("data_signature", f.attrs)
+        self.assertEqual(f.attrs["normalization"], IMAGE_PREPROCESSING)
+
+        # Check that everything still works when we load the image embeddings from file.
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=2)
+        self.assertEqual(embeddings["features"].shape, (1, 256, 64, 64))
+        self._check_predictor_initialization_2d(predictor, embeddings)
+
+    def test_precompute_image_embeddings_3d(self):
+        from micro_sam.v2.normalization import VIDEO_PREPROCESSING
+        from micro_sam.v2.util import precompute_image_embeddings
+
+        predictor = self._get_predictor(ndim=3)
+        input_ = np.random.rand(2, 256, 256).astype("float32")
+
+        # Compute the image embeddings without save path.
+        # Note: the in-memory form stacks the per-slice features along z (4 dims),
+        # while the saved form keeps an explicit singleton dim (5 dims).
+        embeddings = precompute_image_embeddings(predictor, input_, ndim=3)
+        for key in ("features", "pos_enc", "fpn", "input_size", "original_size"):
+            self.assertIn(key, embeddings)
+        self.assertEqual(embeddings["features"].shape[0], input_.shape[0])
+
+        # Compute the image embeddings with save path.
+        save_path = os.path.join(self.tmp_folder, "embed_3d.zarr")
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
+        self.assertEqual(embeddings["features"].shape, (2, 1, 256, 64, 64))
+        self._check_video_predictor_initialization_3d(predictor, embeddings, input_)
+
+        # Check the contents of the saved embeddings.
+        self.assertTrue(os.path.exists(save_path))
+        f = _open_embeddings(save_path, mode="r")
+        self.assertIn("features", f)
+        self.assertIn("pos_enc", f)
+        self.assertIn("fpn", f)
+        self.assertEqual(f["features"].shape, (2, 1, 256, 64, 64))
+        self.assertEqual(f.attrs["model_name"], self.model_type)
+        self.assertEqual(f.attrs["normalization"], VIDEO_PREPROCESSING)
+        self.assertIn("normalization_bounds_digest", f.attrs)
+
+        # Check that everything still works when we load the image embeddings from file.
+        embeddings = precompute_image_embeddings(predictor, input_, save_path=save_path, ndim=3)
+        self._check_video_predictor_initialization_3d(predictor, embeddings, input_)
+
+    def test_set_precomputed_rejects_volumetric_embeddings(self):
+        """A volume's embeddings are read per frame by 'init_state', never set on an image predictor."""
+        from micro_sam.v2.util import set_precomputed
+
+        class Predictor:
+            device = "cpu"
+
+        embeddings = {"features": np.zeros((2, 1, 256, 64, 64), dtype="float32")}
+        with self.assertRaises(ValueError):
+            set_precomputed(Predictor(), embeddings)
+
+    def test_precompute_image_embeddings_3d_keeps_a_lazy_volume_lazy(self):
+        """A dask / zarr / h5py volume must stay lazy end-to-end, including while writing the signature."""
+        from micro_sam.v2.util import precompute_image_embeddings
+
+        class LazyVolume:
+            def __init__(self, array):
+                self._array = array
+                self.shape = array.shape
+                self.dtype = array.dtype
+
+            def __array__(self, *args, **kwargs):
+                raise AssertionError("The whole volume was materialized.")
+
+            def __getitem__(self, index):
+                return self._array[index]
+
+        predictor = self._get_predictor(ndim=3)
+        array = np.random.rand(2, 256, 256).astype("float32")
+        save_path = os.path.join(self.tmp_folder, "embed_3d_lazy.zarr")
+
+        precompute_image_embeddings(predictor, LazyVolume(array), save_path=save_path, ndim=3)
+
+        f = _open_embeddings(save_path, mode="r")
+        self.assertEqual(f["features"].shape, (2, 1, 256, 64, 64))
+        # The signature must be the one the eager volume produces, so the cache is shared.
+        self.assertEqual(f.attrs["data_signature"], _compute_data_signature(array))
+
+
+class TestEmbeddingBackend(unittest.TestCase):
+    """Direct tests of the z5py embedding backend, without needing a SAM model."""
+    tmp_folder = "tmp-backend"
+
+    def setUp(self):
+        os.makedirs(self.tmp_folder, exist_ok=True)
+
+    def tearDown(self):
+        rmtree(self.tmp_folder)
+
+    @staticmethod
+    def _write_legacy_cache(save_path, data, attrs, zarr_format):
+        # Mimic a cache written by the old zarr-python backend. zarr-python v2 has no zarr_format
+        # argument and always writes v2, so only pass it on v3.
+        if ZARR_MAJOR >= 3:
+            group = zarr.open(save_path, mode="w", zarr_format=zarr_format)
+            arr = group.create_array("features", shape=data.shape, dtype=data.dtype, chunks=data.shape)
+            arr[:] = data
+        else:
+            group = zarr.open(save_path, mode="w")
+            group.create_dataset("features", data=data, shape=data.shape, chunks=data.shape)
+        for key, val in attrs.items():
+            group.attrs[key] = val
+
+    def test_image_embeddings_owns_temporary_store(self):
+        from micro_sam.v2.util import ImageEmbeddings
+
+        class Store:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        temporary_path = os.path.join(self.tmp_folder, "implicit.zarr")
+        os.makedirs(temporary_path)
+        store = Store()
+        resource = ImageEmbeddings({"features": object()}, store=store, temporary_path=temporary_path)
+
+        self.assertTrue(os.path.exists(temporary_path))
+        with resource as embeddings:
+            self.assertIs(embeddings, resource)
+            self.assertFalse(embeddings.closed)
+
+        self.assertTrue(store.closed)
+        self.assertTrue(resource.closed)
+        self.assertFalse(os.path.exists(temporary_path))
+        resource.close()  # Idempotent.
+
+        persistent_path = os.path.join(self.tmp_folder, "persistent.zarr")
+        os.makedirs(persistent_path)
+        persistent_store = Store()
+        with ImageEmbeddings({}, store=persistent_store):
+            pass
+        self.assertTrue(persistent_store.closed)
+        self.assertTrue(os.path.exists(persistent_path))
+
+    def test_open_in_memory(self):
+        from micro_sam.util import _open_embeddings
+        # save_path=None returns an in-memory zarr group (z5py has no in-memory store).
+        f = _open_embeddings(None)
+        self.assertIsInstance(f, zarr.Group)
+
+    def test_roundtrip(self):
+        from micro_sam.util import _open_embeddings, _create_dataset_with_data, _create_dataset_without_data
+        save_path = os.path.join(self.tmp_folder, "embed.zarr")
+        data = np.random.rand(1, 256, 64, 64).astype("float32")
+
+        # On-disk embeddings use the z5py backend.
+        f = _open_embeddings(save_path, mode="a")
+        self.assertIsInstance(f, z5py.Group)
+        _create_dataset_with_data(f, "features", data=data)
+        _create_dataset_without_data(f, "empty", shape=data.shape, dtype="float32", chunks=data.shape)
+        f.attrs["input_size"] = [1024, 1024]
+        f.attrs["tile_shape"] = None
+
+        # Reload with the backend and check the contents (including tricky attrs: a list and None).
+        g = _open_embeddings(save_path, mode="r")
+        self.assertTrue(np.allclose(g["features"][:], data))
+        self.assertEqual(list(g.attrs["input_size"]), [1024, 1024])
+        self.assertIsNone(g.attrs["tile_shape"])
+
+        # z5py-written caches are zarr v3 with blosc. Verify via zarr-python where it can read v3
+        # (zarr-python v2 cannot read the v3 format, so this cross-check only applies on v3).
+        if ZARR_MAJOR >= 3:
+            z = zarr.open(save_path, mode="r")
+            self.assertTrue(np.allclose(z["features"][:], data))
+            self.assertEqual(z.metadata.zarr_format, 3)
+            self.assertTrue(any("blosc" in repr(codec).lower() for codec in z["features"].metadata.codecs))
+
+    def test_open_metadataless_dir(self):
+        # z5py cannot open a directory without zarr metadata. _open_embeddings must handle it
+        # gracefully, as the old zarr-python backend did (implicit group creation).
+        from micro_sam.util import _open_embeddings
+        save_path = os.path.join(self.tmp_folder, "empty.zarr")
+        os.makedirs(save_path)
+        f = _open_embeddings(save_path, mode="a")
+        self.assertNotIn("features", f)
+
+    def test_read_legacy_zarr_python_cache(self):
+        # Caches written by the old zarr-python backend must still load via z5py. Only test the
+        # formats the installed zarr-python can write (v2 alone on zarr-python v2, v2 and v3 on v3).
+        from micro_sam.util import _open_embeddings
+        data = np.random.rand(1, 256, 64, 64).astype("float32")
+        attrs = {
+            "input_size": [1024, 1024], "original_size": [512, 512], "tile_shape": None, "model_name": "vit_t",
+        }
+        formats = (2, 3) if ZARR_MAJOR >= 3 else (2,)
+        for zarr_format in formats:
+            save_path = os.path.join(self.tmp_folder, f"legacy_v{zarr_format}.zarr")
+            self._write_legacy_cache(save_path, data, attrs, zarr_format)
+
+            f = _open_embeddings(save_path, mode="a")
+            self.assertTrue(np.allclose(f["features"][:], data))
+            self.assertEqual(f.attrs["model_name"], "vit_t")
+            self.assertEqual(list(f.attrs["original_size"]), [512, 512])
+            self.assertIsNone(f.attrs["tile_shape"])
+
+
+@pytest.mark.parametrize(
+    "capability, expected", [((9, 0), torch.bfloat16), ((8, 0), torch.bfloat16), ((7, 5), None), ((6, 1), None)]
+)
+def test_the_training_precision_skips_the_float16_tier(monkeypatch, capability, expected):
+    """Inference runs float16 on Volta and Turing. Training stays in fp32 there, because it uses bfloat16."""
+    from micro_sam.util import training_autocast_dtype
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda device: capability)
+
+    assert training_autocast_dtype(torch.device("cuda")) is expected
+
+
+@pytest.mark.parametrize("device_type", ("cpu", "mps"))
+def test_the_training_precision_is_fp32_outside_cuda(device_type):
+    """bfloat16 is emulated on these devices, so autocast makes training slower."""
+    from micro_sam.util import training_autocast_dtype
+
+    assert training_autocast_dtype(torch.device(device_type)) is None
 
 
 if __name__ == "__main__":

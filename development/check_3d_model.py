@@ -1,9 +1,9 @@
-import numpy as np
 import torch
+import numpy as np
 import micro_sam.util as util
 
 from micro_sam.sam_3d_wrapper import get_3d_sam_model
-from micro_sam.training.semantic_sam_trainer import SemanticSamTrainer3D
+from micro_sam.v1.training.semantic_sam_trainer import SemanticSamTrainer3D
 
 
 def predict_3d_model():
@@ -43,7 +43,7 @@ def get_loader(patch_shape, n_classes, batch_size):
 
 # TODO: we are missing the resizing in the model, so currently this only supports 1024x1024
 def train_3d_model():
-    from micro_sam.training.util import ConvertToSemanticSamInputs
+    from micro_sam.v1.training.util import ConvertToSemanticSamInputs
 
     d_size = 4
     n_classes = 5

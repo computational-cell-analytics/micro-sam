@@ -4,8 +4,8 @@ from natsort import natsorted
 
 from util import get_image_label_paths
 
-from micro_sam.evaluation.inference import run_apg
-from micro_sam.evaluation.evaluation import run_evaluation
+from micro_sam.v1.evaluation.inference import run_apg
+from micro_sam.v1.evaluation.evaluation import run_evaluation
 
 
 def run_apg_evaluation(dataset_name, model_type, experiment_folder):

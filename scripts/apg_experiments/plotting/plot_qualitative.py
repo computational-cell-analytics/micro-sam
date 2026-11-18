@@ -11,8 +11,8 @@ from torch_em.util.util import get_random_colors
 
 from elf.evaluation import mean_segmentation_accuracy
 
-from micro_sam.evaluation.model_comparison import _overlay_outline
-from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
+from micro_sam.v1.evaluation.model_comparison import _overlay_outline
+from micro_sam.v1.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
 
 sys.path.append("..")

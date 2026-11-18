@@ -13,7 +13,7 @@ from torch_em.data import datasets
 
 from elf.io import open_file
 
-from micro_sam.evaluation.livecell import _get_livecell_paths
+from micro_sam.v1.evaluation.livecell import _get_livecell_paths
 
 
 DATA_DIR = "/mnt/vast-nhr/projects/cidas/cca/data"
@@ -141,7 +141,7 @@ def _make_center_crop(image, target_shape=(512, 512), seg=None):
 
             top = max(0, min(top, H - crop_h))
             left = max(0, min(left, W - crop_w))
-        else:   # No foreground, let's fallback to the classic center crop.
+        else:  # No foreground, let's fallback to the classic center crop.
             top, left = _center_crop_coords()
 
     else:  # Well no segmentation? We do classic stuff anyways!

@@ -21,7 +21,7 @@ from skimage.measure import label
 from torch_em.data import MinInstanceSampler
 from torch_em.data.datasets import get_mitoem_loader
 
-from micro_sam.training import identity
+from micro_sam.v1.training import identity
 
 from util import (
     _3d_automatic_instance_segmentation_with_decoder,

@@ -8,9 +8,10 @@ import imageio.v3 as imageio
 import torch
 
 from micro_sam import util
-from micro_sam.bioimageio import export_sam_model
+from micro_sam.v1.util import models
+from micro_sam.v1.bioimageio import export_sam_model
 from micro_sam.sample_data import fetch_tracking_example_data
-from micro_sam.bioimageio.predictor_adaptor import PredictorAdaptor
+from micro_sam.v1.bioimageio.predictor_adaptor import PredictorAdaptor
 
 
 AIS_MODEL_TYPE = "vit_t_lm"
@@ -18,7 +19,7 @@ BASE_MODEL_TYPE = "vit_t"
 
 
 def load_ais_model():
-    registry = util.models()
+    registry = models()
     model_path = registry.fetch(AIS_MODEL_TYPE)
     decoder_path = registry.fetch(f"{AIS_MODEL_TYPE}_decoder")
     model = PredictorAdaptor(BASE_MODEL_TYPE)

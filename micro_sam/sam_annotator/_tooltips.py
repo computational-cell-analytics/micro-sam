@@ -1,80 +1,141 @@
-"""Tooltips for widgets in the annotator.
-"""
+"""Tooltips for widgets in the annotator."""
 
 tooltips = {
-  "embedding": {
-    "custom_weights": "Select custom model weights. For example for a model you have finetuned",
-    "device": "Select the computational device to use for processing.",
-    "embeddings_save_path": "Select path to save or load the computed image embeddings.",
-    "halo": "Enter overlap values for computing tiled embeddings. Enter only x-value for quadratic size.\n Only active when tiling is used.",  # noqa
-    "image": "Select the napari image layer.",
-    "model_family": "Select the segment anything model family.",
-    "model_size": "Select the image encoder size of the segment anything model.",
-    "automatic_segmentation_mode": "Select the automatic segmentation mode.",
-    "run_button": "Compute embeddings or load embeddings if embedding_save_path is specified.",
-    "tiling": "Enter tile size for computing tiled embeddings. Enter only x-value for quadratic size or both for non-quadratic.",  # noqa
-  },
-  "segmentnd": {
-    "box_extension": "Enter factor by which box size is increased when projecting to adjacent slices. Larger factors help if object sizes change between slices.",  # noqa
-    "iou_threshold": "Enter the minimal overlap between objects in adjacent slices to continue segmentation.",
-    "motion_smoothing": "Enter the motion smoothing factor. It is used to follow objects which have a directed movement, higher values help for objects that are moving fast.",  # noqa
-    "projection_dropdown": "Choose the projection mode. It determines which prompts are derived from the masks projected to adjacent frames to rerun SAM.",  # noqa
-  },
-  "autosegment": {
-    # General settings.
-    "apply_to_volume": "Choose if automatic segmentation is run for the full volume or only the current slice.",
-    "gap_closing": "Enter value for closing gaps across slices for volumetric segmentation. Higher values will reduce artifacts due to missing slices in objects but may lead to wrongly merging objects.",  # noqa
-    "min_extent": "Enter the minimal number of slices for objects in volumetric segmentation. To filter out small segmentation artifacts.",  # noqa
-    "min_object_size": "Enter the minimal object size in pixels. This refers to the size per slice for volumetric segmentation.",  # noqa
-    "run_button": "Run automatic segmentation.",
-    "with_background": "Choose if your image has a large background area.",
-    # Settings for AIS.
-    "boundary_distance_thresh": "Enter the boundary distance threshold.",
-    "center_distance_thresh": "Enter the center distance threshold.",
-    # Settings for AMG.
-    "box_nms_thresh": "Enter the non-maximum suppression threshold.",
-    "pred_iou_thresh": "Enter the threshold for filtering objects based on the predicted IOU.",
-    "stability_score_thresh": "Enter the threshold for filtering objects based on the stability score.",
-  },
-  "autotrack": {
-      "run_button": "Run automatic tracking.",
-      "run_tracking": "Choose if to run tracking for the whole timeseries or if to segment only the current timeframe."
-  },
-  "prompt_menu": {
-    "labels": "Choose positive prompts to inlcude regions or negative ones to exclude regions. Toggle between the settings by pressing [t].",  # noqa
-  },
-  "annotator_tracking": {
-    "track_id": "Select the id of the track you are currently annotating.",
-    "track_state": "Select the state of the current annotation. Choose 'division' if the object is dviding in the current frame.",  # noqa
-  },
-  "image_series_annotator": {
-    "folder": "Select the folder with the images to annotate.",
-    "output_folder": "Select the folder for saving the segmentation results.",
-    "pattern": "Select a pattern for selecting files. E.g. '*.tif' to only select tif files. By default all files in the input folder are selected.",  # noqa
-    "is_volumetric": "Choose if the data you annotate is volumetric.",
-  },
-  "training": {
-    "checkpoint": "Select a checkpoint (saved model) to resume training from.",
-    "device": "Select the computational device to use for processing.",
-    "initial_model": "Select the model name used as starting point for training.",
-    "label_key": "Define the key that holds to the segmentation labels. Use a pattern, e.g. \"*.tif\" select multiple files or an internal path for hdf5, zarr or similar formats.",  # noqa
-    "label_path": "Specify the path to the segmentation labels for training. Can either point to a directory or single file.",  # noqa
-    "label_path_val": "Specify the path to the segmentation labels for validation. Can either point to a directory or single file.",  # noqa
-    "name": "Enter the name of the model that will be trained.",
-    "patch": "Select the size of image patches used for training.",
-    "raw_key": "Define the key that holds to the image data. Use a pattern, e.g. \"*.tif\" select multiple files or an internal path for hdf5, zarr or similar formats.",  # noqa
-    "raw_path": "Specify the path to the image data for training. Can either point to a directory or single file.",
-    "raw_path_val": "Specify the path to the image data for validation. Can either point to a directory or single file.",  # noqa
-    "segmentation_decoder": "Choose whether to train with additional segmentation decoder or not.",
-    "output_path": "Specify the path where you want to save the trained model after the training process.",
-    "n_epochs": "Define the number of training epochs for your model.",
-    "configuration": "Specifiy the hardware configuration to use for training.",
-  },
-  "commit": {
-      "layer": "The layer to commit. Either 'current_object' to commit results from prompt-based segmentation or 'auto_segmentation' to commit results from automatic segmentation.",  # noqa
-      "preserve_mode": "The mode for preserving already committed objects. Either 'objects' to preserve on a per-object level, 'pixels' to preserve on a per-pixel level, or 'none' to not preserve.",  # noqa
-      "commit_path": "The path to a zarr file for saving committed objects, prompts and other segmentation settings.",
-  }
+    "embedding": {
+        "batch_size": "Number of slices or tiles per GPU step. Higher is faster, but uses more GPU memory.",
+        "cache_state": "Save the automatic segmentation state to disk for faster runs.",
+        "custom_weights": (
+            "Your own model weights. For automatic segmentation, use 'best.pt' "
+            "or a model file with its '_decoder' file next to it."
+        ),
+        "device": "The device for the computation. 'auto' uses all GPUs.",
+        "embeddings_save_path": "File to save or load the embeddings.",
+        "halo": "Tile overlap. Enter only x for a square overlap.",
+        "image": "The image layer.",
+        "image_ndim": "'2d': read a multi-channel array as one image. '3d': read it as a volume.",
+        "model_family": "The model family.",
+        "model_family_advanced": "The advanced model family, for example SAM1.",
+        "model_size": "The model size. Larger is more accurate, but slower.",
+        "advanced_model": "Show the advanced models (SAM1).",
+        "automatic_segmentation_mode": "The automatic segmentation mode.",
+        "run_button": "Compute the embeddings, or load them from the save path.",
+        "tiling": "Tile size. Enter only x for square tiles.",
+        "settings": "Model, tiling, batch size, save path and device.",
+    },
+    "segmentnd": {
+        "early_stop_patience": "Stop after this many slices without the object. 0: no stop.",
+        "use_full_z_range": "Segment through all slices. Clear to set a slice range.",
+        "z_range": "The slices to segment.",
+        "settings": "Early stop and slice range for the volume segmentation.",
+    },
+    "unified_segment": {
+        "apply_to_volume": "Segment the current slice or the full volume.",
+        "batched": "Segment one object per positive point and per box.",
+        "batched_scribble_disabled": "Not available with scribble prompts. Remove the scribbles to use it.",
+        "segment_button": "Segment the object from the prompts. Shortcut: S.",
+        "clear_button": "Clear the prompts and the current object. Shortcut: Shift + C.",
+    },
+    "autosegment": {
+        # General settings.
+        "apply_to_volume": "Segment the current slice or the full volume.",
+        "min_object_size": "Minimum object size in pixels (per slice in 3d).",
+        "run_button": "Run the automatic segmentation.",
+        "tile_z": "Slices per block in 3d. Less uses less memory.",
+        "halo_z": "Overlap slices between the 3d blocks.",
+        # Settings for the SAM2 automatic segmentation modes.
+        "mode": "'apg': default on GPU. 'sparse': default on CPU. 'dense': multicut. All need a decoder.",
+        "foreground_threshold": "Threshold for the foreground.",
+        "density_threshold": "Threshold for the seeds.",
+        "candidate_threshold": "Threshold for the APG prompts.",
+        "candidate_threshold_high": "Second APG prompt threshold for volumes.",
+        "min_candidate_size": "Minimum APG prompt size in pixels.",
+        "score_threshold": "Minimum mask score.",
+        "max_overlap": "Maximum overlap between masks.",
+        "multimasking": "Predict 3 masks per prompt and keep the best one.",
+        "refine_with_box_prompts": "Refine each mask with a box.",
+        "box_extension": "Pixels added to each refinement box.",
+        "prompt_batch_size": "Prompts per model step.",
+        "n_objects_per_pass": "Objects per pass through the volume.",
+        "early_stop_patience": "Stop after this many slices without the object. 0: no stop.",
+        "beta": "Boundary bias. Higher merges more objects.",
+        "n_iter": "Number of flow steps.",
+        "dt": "Flow step size.",
+        "sigma": "Smoothing of the seed map.",
+        "n_threads": "Number of threads.",
+        "advanced_settings": "Advanced parameters.",
+    },
+    "autotrack": {
+        "run_button": "Run the automatic tracking.",
+        "run_tracking": "Track all frames, or segment only the current frame.",
+    },
+    "prompt_menu": {
+        "labels": "Positive prompts add to the object. Negative prompts remove from it. Shortcut: T.",
+    },
+    "annotator_tracking": {
+        "track_id": "The track that you annotate.",
+        "track_state": "Select 'division' if the object divides in this frame.",
+        "export_button": "Export the tracks (CTC, GEFF or TrackMate XML).",
+    },
+    "batch_annotator": {
+        "folder": "Folder with the images.",
+        "output_folder": "Folder for the results.",
+        "continue_annotation": "Start at the first image without a result. Clear to start at the first image.",
+        "pattern": "File pattern, for example '*.tif'. Empty: all files.",
+        "ndim": "2d or 3d data.",
+        "task": "Segmentation, tracking, object classification or pixel classification.",
+        "segmentation_folder": "Folder with one segmentation per image. Empty: segment in the tool.",
+    },
+    "training": {
+        "checkpoint": "Checkpoint to continue the training.",
+        "device": "The device for the training.",
+        "initial_model": "The model to start from.",
+        "label_key": "File pattern (for example '*.tif') or the key in a hdf5 or zarr file.",
+        "label_path": "File or folder with the training labels.",
+        "label_path_val": "File or folder with the validation labels.",
+        "name": "Name of the new model.",
+        "patch": "Patch size for the training.",
+        "raw_key": "File pattern (for example '*.tif') or the key in a hdf5 or zarr file.",
+        "raw_path": "File or folder with the training images.",
+        "raw_path_val": "File or folder with the validation images.",
+        "segmentation_decoder": "Also train a decoder for automatic segmentation.",
+        "output_path": "Where to save the model.",
+        "n_epochs": "Number of epochs.",
+        "configuration": "Your hardware.",
+    },
+    "commit": {
+        "layer": "The layer to commit: the prompt result or the automatic result.",
+        "preserve_mode": "Keep committed objects: per object, per pixel, or not at all.",
+        "commit_path": "Zarr file to save the committed objects and prompts.",
+        "commit_button": "Commit the segmentation. Shortcut: C.",
+    },
+    "classification": {
+        "settings": "Features, seed, and load or export of the classifier.",
+        "forward_classifier_state": "Use the annotations of all images. Clear to classify each image alone.",
+        "segmentation": "The segmentation with the objects to classify.",
+        "train_button": "Train and predict. Shortcut: Shift + T.",
+        "clear_button": "Clear the annotations and the prediction. Shortcut: C.",
+        "apply_to_volume": "Predict and clear in the full volume. Clear: current slice only.",
+        "use_top_features_pixel": "Reduce the features with PCA.",
+        "use_top_features_object": "Reduce the features with PCA.",
+        "top_features_pixel": "Number of PCA features (1 to 256).",
+        "top_features_object": "Number of PCA features (1 to 257).",
+        "use_classical_features_pixel": "Add filter features, as in ilastik. Good for intensity and texture.",
+        "use_classical_features_object": "Add size, intensity and shape features.",
+        "classical_features_pixel": "The filters to add.",
+        "classical_features_object": "The features to add.",
+        "use_anyup": "Sharper features at object boundaries.",
+        "random_seed": "'fixed': same result each run. 'random': results change a little.",
+        "load_path": "Classifier file (.joblib) to load.",
+        "load_button": "Load the classifier and predict.",
+        "export_dir": "Folder to save the classifier.",
+        "export_button": "Save the classifier.",
+        "label_names": "Your classes. Select a class to paint with it.",
+        "label_name_row": "Name of the class (optional).",
+        "class_select": "Paint with this class. Shortcut: Alt + Right / Left.",
+        "class_color": "Color of the class.",
+        "class_remove": "Remove the class and its annotations.",
+        "add_class": "Add a class.",
+    },
 }
 
 

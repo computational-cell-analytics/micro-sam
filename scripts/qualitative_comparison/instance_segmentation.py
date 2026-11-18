@@ -1,10 +1,10 @@
 import time
-import imageio.v3 as imageio
 import napari
+import imageio.v3 as imageio
 from elf.io import open_file
 
 from micro_sam.util import get_sam_model
-from micro_sam.instance_segmentation import (
+from micro_sam.v1.instance_segmentation import (
     mask_data_to_segmentation, get_amg, get_predictor_and_decoder
 )
 

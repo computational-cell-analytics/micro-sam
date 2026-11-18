@@ -135,7 +135,7 @@ There are a number of options you can use to benchmark performance, and identify
 
 #### Run the benchmark script
 
-There is a performance benchmark script available in the micro-sam repository at `development/benchmark.py`.
+There is a performance benchmark script for the SAM1 models of the previous version (`micro_sam.v1`) available in the micro-sam repository at `development/benchmark.py`.
 
 To run the benchmark script:
 ```bash
