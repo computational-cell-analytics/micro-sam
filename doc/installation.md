@@ -26,7 +26,7 @@ pip install git+https://github.com/ChaoningZhang/MobileSAM.git@f706ad9c4eb7f219c
 
 The AnyUp upsampling option of the pixel and object classification tools needs [AnyUp](https://github.com/wimmerth/anyup). It is not available on PyPI or conda-forge, so it has to be installed from GitHub:
 ```bash
-pip install git+https://github.com/wimmerth/anyup@351807a9c4287368732cc247f26c7c81c9139af4
+pip install git+https://github.com/wimmerth/anyup
 ```
 
 ## From conda
@@ -59,7 +59,7 @@ conda install -c conda-forge micro_sam "libtorch=*=cuda11*"
 
 The AnyUp upsampling option of the pixel and object classification tools needs [AnyUp](https://github.com/wimmerth/anyup). Install it with pip in the conda environment, since it is not available on PyPI or conda-forge:
 ```bash
-pip install git+https://github.com/wimmerth/anyup@351807a9c4287368732cc247f26c7c81c9139af4
+pip install git+https://github.com/wimmerth/anyup
 ```
 
 ## From source
