@@ -90,7 +90,7 @@ conda env create -f environment.yaml
 4. Activate the environment:
 
 ```bash
-conda activate sam
+conda activate sam2
 ```
 
 5. Install `micro_sam`:

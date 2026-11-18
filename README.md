@@ -7,7 +7,7 @@
 
 # Segment Anything for Microscopy 2
 
-<a href="https://github.com/computational-cell-analytics/micro-sam"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/dev/doc/logo/v2/logo_and_text.png" width="300" align="right">
+<a href="https://github.com/computational-cell-analytics/micro-sam"><img src="https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/logo/v2/logo_and_text.png" width="300" align="right">
 
 Tools for segmentation, tracking and classification in microscopy built on [Segment Anything 2 (SAM2)](https://ai.meta.com/sam2/).
 Segment, track and classify objects in microscopy images interactively with a few clicks, or automatically.

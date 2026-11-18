@@ -1,4 +1,4 @@
-name: sam
+name: sam2
 channels:
     - conda-forge
 dependencies:
