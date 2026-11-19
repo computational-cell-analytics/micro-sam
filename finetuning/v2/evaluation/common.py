@@ -116,6 +116,13 @@ LIVECELL_TRAIN_VAL_OVERLAP = frozenset({
 })
 
 
+# CartoCell ships only two small validation volumes (44 and 51 slices of about 100 x 100 px), so six of its 60 test
+# volumes tune instead, one per culture condition and two of the 10 day cysts, drawn with a fixed seed (user,
+# 2026-11-19). They are dropped from the scored test split, which keeps 54 volumes.
+CARTOCELL_TUNING_TEST_VOLUMES = (
+    "10d.1B.23.2.tif", "10d.1B.41.2.tif", "4d.3B.3_2.tif", "4d.5C.3_1.tif", "7d.1.B.10_3.tif", "7d.4C.11_2.tif",
+)
+
 # Test images with a verified copy in the training data (byte-identical, or the same field re-imaged with a
 # normalized cross-correlation above 0.95), dropped from the scored test split. Found by the 2026-09-21 data audit,
 # see experiments/micro_sam2/experiments/data_audit_2026_09_21/contaminated_test_images.csv.
@@ -1905,8 +1912,12 @@ def _get_3d_lm_data_paths(
         return sorted(paths), sorted(paths), "raw", "labels"
 
     if dataset_name == "cartocell":
-        folder = CARTOCELL_TEST_FOLDER if split == "test" else CARTOCELL_VAL_FOLDER
-        img = sorted(glob(os.path.join(p, "cartocell", "CartoCell", folder, "x", "*.tif")))
+        test = sorted(glob(os.path.join(p, "cartocell", "CartoCell", CARTOCELL_TEST_FOLDER, "x", "*.tif")))
+        moved = [path for path in test if os.path.basename(path) in CARTOCELL_TUNING_TEST_VOLUMES]
+        if split == "test":
+            img = [path for path in test if path not in moved]
+        else:
+            img = sorted(glob(os.path.join(p, "cartocell", "CartoCell", CARTOCELL_VAL_FOLDER, "x", "*.tif"))) + moved
         gt = [path.replace(os.sep + "x" + os.sep, os.sep + "y" + os.sep) for path in img]
         return img, gt, None, None
 
@@ -3940,6 +3951,32 @@ def interactive_sample_ids_3d(dataset_name, data_root, limit=None):
         return list(range(total))
     step = (total - 1) / (INTERACTIVE_MAX_CROPS_3D - 1)
     return [round(i * step) for i in range(INTERACTIVE_MAX_CROPS_3D)]
+
+
+def legacy_test_sample_ids(dataset_name, data_root):
+    """The positions that the current test samples had before test volumes moved into tuning, or None.
+
+    Results written before the move (e.g. the hvit_t reference runs) index their per-sample rows by the old
+    positions. Only CartoCell moved volumes, see CARTOCELL_TUNING_TEST_VOLUMES.
+
+    Args:
+        dataset_name: The dataset.
+        data_root: The root the data lives in.
+
+    Returns:
+        The old sample positions of the current test samples in their order, or None if the split did not change.
+    """
+    if dataset_name != "cartocell":
+        return None
+    paths = sorted(glob(os.path.join(data_root, "cartocell", "CartoCell", CARTOCELL_TEST_FOLDER, "x", "*.tif")))
+    ids, position = [], 0
+    for path in paths:
+        name = os.path.basename(path)
+        n_crops = len(EVAL_CROPS["cartocell"][1][name]) if "cartocell" in EVAL_CROPS else 1
+        if name not in CARTOCELL_TUNING_TEST_VOLUMES:
+            ids.extend(range(position, position + n_crops))
+        position += n_crops
+    return ids
 
 
 def has_val_split(dataset_name: str) -> bool:

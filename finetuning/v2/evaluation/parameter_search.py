@@ -60,9 +60,10 @@ from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, models a
 
 from common import (
     DATASETS_2D_EM_NUCLEUS_MOCK, DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
-    EM_NUCLEUS_MOCK_2D_ROOT, GT_MIN_SIZE_2D, CROP_SHAPE_3D, DATA_ROOT, MODEL_TYPES, MODES, TUNING_CROPS,
-    VOLUME_SPEED_OPTIONS, build_model, check_data_download, drop_severed_objects, em_roi, get_data_paths,
-    has_val_split, load_data, load_evaluation_sample_2d, load_evaluation_sample_3d, n_samples, predict_unisam2,
+    EM_NUCLEUS_MOCK_2D_ROOT, GT_MIN_SIZE_2D, CROP_SHAPE_3D, DATA_ROOT, LABELLED_ONLY_DATASETS, MODEL_TYPES, MODES,
+    TUNING_CROPS, VOLUME_SPEED_OPTIONS, build_model, check_data_download, drop_severed_objects, em_roi,
+    get_data_paths, has_val_split, keep_labelled_objects, load_data, load_evaluation_sample_2d,
+    load_evaluation_sample_3d, n_samples, predict_unisam2,
     read_tuned_params, resolve_checkpoint_identity, sorted_path_pairs, use_tmpdir_for_embeddings, val_z_range,
     _read_crops, _read_window,
 )
@@ -276,13 +277,20 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_over
     }
 
 
-def compute_metrics(seg, labels, metric_mode, border_min_size=0):
+def compute_metrics(seg, labels, metric_mode, border_min_size=0, valid_roi=None, labelled_only=False):
     """Compute the evaluation metrics for one segmentation.
 
+    The segmentation is restricted to the scored region first, like `common.run_evaluation` does on the test data:
+    it is cleared outside 'valid_roi' (the annotated part of a partially annotated volume), and with 'labelled_only'
+    (see LABELLED_ONLY_DATASETS) only the objects that overlap the labelled foreground stay.
     The function always reports mSA. Sparse mode also logs the symmetric best Dice (SBD), which no ranking uses.
     Dense (EM neuron) mode also reports the CREMI score with its VI-split, VI-merge and adapted-Rand components.
     Neuron segmentation is ranked by CREMI (lower is better) instead of mSA.
     """
+    if valid_roi is not None:
+        seg = np.where(valid_roi, seg, 0).astype(seg.dtype)
+    if labelled_only:
+        seg = keep_labelled_objects(seg, labels)
     if seg.ndim == 2:
         # Symmetric with the ground truth, which `load_evaluation_sample_2d` filtered the same way.
         seg = drop_severed_objects(seg, border_min_size)
@@ -378,7 +386,8 @@ def deduplicate_flow_travel(params_list):
 
 
 def score_image_sparse_cached(
-    prediction, labels, params_list, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0,
+    prediction, labels, params_list, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0, valid_roi=None,
+    labelled_only=False,
 ):
     """Score all sparse combos on one image, caching the flow density across shared combos.
 
@@ -436,7 +445,9 @@ def score_image_sparse_cached(
                     discard = ids[(sizes < min_size) & (ids > 0)]
                     seg[np.isin(seg, discard)] = 0
                     seg = watershed(hmap, markers=seg, mask=fg_mask)
-                results.append((index, compute_metrics(seg.astype("uint32"), labels, "sparse", border_min_size)))
+                results.append((index, compute_metrics(
+                    seg.astype("uint32"), labels, "sparse", border_min_size, valid_roi, labelled_only,
+                )))
             except Exception as e:
                 warnings.warn(f"Sparse postprocessing failed for {params_list[index]}: {e}")
                 results.append((index, None))
@@ -509,7 +520,10 @@ def dense_solve(rag, feats, z_edges, overseg, n_slices, beta):
     return seg.astype("uint32")
 
 
-def score_image_dense_cached(prediction, labels, params_list, n_threads=POSTPROC_THREADS, border_min_size=0):
+def score_image_dense_cached(
+    prediction, labels, params_list, n_threads=POSTPROC_THREADS, border_min_size=0, valid_roi=None,
+    labelled_only=False,
+):
     """Score all dense combos on one image, caching the oversegmentation and RAG across shared combos."""
     boundary_map, distances = dense_boundary_and_distances(prediction)
     overseg_cache = {}
@@ -525,14 +539,17 @@ def score_image_dense_cached(prediction, labels, params_list, n_threads=POSTPROC
         overseg, rag, feats, z_edges, n_slices = overseg_cache[key]
         try:
             seg = dense_solve(rag, feats, z_edges, overseg, n_slices, params["beta"])
-            scores.append(compute_metrics(seg, labels, "dense", border_min_size))
+            scores.append(compute_metrics(seg, labels, "dense", border_min_size, valid_roi, labelled_only))
         except Exception as e:
             warnings.warn(f"Dense multicut solve failed for {params}: {e}")
             scores.append(None)
     return scores
 
 
-def score_sample_apg(segmenter, raw, labels, params_list, ndim, metric_mode, spacing=None, border_min_size=0):
+def score_sample_apg(
+    segmenter, raw, labels, params_list, ndim, metric_mode, spacing=None, border_min_size=0, valid_roi=None,
+    labelled_only=False,
+):
     """Return a per-combo list of metric dicts for one sample, aligned with params_list.
 
     The encoder and the decoder run once per sample. An image then reuses its mask proposals across
@@ -543,20 +560,26 @@ def score_sample_apg(segmenter, raw, labels, params_list, ndim, metric_mode, spa
     # A volume takes the options that stop it re-reading its features on every propagation pass.
     segmenter.initialize(raw, ndim=ndim, **(VOLUME_SPEED_OPTIONS if ndim == 3 else {}))
     if ndim == 2:
-        return score_sample_apg_cached(segmenter, labels, params_list, metric_mode, border_min_size)
+        return score_sample_apg_cached(
+            segmenter, labels, params_list, metric_mode, border_min_size, valid_roi, labelled_only,
+        )
 
     scores = []
     for params in params_list:
         try:
             seg = segmenter.generate(spacing=spacing, **params)
-            scores.append(compute_metrics(seg.astype("uint32"), labels, metric_mode, border_min_size))
+            scores.append(compute_metrics(
+                seg.astype("uint32"), labels, metric_mode, border_min_size, valid_roi, labelled_only,
+            ))
         except Exception as e:
             warnings.warn(f"Prompt generation failed for {params}: {e}")
             scores.append(None)
     return scores
 
 
-def score_sample_apg_cached(segmenter, labels, params_list, metric_mode, border_min_size=0):
+def score_sample_apg_cached(
+    segmenter, labels, params_list, metric_mode, border_min_size=0, valid_roi=None, labelled_only=False,
+):
     """Score every combo of an image, prompting SAM2 once per distinct set of proposal parameters."""
     groups = {}
     for index, params in enumerate(params_list):
@@ -574,7 +597,9 @@ def score_sample_apg_cached(segmenter, labels, params_list, metric_mode, border_
             selection = {k: v for k, v in params_list[index].items() if k not in APG_PROPOSAL_KEYS}
             try:
                 seg = segmenter.select(proposals, **selection)
-                scores[index] = compute_metrics(seg.astype("uint32"), labels, metric_mode, border_min_size)
+                scores[index] = compute_metrics(
+                    seg.astype("uint32"), labels, metric_mode, border_min_size, valid_roi, labelled_only,
+                )
             except Exception as e:
                 warnings.warn(f"Selection failed for {params_list[index]}: {e}")
     return scores
@@ -602,15 +627,20 @@ def cached_prediction(cache_dir, index, model, raw, ndim, device):
 
 def score_image(
     prediction, labels, mode, params_list, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0,
+    valid_roi=None, labelled_only=False,
 ):
-    """Return a per-combo list of metric dicts for one decoder prediction, aligned with params_list."""
+    """Return a per-combo list of metric dicts for one decoder prediction, aligned with params_list.
+
+    'valid_roi' and 'labelled_only' restrict the scored region, see `compute_metrics`.
+    """
     if mode == "sparse":
         return score_image_sparse_cached(
             prediction, labels, params_list, n_threads=n_threads, spacing=spacing,
-            border_min_size=border_min_size,
+            border_min_size=border_min_size, valid_roi=valid_roi, labelled_only=labelled_only,
         )
     return score_image_dense_cached(
-        prediction, labels, params_list, n_threads=n_threads, border_min_size=border_min_size
+        prediction, labels, params_list, n_threads=n_threads, border_min_size=border_min_size,
+        valid_roi=valid_roi, labelled_only=labelled_only,
     )
 
 
@@ -821,7 +851,9 @@ def tune_parameters(
     sample_index, per_image = [], []
     t0 = time.perf_counter()
     n_scored = 0
-    for index, (raw, labels, _) in enumerate(tqdm(samples, total=total, desc=f"tune-{mode}")):
+    # The scored region matches the test evaluation (`common.run_evaluation`), see `compute_metrics`.
+    labelled_only = dataset_name in LABELLED_ONLY_DATASETS
+    for index, (raw, labels, valid_roi) in enumerate(tqdm(samples, total=total, desc=f"tune-{mode}")):
         if index % tuning_stride != 0:
             continue
         if n_tuning_samples is not None and n_scored >= n_tuning_samples:
@@ -834,6 +866,7 @@ def tune_parameters(
                 scores = score_sample_apg(
                     model, raw, labels, params_list, ndim, config["metric_mode"],
                     spacing=config["spacing"], border_min_size=border_min_size,
+                    valid_roi=valid_roi, labelled_only=labelled_only,
                 )
             else:
                 prediction = cached_prediction(cache_dir, index, model, raw, ndim, device)
@@ -842,6 +875,7 @@ def tune_parameters(
                 scores = score_image(
                     prediction, labels, postproc_mode, params_list,
                     n_threads=n_threads, spacing=config["spacing"], border_min_size=border_min_size,
+                    valid_roi=valid_roi, labelled_only=labelled_only,
                 )
         except Exception as e:
             warnings.warn(f"Skipping validation sample {index} of '{dataset_name}': {e}")
@@ -897,7 +931,7 @@ IN_DOMAIN_CELLS = {
     "3d": [
         "plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid",
         "embedseg_mouse_skull", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear", "nucverse3d",
-        "platynereis_cells", "densecell", "synapsenet_compartments",
+        "platynereis_cells", "densecell", "synapsenet_compartments", "embedseg_platy_ish",
     ],
     "dense": ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress"],
 }
@@ -1671,12 +1705,22 @@ TUNING_CROP_DATASETS = {
 }
 
 
-def tile_starts(region, crop_shape):
-    """The starts of the tiles of a region, a tuple of slices."""
-    axes = [
-        [sl.start] if sl.stop - sl.start <= size else list(range(sl.start, sl.stop - size + 1, size))
-        for sl, size in zip(region, crop_shape)
-    ]
+def tile_starts(region, crop_shape, edge_aligned=False):
+    """The starts of the tiles of a region, a tuple of slices.
+
+    The tiles do not overlap, so the rest of an axis that is no multiple of the crop stays uncovered. With
+    'edge_aligned' a last tile that ends at the region's end covers it, overlapping its neighbour, if the rest is at
+    least half a tile: a smaller rest would add a tile that mostly repeats its neighbour.
+    """
+    axes = []
+    for sl, size in zip(region, crop_shape):
+        if sl.stop - sl.start <= size:
+            axes.append([sl.start])
+            continue
+        starts = list(range(sl.start, sl.stop - size + 1, size))
+        if edge_aligned and sl.stop - (starts[-1] + size) >= size / 2:
+            starts.append(sl.stop - size)
+        axes.append(starts)
     return list(itertools.product(*axes))
 
 

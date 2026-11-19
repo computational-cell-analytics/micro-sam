@@ -158,3 +158,33 @@ two samples per dataset, so these numbers only show that the pipeline works):
 | 3D fluorescence cells (mSA) | 0.447 / 0.471 | 0.319 / 0.285 |
 | 3D fluorescence nuclei (mSA) | 0.356 / 0.359 | 0.291 / 0.253 |
 | 3D EM neurites (CREMI, lower is better) | 1.087 / 1.102 | 1.001 / 0.963 |
+
+## Post-processing parameter search: offline analysis
+
+`analyze_parameter_search.py` (`cache`, `run`, `report`) analyses the existing sweeps without predicting anything: the
+v6 global search of hvit_t (30 2D / 15 3D validation datasets, production decoder) and round 0 of the decoder-tests
+tuning (runs A0 - E0; 3 2D datasets, 3 3D groups). It compares selection rules by their transfer to held-out
+datasets, held-out samples and the other training seed, and reports sensitivity, flatness and per-dataset optima.
+Outputs: `<root>/param_analysis/` (`report.md`, `transfer.csv`, `sensitivity.csv`, `flatness.csv`,
+`per_dataset_optima.csv`). Note: in the v6 sources the library defaults are the winner of the full search, so their
+"defaults" rows are not a held-out comparison.
+
+## Post-processing parameter search: 3D tuning set
+
+The v6 search tuned the 3D parameters on one 32x512x512 center crop per validation volume (15 datasets, 68 crops).
+`tune_set.py` builds a larger tuning set from the same held-out data (user decisions, 2026-11-19):
+
+- Only in-domain datasets (`parameter_search.IN_DOMAIN_CELLS["3d"]`) plus `embedseg_platy_ish`; OOD data stays clean.
+- Up to 10 tiles of 32x512x512 per dataset, round-robin over the volumes, most objects first (`write`). A last
+  edge-aligned tile is added when it covers at least half a tile of new data (`tile_starts(edge_aligned=True)`).
+- cartocell's validation data is two tiny volumes, so 6 of its 60 test volumes tune instead
+  (`common.CARTOCELL_TUNING_TEST_VOLUMES`). Reference results written before the move are matched per sample
+  (`common.legacy_test_sample_ids`, used by `evaluate_decoder.py report`).
+- The search scores inside `valid_roi` like the test evaluation (before, predictions in the unannotated tissue of
+  plantseg_root and platynereis_cells counted as false positives).
+- The tiles of the low-scoring datasets (v6 best mSA < 0.3) are scored with Hiera-U and hvit_t_cells on a compact
+  grid (`score` / `submit`, `report`) before the tiles are chosen.
+
+Subcommands: `candidates` (tiles + label statistics, CPU), `score` / `submit` (GPU), `report`, `write [--picks]`.
+Outputs: `<root>/param_analysis/tune_set/` (`candidates.csv`, `scores/<model>/`, `predictions/<model>/` as float16,
+`report.md`).

@@ -342,14 +342,22 @@ def _reference_result(dataset):
     return found
 
 
-def _sample_rows(result_path, n_samples):
-    """The per-sample rows of the first 'n_samples' samples, without the samples that have no labels."""
+def _sample_rows(result_path, n_samples=None, sample_ids=None):
+    """The per-sample rows of the first 'n_samples' samples, without the samples that have no labels.
+
+    'sample_ids' maps the samples to the positions of the stored rows, for a reference written before test
+    volumes moved into tuning (see `common.legacy_test_sample_ids`). None means the positions are unchanged.
+    """
     import pandas as pd
 
     # A dataset can have fewer samples than 'n_samples'.
     n_stored = len(glob.glob(os.path.join(result_path[:-4] + "_samples", "sample_*.csv")))
+    if sample_ids is None:
+        sample_ids = range(n_stored)
+    if n_samples is not None:
+        sample_ids = sample_ids[:n_samples]
     rows = []
-    for index in range(min(n_samples, n_stored)):
+    for index in sample_ids:
         path = os.path.join(result_path[:-4] + "_samples", f"sample_{index:04d}.csv")
         if not os.path.exists(path):
             raise RuntimeError(f"The reference has no row for sample {index}: {path}.")
@@ -390,9 +398,11 @@ def report(args):
         if new_path is not None:
             row["new"] = float(pd.read_csv(new_path)[column].iloc[0])
         reference_path = _reference_result(dataset)
+        # The reference predates the move of test volumes into tuning, so its rows are matched by sample.
+        legacy_ids = evaluation_common.legacy_test_sample_ids(dataset, DATA_ROOT)
         if reference_path is not None:
-            if args.n_samples:
-                samples = _sample_rows(reference_path, args.n_samples)
+            if args.n_samples or legacy_ids is not None:
+                samples = _sample_rows(reference_path, args.n_samples, legacy_ids)
                 if samples is not None:
                     row["reference"], row["n_samples"] = float(samples[column].mean()), len(samples)
             else:
