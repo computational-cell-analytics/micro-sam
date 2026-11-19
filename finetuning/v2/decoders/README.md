@@ -106,3 +106,55 @@ accumulated over the epochs. Changes: the training workers are restarted in ever
 the jobs request 250 GB, `MALLOC_TRIM_THRESHOLD_` is set as in the joint run, and the training prints the host
 memory every 15 minutes (`[memory]` lines in the log). The pending jobs 17348081 - 17348083 were updated in place
 (memory request, `common.py` and `train_decoder.py` of their code copy) and job 17390104 was appended to the chain.
+
+## Evaluation
+
+`evaluate_decoder.py` scores a decoder checkpoint with automatic instance segmentation (AIS) on the datasets of the
+automatic segmentation panels of Figures 2 and 3 of the paper (read from `PANEL_DATASETS` in
+`scripts/plotting/v2/for_paper/plots_for_figure{2,3}.py`; Extended Data Figure 1 uses the same datasets).
+
+```bash
+# Check: the first N samples of every dataset, on the local GPU.
+python evaluate_decoder.py run --checkpoint <root>/checkpoints/hiera_u_hvit_t_cells/best.pt --n_samples 2 \
+    --skip_failed -e <root>/evaluation/smoke
+python evaluate_decoder.py report -e <root>/evaluation/smoke --n_samples 2
+
+# Full evaluation: Slurm array over datasets and shards (one A100 per task by default), then the report.
+python evaluate_decoder.py submit --checkpoint <root>/checkpoints/hiera_u_hvit_t_cells/best.pt [--dry-run]
+python evaluate_decoder.py report -e <root>/evaluation/hiera_u_hvit_t_cells
+```
+
+- The pipeline is the one of `finetuning/v2/evaluation/evaluate_automatic_segmentation.py` (`run_evaluation`): the
+  same test samples and crops (`common.load_data`, `eval_crops.json`), padding, upscaling, tiling of large images
+  (384 + 2 x 64 pixels), postprocessing (`postprocess_unisam2`) and metrics. The decoder model has the input and
+  output convention of the UniSAM2 model, so it runs through the same code.
+- The only difference to the reference: volumes are predicted in blocks of 10 + 2 x 2 = 14 slices, the number of
+  slices of the training (`--z_tile`, `--z_halo`; the reference uses 4 + 2 x 2). These blocks need about 9.1 GiB
+  of GPU memory and `PYTORCH_ALLOC_CONF=expandable_segments:True` (set by the script).
+- Reference: micro-sam2 hvit_t, i.e. `hvit_t_cells` with `hvit_t_cells_decoder` and the library defaults, from the
+  registry evaluation of the paper (`experiments/v6_cells_registry_evaluation{,_crops32,_isotropic}/results`, a
+  later folder replaces the result of an earlier one, as for the figure tables). With `--n_samples`, the report
+  compares on the same samples, using the per-sample rows of the reference.
+- **Postprocessing parameters: for now the library defaults of `hvit_t_cells`** (`model_type="hvit_t"`, see
+  `DEFAULT_MODEL_TYPE`). They were tuned for the previous decoder; parameters optimized for the new decoder come next.
+- The checkpoint is staged first (`<experiment>/checkpoints/<run>_epoch<k>_<checksum>.pt`, decoder entries only),
+  since the training overwrites `best.pt`. The checksum of the training checkpoint names the result files
+  (`results/<dataset>_micro_sam2_hvit_t_ais_default[_n<N>]_ckpt-<checksum>.csv`). torch_em stores the training
+  datasets in the checkpoints; they are not rebuilt when loading (`load_training_checkpoint`).
+- Errors of a dataset (e.g. out of GPU memory) are listed in `<experiment>/failed.json` with `--skip_failed`.
+
+Smoke test (2026-11-19, `best.pt` after 7 epochs, checksum `88cb7825...`, local MIG 1g.10gb): the first two samples
+of all 81 datasets ran without errors (2D about 0.2 s per image, 3D 4 - 38 s per crop including loading and
+postprocessing, 9.1 GiB
+peak). Means over the panels, new decoder vs. reference on the same samples (`evaluation/smoke/report_n2.csv`;
+two samples per dataset, so these numbers only show that the pipeline works):
+
+| Panel | ID new / ref. | OOD new / ref. |
+|---|---|---|
+| 2D label-free cells (mSA) | 0.449 / 0.439 | 0.182 / 0.205 |
+| 2D fluorescence cells (mSA) | 0.397 / 0.375 | 0.351 / 0.363 |
+| 2D fluorescence nuclei (mSA) | 0.511 / 0.504 | 0.412 / 0.408 |
+| 2D histopathology nuclei (mSA) | 0.436 / 0.434 | 0.266 / 0.250 |
+| 3D fluorescence cells (mSA) | 0.447 / 0.471 | 0.319 / 0.285 |
+| 3D fluorescence nuclei (mSA) | 0.356 / 0.359 | 0.291 / 0.253 |
+| 3D EM neurites (CREMI, lower is better) | 1.087 / 1.102 | 1.001 / 0.963 |

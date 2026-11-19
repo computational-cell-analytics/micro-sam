@@ -59,23 +59,28 @@ use_tmpdir_for_embeddings()
 
 def segment(
     model, mode, raw, ndim, dataset_name, model_type, params, device, spacing=None, devices=None, min_shape=None,
+    predict_kwargs=None,
 ):
     """Segment one sample with the tuned parameters of a mode.
 
     With 'min_shape' (y, x), a 2d image smaller than it is padded with zeros to that shape, as PathoSAM does with the
     256 x 256 PanNuke tiles, and the segmentation is cropped back. A volume is padded in y and x, slice by slice.
+    'predict_kwargs' go to `predict_unisam2` (AIS only), e.g. the tiling of volumes.
     """
     if min_shape is not None and ndim == 2 and min(raw.shape[:2]) < min(min_shape):
         from skimage.segmentation import relabel_sequential
         padded, crop = pad_to_min_shape(raw, min_shape)
-        seg = segment(model, mode, padded, ndim, dataset_name, model_type, params, device, spacing, devices)
+        seg = segment(
+            model, mode, padded, ndim, dataset_name, model_type, params, device, spacing, devices,
+            predict_kwargs=predict_kwargs,
+        )
         return relabel_sequential(seg[crop])[0].astype("uint32")
     if min_shape is not None and ndim == 3 and min(raw.shape[1:3]) < min(min_shape):
         from skimage.segmentation import relabel_sequential
         # The z axis is moved last, so that pad_to_min_shape pads the y and x axes of every slice.
         padded, crop = pad_to_min_shape(np.moveaxis(raw, 0, -1), min_shape)
         seg = segment(model, mode, np.moveaxis(padded, -1, 0), ndim, dataset_name, model_type, params, device, spacing,
-                      devices)
+                      devices, predict_kwargs=predict_kwargs)
         return relabel_sequential(seg[(slice(None),) + crop])[0].astype("uint32")
     if mode == "apg":
         model.clear_state()
@@ -83,14 +88,14 @@ def segment(
         volume_params = {"spacing": spacing} if ndim == 3 else {}
         return model.generate(**{**volume_params, **params}).astype("uint32")
 
-    prediction = predict_unisam2(model, raw, ndim=ndim, device=device, devices=devices)
+    prediction = predict_unisam2(model, raw, ndim=ndim, device=device, devices=devices, **(predict_kwargs or {}))
     return postprocess_unisam2(prediction, dataset_name, model_type=model_type, params=params)
 
 
 def run_evaluation(
     model, mode, dataset_name, data_root, experiment_folder, model_type, params, device, limit,
     crop_shape=None, checkpoint_id=None, devices=None, tuned=None, result_tag=None, config_name=None, sample_index=None,
-    shard=None, min_shape=None,
+    shard=None, min_shape=None, predict_kwargs=None,
 ):
     """Score the test split with the given parameters and write the result CSV.
 
@@ -118,6 +123,8 @@ def run_evaluation(
         config_name: The name of the configuration the overrides came from, stored in the results.
         sample_index: The index of the only sample to score, for one array task. See `common.evaluate_samples`.
         shard: (shard_index, n_shards) to score one stride of the samples, for one array task.
+        min_shape: Pad smaller images to this (y, x) shape, see `segment`.
+        predict_kwargs: Keyword arguments for `predict_unisam2` (AIS only), e.g. the tiling of volumes.
 
     Returns:
         The results as a DataFrame, or None while the rows of other samples are missing.
@@ -151,7 +158,7 @@ def run_evaluation(
     return evaluate_samples(
         lambda raw: segment(
             model, mode, raw, ndim, dataset_name, model_type, params or {}, device, spacing=spacing, devices=devices,
-            min_shape=min_shape,
+            min_shape=min_shape, predict_kwargs=predict_kwargs,
         ),
         dataset_name, data_root, save_path, desc=f"{mode}-{model_type}", limit=limit, crop_shape=crop_shape,
         sample_index=sample_index, extra_columns=extra_columns, shard=shard,

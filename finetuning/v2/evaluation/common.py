@@ -3098,7 +3098,27 @@ def build_apg_model_from_checkpoint(joint_checkpoint_path, model_type="hvit_t", 
     )
 
 
-def predict_unisam2(model, raw, ndim, device, normalization=None, devices=None):
+# The tiles and halos of the AIS inference for large images and for volumes. A 3d block sees 4 + 2 * 2 = 8 slices.
+AIS_TILE_SHAPE_2D, AIS_HALO_2D = (384, 384), (64, 64)
+AIS_TILE_SHAPE_3D, AIS_HALO_3D = (4, 384, 384), (2, 64, 64)
+
+
+def predict_unisam2(model, raw, ndim, device, normalization=None, devices=None, tile_shape_3d=None, halo_3d=None):
+    """Predict the five AIS channels for an image or a volume.
+
+    Args:
+        model: The UniSAM2 model, or a model with the same input and output convention.
+        raw: The image or volume, with an optional trailing channel axis.
+        ndim: The number of spatial dimensions, 2 or 3.
+        device: The torch device.
+        normalization: Optional normalization of the input, see `UniSAM2InstanceSegmentation`.
+        devices: The devices inference spreads over.
+        tile_shape_3d: The tile shape of volumes. Defaults to AIS_TILE_SHAPE_3D.
+        halo_3d: The halo of volumes. Defaults to AIS_HALO_3D.
+
+    Returns:
+        The prediction with shape (5, *spatial).
+    """
     from micro_sam.v2.instance_segmentation import get_unisam2_segmentation_generator
 
     is_3d = (ndim == 3)
@@ -3133,8 +3153,11 @@ def predict_unisam2(model, raw, ndim, device, normalization=None, devices=None):
         model, is_tiled=is_tiled, device=device, inference_device=devices
     )
     if is_tiled:
-        tile_shape = (4, 384, 384) if is_3d else (384, 384)
-        halo = (2, 64, 64) if is_3d else (64, 64)
+        if is_3d:
+            tile_shape = AIS_TILE_SHAPE_3D if tile_shape_3d is None else tuple(tile_shape_3d)
+            halo = AIS_HALO_3D if halo_3d is None else tuple(halo_3d)
+        else:
+            tile_shape, halo = AIS_TILE_SHAPE_2D, AIS_HALO_2D
         segmenter.initialize(raw, ndim=ndim, tile_shape=tile_shape, halo=halo, normalization=normalization)
     else:
         segmenter.initialize(raw, ndim=ndim, normalization=normalization)
