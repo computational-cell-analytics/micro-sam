@@ -25,6 +25,8 @@ def popups(monkeypatch):
         QtWidgets.QMessageBox, "information",
         lambda parent, title, text, *args, **kwargs: calls.append((title, text)),
     )
+    # Keep the gating independent of the GPU setup of the computer that runs the tests.
+    monkeypatch.setattr("micro_sam.util.get_gpu_setup_warning", lambda: None)
     return calls
 
 
@@ -142,3 +144,18 @@ def test_cpu_popup_counts_normalized_tiles(
 
     assert tuple(seen["tile_shape"]) == expected_tile_shape
     assert widget._n_tiles(seen["tile_shape"], seen["shape"]) == expected_n_tiles
+
+
+def test_gpu_setup_popup_for_plain_2d(make_napari_viewer_proxy, popups, monkeypatch):
+    # An NVIDIA GPU that PyTorch cannot use is always worth a warning, even for a cheap computation.
+    warnings = []
+    monkeypatch.setattr("micro_sam.util.get_gpu_setup_warning", lambda: "GPU not usable")
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox, "warning",
+        lambda parent, title, text, *args, **kwargs: warnings.append((title, text)),
+    )
+    widget = make_widget(make_napari_viewer_proxy())
+    widget._maybe_warn_cpu(2, None, (256, 256))
+    widget._maybe_warn_cpu(3, None, (8, 256, 256))
+    assert warnings == [("GPU not used", "GPU not usable")]
+    assert not popups

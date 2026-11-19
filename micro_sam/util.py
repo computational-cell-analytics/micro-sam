@@ -179,6 +179,46 @@ def _get_default_device():
     return device
 
 
+def _has_nvidia_gpu() -> bool:
+    gpu_dir = "/proc/driver/nvidia/gpus"
+    if os.path.isdir(gpu_dir):
+        return len(os.listdir(gpu_dir)) > 0
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi is None:
+        return False
+    import subprocess
+    try:
+        result = subprocess.run([nvidia_smi, "-L"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0 and "GPU" in result.stdout
+
+
+def get_gpu_setup_warning() -> Optional[str]:
+    """Check if the computer has an NVIDIA GPU that PyTorch cannot use.
+
+    Package managers sometimes install a CPU-only PyTorch on computers with an NVIDIA GPU.
+    micro_sam then runs on the CPU without an error, which is much slower.
+
+    Returns:
+        A warning that explains the problem and the fix, or None if PyTorch can use the GPU or there is no NVIDIA GPU.
+    """
+    if torch.cuda.is_available() or not _has_nvidia_gpu():
+        return None
+    if torch.version.cuda is None:
+        return (
+            "This computer has an NVIDIA GPU, but the installed PyTorch is a CPU-only build, so micro_sam runs on the "
+            "CPU. To use the GPU, install micro_sam with a CUDA build of PyTorch, e.g. by adding \"pytorch=*=cuda*\" "
+            "to the conda / mamba command. See https://computational-cell-analytics.github.io/micro-sam for details."
+        )
+    return (
+        f"This computer has an NVIDIA GPU, but PyTorch (built for CUDA {torch.version.cuda}) cannot use it, so "
+        "micro_sam runs on the CPU. The NVIDIA driver may be too old for this PyTorch build. Update the driver, or "
+        "install a PyTorch build for an older CUDA version, e.g. by adding \"cuda-version=12\" to the conda / mamba "
+        "command."
+    )
+
+
 def device_type(device: Union[str, torch.device]) -> str:
     """Get the device type ('cpu', 'cuda' or 'mps'), ignoring any device index.
 
@@ -1141,6 +1181,9 @@ def micro_sam_info(download: Optional[List[str]] = None) -> None:
         device_lines.append(f"[bold]Device count:[/bold] {torch.xpu.device_count()}")
     else:
         device_lines.append("[bold]Backend:[/bold] CPU (no GPU acceleration detected)")
+        gpu_warning = get_gpu_setup_warning()
+        if gpu_warning is not None:
+            device_lines.append(f"[bold red]Warning:[/bold red] {gpu_warning}")
     console.print(Panel("\n".join(device_lines), title="Accelerator Information"))
 
     # The section allowing to download models.

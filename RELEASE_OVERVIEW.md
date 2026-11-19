@@ -1,5 +1,13 @@
 # Release Overview
 
+**New in version 2.0.1**
+
+Fix the pip installation: install SAM2 and pin PyQt6 on Linux and macOS. Warn when PyTorch cannot use the NVIDIA GPU and document tested install commands.
+
+**New in version 2.0.0**
+
+Release `micro_sam` 2, built on SAM2 and the new `micro-sam2` models. The SAM1 functionality is available in `micro_sam.v1`.
+
 **New in version 1.9.0**
 
 This is the final release of `micro_sam` 1.x. Development continues in `micro_sam` 2.0. Support napari 0.10, and cap all dependencies that can break `micro_sam` at their tested versions, so that new installations of 1.9 keep working. Pin MobileSAM to a fixed commit.

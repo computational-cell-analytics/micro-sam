@@ -103,3 +103,33 @@ def test_automatic_wrapper_uses_resize_longest():
     assert torch.all(model.seen[..., 4:, :] == 0)
     assert output.shape == (1, 4, 2, 4, 8)
     assert torch.allclose(output, torch.ones_like(output))
+
+
+def test_get_connected_components_areas():
+    from micro_sam.v2.transforms.resize import get_connected_components
+
+    mask = torch.zeros((2, 1, 6, 6), dtype=torch.bool)
+    mask[0, 0, 0:2, 0:2] = True  # 4 pixels.
+    mask[0, 0, 2, 2] = True  # Touches the first square diagonally, so 8-connectivity merges them.
+    mask[0, 0, 5, 5] = True  # A single pixel.
+    labels, areas = get_connected_components(mask)
+
+    assert labels.shape == mask.shape and areas.shape == mask.shape
+    assert torch.all(labels[~mask] == 0) and torch.all(areas[~mask] == 0)
+    assert torch.all(areas[0, 0, 0:2, 0:2] == 5) and areas[0, 0, 2, 2] == 5
+    assert areas[0, 0, 5, 5] == 1
+    assert labels[0, 0, 0, 0] == labels[0, 0, 2, 2] != labels[0, 0, 5, 5]
+    assert torch.all(labels[1] == 0)
+
+
+def test_postprocess_masks_fills_small_holes():
+    transforms = ResizeLongestSideTransforms(8, mask_threshold=0.0, max_hole_area=2.0, max_sprinkle_area=2.0)
+    masks = -torch.ones((1, 1, 8, 8))
+    masks[..., 2:6, 2:6] = 1.0
+    masks[..., 3, 3] = -1.0  # A one-pixel hole.
+    masks[..., 0, 7] = 1.0  # A one-pixel sprinkle.
+    output = transforms.postprocess_masks(masks, (8, 8))
+
+    assert output[0, 0, 3, 3] > 0
+    assert output[0, 0, 0, 7] < 0
+    assert torch.all(output[0, 0, 2:6, 2:6] > 0)

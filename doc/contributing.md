@@ -44,8 +44,9 @@ Create the environment, install the developer dependencies, and install micro-sa
 $ conda env create -f environment.yaml
 $ conda activate sam2
 $ python -m pip install -r requirements-dev.txt
-$ python -m pip install -e .
+$ python -m pip install --no-deps -e .
 ```
+The environment already contains all dependencies. `--no-deps` stops pip from installing the PyPI `sam2` on top of conda-forge's `sam-2`.
 
 ## Make your changes
 

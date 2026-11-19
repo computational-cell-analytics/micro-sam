@@ -17,15 +17,17 @@ dependencies:
     - pyqt6
     - python-xxhash
     - python-elf >=0.9
-    # Note: installing the pytorch package from conda-forge will generally
-    # give you the most optmized version for your system, if you have a modern
-    # enough OS and CUDA version (CUDA >= 12). For older versions, you can
-    # specify the CUDA version by pinning libtorch.
-    # For example, add this line for a CUDA 11 version:
-    # - libtorch=*=cuda11*
-    # or, to enforce a CPU installation, change to
+    # Note: conda / mamba can install a CPU-only pytorch on a computer with an NVIDIA GPU.
+    # To make sure that you get a GPU version, add these lines on Linux:
+    # - "pytorch=*=cuda*"
+    # - "cuda-version=12"
+    # and only the first line on Windows. 'cuda-version=12' also supports older GPUs such as the V100.
+    # To enforce a CPU installation, change to
     # - "pytorch=*=cpu*"
     - pytorch >=2.5
+    # conda-forge's sam-2 registers as 'SAM-2', not 'sam2' as setup.cfg requires.
+    # Install micro_sam with 'pip install --no-deps -e .', otherwise pip adds the PyPI sam2 on top.
+    - sam-2 >=1.0.0.20241215
     - segment-anything >=1.0.1
     - tensordict
     - torchvision
@@ -40,5 +42,4 @@ dependencies:
     - zarr >=3
     - pip:
         - git+https://github.com/ChaoningZhang/MobileSAM.git
-        - git+https://github.com/facebookresearch/sam2.git
         - git+https://github.com/wimmerth/anyup

@@ -2408,14 +2408,23 @@ class EmbeddingWidget(_WidgetBase):
         return Blocking([0, 0], list(shape[:2]), list(tile_shape)).number_of_blocks
 
     def _maybe_warn_cpu(self, ndim, tile_shape, shape):
-        """Show a one-time-per-session info popup for expensive CPU computations (many tiles or 3D)."""
+        """Show a one-time-per-session info popup for CPU computations.
+
+        The popup appears for expensive CPU computations (many tiles or 3D), and always when the computer
+        has an NVIDIA GPU that PyTorch cannot use.
+        """
         state = AnnotatorState()
         if state.cpu_info_shown or not self.warn_on_cpu:
             return
+        if str(util.get_device(self.device)) != "cpu":
+            return
+        gpu_warning = util.get_gpu_setup_warning()
+        if gpu_warning is not None:
+            state.cpu_info_shown = True
+            QtWidgets.QMessageBox.warning(self, "GPU not used", gpu_warning, QtWidgets.QMessageBox.Ok)
+            return
         # 3D runs the encoder per slice. 2D is a single pass per tile, which only adds up for many tiles.
         if ndim < 3 and self._n_tiles(tile_shape, shape) < self.cpu_warn_tiles:
-            return
-        if str(util.get_device(self.device)) != "cpu":
             return
         state.cpu_info_shown = True
         data_kind = "timeseries" if self.is_timeseries else "3D"  # A timeseries uses the 3D compute path.

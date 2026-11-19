@@ -76,6 +76,13 @@ jobs:
       - name: Install dev requirements
         run: python -m pip install -r requirements-dev.txt
 
+      # sam2 is a micro-sam dependency with only a source distribution on PyPI.
+      # Build it against the torch installed here: an isolated build downloads a second torch that overflows /tmp.
+      - name: Install PyTorch and SAM2
+        run: |
+          python -m pip install setuptools torch torchvision
+          python -m pip install --no-build-isolation sam2==1.1.0
+
       - name: Install micro-sam via pip (with dependencies)
         run: python -m pip install -e .
 
