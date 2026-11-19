@@ -13,3 +13,7 @@ from .training import (  # noqa
     train_semantic,
     train_joint_sam2, train_joint_sam2_multi_gpu,
 )
+from .decoder_training import (  # noqa
+    SAM2MultiScaleEncoder, FrozenEncoderHybridUNETR, DecoderTrainer,
+    get_decoder_train_model, get_decoder_trainer, train_decoder,
+)
