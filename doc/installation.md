@@ -15,6 +15,16 @@ You can find more information on the installation and how to troubleshoot it in 
 pip install micro_sam
 ```
 Note: when using pip you have to manage your python environments yourself. For example, you could create a conda environment and install `micro_sam` via pip in there, or use `venv` for this.
+[uv](https://docs.astral.sh/uv/) is a faster alternative to pip that also creates the environment for you:
+```bash
+uv venv --python 3.12
+uv pip install micro_sam
+```
+
+Check these points for your system before you install via pip:
+- Windows with an NVIDIA GPU: the PyTorch packages on PyPI only support the CPU on Windows. Install PyTorch for your GPU from [pytorch.org](https://pytorch.org/get-started/locally/) first, e.g. `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126`, and then install `micro_sam`.
+- Older NVIDIA GPUs (e.g. V100): the default PyTorch packages on PyPI do not support them any more. Install PyTorch from the `cu126` index as described above.
+- Mac with an Intel CPU: PyPI has no recent PyTorch packages for these computers. Install `micro_sam` [from conda](#from-conda) instead.
 
 The AnyUp upsampling option of the pixel and object classification tools needs [AnyUp](https://github.com/wimmerth/anyup). It is not available on PyPI or conda-forge, so it has to be installed from GitHub:
 ```bash
@@ -27,31 +37,33 @@ pip install git+https://github.com/ChaoningZhang/MobileSAM.git
 
 ## From conda
 
-`conda` is a python package manager. If you don't have it installed yet you can follow the instructions [here](https://conda-forge.org/download/) or look into our [installation FAQs](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#faq) to set it up on your system.
-Please make sure that you are using an up-to-date version of conda to install `micro_sam`.
-You can also use [mamba](https://mamba.readthedocs.io/en/latest/), which is a drop-in replacement for conda, to install it. In this case, just replace the `conda` commands below with `mamba`.
+`conda` is a python package manager. We recommend to install it via [Miniforge](https://conda-forge.org/download/), which also provides `mamba`, a faster drop-in replacement for `conda`. You can also look into our [installation FAQs](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#faq) to set it up on your system.
+We recommend to use `mamba` from a recent Miniforge (version 25.3.1 or newer) or `micromamba` to install `micro_sam`. `conda` needs a lot more time and memory to install `micro_sam` (see [the installation FAQ](#installation-questions)). If you use `conda`, replace `mamba` by `conda` in the commands below.
 
-**IMPORTANT**: Do not install `micro_sam` in the base conda environment.
+**IMPORTANT**: Do not install `micro_sam` in the base conda environment. Create a new environment for it, as described below. Do not use the `defaults` channel of Anaconda or Miniconda, only `conda-forge`.
 
-`micro_sam` can be installed in an existing environment via:
+Create a new environment with `micro_sam` (here called `micro-sam`) with the command for your system:
+- Computers without an NVIDIA GPU (including Macs):
 ```bash
-conda install -c conda-forge micro_sam
+mamba create -n micro-sam -c conda-forge "micro_sam>=2" python=3.12
 ```
-or you can create a new environment with it (here called `micro-sam`) via:
+- Linux with an NVIDIA GPU:
 ```bash
-conda create -c conda-forge -n micro-sam micro_sam
+mamba create -n micro-sam -c conda-forge "micro_sam>=2" python=3.12 "pytorch=*=cuda*" "cuda-version=12"
+```
+- Windows with an NVIDIA GPU:
+```bash
+mamba create -n micro-sam -c conda-forge "micro_sam>=2" python=3.12 "pytorch=*=cuda*"
 ```
 and then activate it via
 ```bash
-conda activate micro-sam
+mamba activate micro-sam
 ```
 
-This will also install `pytorch` from the `conda-forge` channel. If you have a recent enough operating system, it will automatically install the best suitable `pytorch` version on your system.
-This means it will install the CPU version if you don't have a nvidia GPU, and will install a GPU version if you have.
-However, if you have an older operating system, or a CUDA version older than 12, than it may not install the correct version. In this case you will have to specify you're CUDA version, for example for CUDA 11, like this:
-```bash
-conda install -c conda-forge micro_sam "libtorch=*=cuda11*"
-```
+The NVIDIA GPU commands make sure that a GPU version of PyTorch is installed. Without `"pytorch=*=cuda*"`, conda / mamba can install a PyTorch version that only supports the CPU, even on a computer with a GPU. `"cuda-version=12"` selects a PyTorch version that supports all NVIDIA drivers for CUDA 12 or newer and older GPUs such as the V100.
+You can check that `micro_sam` uses the GPU with `micro_sam info`.
+
+`"micro_sam>=2"` makes sure that you get the current version: if the current version cannot be installed together with other packages, e.g. in an existing environment, you get an error instead of an old version.
 
 The AnyUp upsampling option of the pixel and object classification tools needs [AnyUp](https://github.com/wimmerth/anyup). Install it with pip in the conda environment, since it is not available on PyPI or conda-forge:
 ```bash

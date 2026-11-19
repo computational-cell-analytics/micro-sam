@@ -88,6 +88,39 @@ class ResizeLongestSideAndPad(torch.nn.Module):
         return image if batched else image[0]
 
 
+def get_connected_components(mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Label the 8-connected components of a binary mask and return the component area for each pixel.
+
+    Uses the compiled SAM2 extension for CUDA tensors if it is available. Otherwise, uses bioimage-cpp.
+    The compiled extension is missing in pip installations and in CPU builds of SAM2.
+
+    Args:
+        mask: The binary mask of shape (N, 1, H, W).
+
+    Returns:
+        The component labels of shape (N, 1, H, W), 0 for the background.
+        The area of the component of each foreground pixel of shape (N, 1, H, W), 0 for the background.
+    """
+    if mask.is_cuda:
+        try:
+            from sam2 import _C
+            return _C.get_connected_componnets(mask.to(torch.uint8).contiguous())
+        except ImportError:
+            pass
+
+    from bioimage_cpp.segmentation import label
+
+    masks = mask.detach().cpu().numpy().astype(bool)
+    labels = np.zeros(masks.shape, dtype="int32")
+    areas = np.zeros(masks.shape, dtype="int32")
+    for i in range(masks.shape[0]):
+        labels[i, 0] = label(masks[i, 0], connectivity=2)
+        component_areas = np.bincount(labels[i, 0].ravel())
+        component_areas[0] = 0
+        areas[i, 0] = component_areas[labels[i, 0]]
+    return torch.from_numpy(labels).to(mask.device), torch.from_numpy(areas).to(mask.device)
+
+
 class ResizeLongestSideTransforms(torch.nn.Module):
     """Drop-in replacement for ``SAM2Transforms`` using resize-longest + padding."""
 
@@ -133,8 +166,6 @@ class ResizeLongestSideTransforms(torch.nn.Module):
 
     def postprocess_masks(self, masks: torch.Tensor, orig_hw) -> torch.Tensor:
         """Upsample, remove bottom/right padding, and restore the original shape."""
-        from sam2.utils.misc import get_connected_components
-
         masks = masks.float()
         flat = masks.flatten(0, 1).unsqueeze(1)
         if self.max_hole_area > 0:

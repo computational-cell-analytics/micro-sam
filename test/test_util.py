@@ -1034,5 +1034,27 @@ def test_the_training_precision_is_fp32_outside_cuda(device_type):
     assert training_autocast_dtype(torch.device(device_type)) is None
 
 
+@pytest.mark.parametrize(
+    "cuda_available, has_gpu, cuda_version, expected",
+    [
+        (True, True, "12.9", None),  # PyTorch uses the GPU.
+        (False, False, None, None),  # No NVIDIA GPU.
+        (False, True, None, "CPU-only build"),  # The CPU-only PyTorch on a GPU computer.
+        (False, True, "13.0", "driver may be too old"),  # A CUDA build that cannot use the GPU.
+    ],
+)
+def test_get_gpu_setup_warning(monkeypatch, cuda_available, has_gpu, cuda_version, expected):
+    from micro_sam import util
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda_available)
+    monkeypatch.setattr(util, "_has_nvidia_gpu", lambda: has_gpu)
+    monkeypatch.setattr(torch.version, "cuda", cuda_version)
+    warning = util.get_gpu_setup_warning()
+    if expected is None:
+        assert warning is None
+    else:
+        assert expected in warning
+
+
 if __name__ == "__main__":
     unittest.main()

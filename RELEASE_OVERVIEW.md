@@ -2,7 +2,11 @@
 
 **New in version 2.0.1**
 
-Fix the pip installation: pip now installs SAM2 (`sam2==1.1.0`, the same code as the latest SAM2 release from Meta). Source installations take SAM2 from conda-forge (`sam-2`) and install `micro_sam` with `pip install --no-deps -e .`. Pin `PyQt6<6.10` on Linux, so that pip installations work on Linux with glibc < 2.34, and stop installing the `test` package.
+Fix the pip installation: install SAM2 and pin PyQt6 on Linux and macOS. Warn when PyTorch cannot use the NVIDIA GPU and document tested install commands.
+
+**New in version 2.0.0**
+
+Release `micro_sam` 2, built on SAM2 and the new `micro-sam2` models. The SAM1 functionality is available in `micro_sam.v1`.
 
 **New in version 1.9.0**
 

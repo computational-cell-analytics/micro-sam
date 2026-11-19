@@ -122,6 +122,26 @@ echo 'export PYOPENGL_PLATFORM=glx' > "$CONDA_PREFIX/etc/conda/activate.d/pyopen
 ```
 
 
+### 11. The installation hangs at "Solving environment".
+`conda` and `mamba` have to select compatible versions for several hundred packages to install `micro_sam`. How long this takes depends on the tool:
+- `mamba` (version 2, part of [Miniforge](https://conda-forge.org/download/) 25.3.1 or newer) and `micromamba` need about 1 GB of memory and less than a minute.
+- `conda` needs about 5 GB of memory and several minutes. On a computer with 8 GB of memory this can take much longer, so that it seems to hang.
+- The old "classic" solver of `conda` (the default before conda 23.10, or if `conda config --show solver` shows `classic`) does not finish at all.
+
+So please use `mamba` from a recent Miniforge or `micromamba`, and follow the [installation instructions](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-conda). Note that `mamba` version 1 (from Miniforge before 25.3.1) is as slow as `conda`.
+
+
+### 12. I have an NVIDIA GPU, but `micro_sam` runs on the CPU.
+Check the output of `micro_sam info`. If it shows a warning that PyTorch cannot use the GPU, `conda` / `mamba` installed a PyTorch version that only supports the CPU, or a version that does not support your NVIDIA driver. Create a new environment with the command for your system from the [installation instructions](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-conda), which contains `"pytorch=*=cuda*"`.
+If you installed via pip on Windows, install PyTorch for your GPU from [pytorch.org](https://pytorch.org/get-started/locally/), see the [pip installation instructions](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-pip).
+
+
+### 13. The installation succeeded, but I have an old version of `micro_sam`.
+Check your version with `micro_sam --version`. `conda` / `mamba` install an older version without an error if the current version cannot be installed together with the other packages. This happens for example if you install `micro_sam` in an existing environment with Python 3.10 (`micro_sam` 2 needs Python 3.11 or newer).
+Create a new environment with the commands from the [installation instructions](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-conda). They contain `"micro_sam>=2"`, which gives you an error instead of an old version.
+Note: `micro_sam` 2 cannot be installed from conda-forge on Linux with an ARM CPU (e.g. NVIDIA Grace) yet.
+
+
 ## Usage questions
 
 <!---
@@ -222,10 +242,11 @@ The SAM1 models of the previous version are available in the `micro_sam.v1` subp
 `micro_sam v1 evaluate` computes the mean segmentation accuracy (introduced in the Pascal VOC challenge) of predicted instance segmentations with the corresponding ground-truth annotations. It works for segmentations from any method. Please see our paper (`Methods` -> `Inference and Evaluation` for more details about it) and `micro_sam v1 evaluate --help` for more details.
 
 
-### 19. I get `RuntimeError: GET was unable to find an engine to execute this computation` on a V100 GPU (*"or any older GPU"*).
-This is a known issue for a combination of older generation GPUs (eg. V100s) and pytorch compiled with the latest CUDA Toolkit (eg. CUDA 12.9 and PyTorch 2.8 has been tested to throw this error on V100s).
+### 19. I get `RuntimeError: GET was unable to find an engine to execute this computation` or `CUDA error: no kernel image is available for execution on the device` on a V100 GPU (*"or any older GPU"*).
+PyTorch versions built for CUDA 13 (and the PyTorch packages for CUDA 13 on PyPI) do not support older GPUs such as the V100 any more.
 Here's what you can do to solve this issue:
-- Use a PyTorch/CUDA build that is known to work with V100, for example CUDA 12.1 or 11.8 with a compatible PyTorch version (please check your installed CUDA drivers).
+- conda / mamba: create the environment with `"pytorch=*=cuda*" "cuda-version=12"`, see the [installation instructions](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#from-conda).
+- pip: install PyTorch from the `cu126` index before installing `micro_sam`: `pip install torch torchvision --index-url https://download.pytorch.org/whl/cu126`.
 - Run on CPU (slower, but works).
 
 ### 20. The automatic instance segmentation does a very poor job for my microscopy images.

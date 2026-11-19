@@ -18,11 +18,12 @@ You can follow recent updates on `micro_sam` in our [news feed](https://forum.im
 
 ## Quickstart
 
-You can install `micro_sam` via conda:
+You can install `micro_sam` in a new environment via mamba:
 ```bash
-conda install -c conda-forge micro_sam
+mamba create -n micro-sam -c conda-forge "micro_sam>=2" python=3.12
+mamba activate micro-sam
 ```
-For more details on the available installation options, check out [the installation section](#installation).
+If you have an NVIDIA GPU, use the command for your system from [the installation section](#installation), which also contains the other installation options.
 
 After installing `micro_sam`, you can start napari from within your environment using
 

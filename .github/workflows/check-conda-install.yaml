@@ -1,0 +1,36 @@
+name: check conda install
+
+# Solve the documented conda-forge install commands for all platforms, without installing anything.
+# Fails if a platform gets an older micro_sam than the latest release, or a GPU command a CPU pytorch.
+on:
+  schedule:
+    - cron: "0 6 * * 1"  # 06:00 UTC every Monday.
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux-64, linux-aarch64, osx-64, osx-arm64, win-64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup micromamba
+        uses: mamba-org/setup-micromamba@v3
+        with:
+          init-shell: bash
+
+      - name: Check the install commands
+        shell: bash -l {0}
+        run: python3 .github/scripts/check_conda_install.py --platform ${{ matrix.platform }}
