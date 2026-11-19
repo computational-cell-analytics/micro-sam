@@ -1,6 +1,5 @@
 import os
 import warnings
-from glob import glob
 from pathlib import Path
 from functools import partial
 from typing import Dict, List, Optional, Union, Tuple, Literal
@@ -12,6 +11,7 @@ import imageio.v3 as imageio
 from torch_em.data.datasets.util import split_kwargs
 
 from .. import util
+from .._io import get_input_name, get_input_paths
 from ..util import AutoSegBase
 from .util import get_sam_model, precompute_image_embeddings, get_model_names
 from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
@@ -329,23 +329,6 @@ def automatic_instance_segmentation(
         return instances
 
 
-def _get_inputs_from_paths(paths, pattern):
-    "Function to get all filepaths in a directory."
-
-    if isinstance(paths, str):
-        paths = [paths]
-
-    fpaths = []
-    for path in paths:
-        if os.path.isfile(path):  # It is just one filepath.
-            fpaths.append(path)
-        else:  # A directory: match files with the pattern, defaulting to all files if none is given.
-            hits = glob(os.path.join(path, pattern if pattern is not None else "*"))
-            fpaths.extend(p for p in hits if os.path.isfile(p))
-
-    return fpaths
-
-
 def main(argv=None):
     """@private"""
     import argparse
@@ -490,7 +473,7 @@ def main(argv=None):
 
     # Get the filepaths to input images (and other paths to store stuff, eg. segmentations and embeddings)
     # Check whether the inputs are as expected, otherwise assort them.
-    input_paths = _get_inputs_from_paths(args.input_path, args.pattern)
+    input_paths = get_input_paths(args.input_path, args.pattern)
     assert len(input_paths) > 0, "'micro-sam' could not extract any image data internally."
 
     output_path = args.output_path
@@ -523,7 +506,7 @@ def main(argv=None):
 
         else:  # When we have multiple images.
             # Get the input filename, without the extension.
-            input_name = str(Path(input_path).stem)
+            input_name = get_input_name(input_path)
 
             # Let's check the 'embedding_path'.
             if embedding_path is None:  # For computing embeddings on-the-fly, we don't care about the path logic.

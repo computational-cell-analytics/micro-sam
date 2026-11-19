@@ -1,13 +1,15 @@
 import os
 
-import h5py
 import numpy as np
 import pytest
+import z5py
+import zarr
 import imageio.v3 as imageio
 from bioimage_cpp.segmentation import label
 from click.testing import CliRunner
 from skimage.data import binary_blobs
 
+from micro_sam._test_util import write_container, write_ome_zarr
 from micro_sam.v2.training.loaders import (
     default_sam2_dataset, default_sam2_loader, resolve_data_paths, split_train_val_files,
 )
@@ -23,51 +25,6 @@ def _data(shape, seed):
     labels = label(raw).astype("uint32")
     raw = (raw * 200 + np.random.default_rng(seed).integers(0, 50, size=shape)).astype("uint8")
     return raw, labels
-
-
-def _write_container(path, raw, labels):
-    import zarr
-    import z5py
-
-    if path.endswith(".h5"):
-        with h5py.File(path, "w") as f:
-            f.create_dataset("raw", data=raw)
-            f.create_dataset("labels", data=labels)
-    elif path.endswith(".n5"):
-        with z5py.File(path, "w") as f:
-            f.create_dataset("raw", data=raw, chunks=raw.shape)
-            f.create_dataset("labels", data=labels, chunks=labels.shape)
-    else:
-        group = zarr.open_group(path, mode="w")
-        group.create_array("raw", data=raw)
-        group.create_array("labels", data=labels)
-
-
-def _write_ome_zarr(path, raw, labels, version):
-    """Write an image with a label image in the ome-zarr layout, with zarr only.
-
-    Version 0.5 uses zarr v3 and keeps the metadata under 'ome', version 0.4 uses zarr v2 and keeps it at the top.
-    """
-    import zarr
-
-    zarr_format, scale_name = (3, "s0") if version == "0.5" else (2, "0")
-    axes = [{"name": name, "type": "space"} for name in ("zyx" if raw.ndim == 3 else "yx")]
-    multiscales = [{
-        "version": version, "axes": axes,
-        "datasets": [{"path": scale_name, "coordinateTransformations": [{"type": "scale", "scale": [1.0] * raw.ndim}]}],
-    }]
-
-    def _attrs(attrs):
-        return {"ome": {"version": version, **attrs}} if version == "0.5" else attrs
-
-    root = zarr.open_group(path, mode="w", zarr_format=zarr_format)
-    root.attrs.update(_attrs({"multiscales": multiscales}))
-    root.create_array(scale_name, data=raw)
-    label_root = root.create_group("labels")
-    label_root.attrs.update(_attrs({"labels": ["cells"]}))
-    cells = label_root.create_group("cells")
-    cells.attrs.update(_attrs({"multiscales": multiscales, "image-label": {"version": version}}))
-    cells.create_array(scale_name, data=labels)
 
 
 @pytest.fixture(scope="module")
@@ -86,10 +43,10 @@ def data_folder(tmp_path_factory):
     imageio.imwrite(folder / "volume.tif", raw)
     imageio.imwrite(folder / "volume_labels.tif", labels)
     for name in ("data.h5", "data.zarr", "data.n5"):
-        _write_container(str(folder / name), raw, labels)
-    _write_ome_zarr(str(folder / "data.ome.zarr"), raw, labels, version="0.5")
+        write_container(str(folder / name), raw, labels)
+    write_ome_zarr(str(folder / "data.ome.zarr"), raw, labels, version="0.5")
     raw_2d, labels_2d = _data(SHAPE_2D, seed=11)
-    _write_ome_zarr(str(folder / "image.ome.zarr"), raw_2d, labels_2d, version="0.4")
+    write_ome_zarr(str(folder / "image.ome.zarr"), raw_2d, labels_2d, version="0.4")
     return folder
 
 
@@ -142,14 +99,32 @@ def test_ome_zarr(data_folder, patch_shape):
     dataset = default_sam2_dataset(path, None, path, "labels/cells", patch_shape, "automatic")
     _check_sample(dataset, "automatic", depth=1 if len(patch_shape) == 2 else 4)
 
+    # Without a label key, the single label image is selected.
     path = str(data_folder / "image.ome.zarr")
-    dataset = default_sam2_dataset(path, None, path, "labels/cells", PATCH_2D, "interactive")
+    dataset = default_sam2_dataset(path, None, path, None, PATCH_2D, "interactive")
     _check_sample(dataset, "interactive", depth=1)
 
     # An explicit scale is used as it is.
     scale = resolve_data_paths(path, None)[1]
+    assert scale == "0"
     assert resolve_data_paths(path, scale)[1] == scale
     assert resolve_data_paths(path, "labels/cells")[1] == f"labels/cells/{scale}"
+    assert resolve_data_paths(path, None, is_segmentation=True)[1] == f"labels/cells/{scale}"
+
+
+def test_zarr_without_key(tmp_path):
+    raw, labels = _data(SHAPE_2D, seed=0)
+    raw_path, label_path = str(tmp_path / "raw.zarr"), str(tmp_path / "labels.n5")
+    zarr.open_group(raw_path, mode="w").create_array("raw", data=raw)
+    with z5py.File(label_path, "w") as f:
+        f.create_dataset("labels", data=labels, chunks=labels.shape)
+    dataset = default_sam2_dataset(raw_path, None, label_path, None, PATCH_2D, "automatic")
+    _check_sample(dataset, "automatic", depth=1)
+
+    path = str(tmp_path / "data.zarr")
+    write_container(path, raw, labels)
+    with pytest.raises(ValueError, match="2 arrays"):
+        resolve_data_paths(path, None)
 
 
 def test_tif_volume(data_folder):

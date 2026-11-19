@@ -172,6 +172,7 @@ def batch_pixel_classifier(
     return_viewer: bool = False,
     skip_done: bool = False,
     batch_size: Optional[int] = 1,
+    key: Optional[str] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the pixel classifier for a list of images.
 
@@ -200,13 +201,14 @@ def batch_pixel_classifier(
             Only has an effect on a GPU. Pass None to select it per device from the free VRAM
             (SAM2 only). By default a single tile / slice is used.
         skip_done: Whether to skip images whose prediction already exists in `output_folder`.
+        key: The key for loading the images from files, see `micro_sam.util.load_image_data`.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
     have_inputs_as_arrays = isinstance(images[0], np.ndarray)
     if ndim is None:
-        ndim = load_batch_image(images[0])[1]
+        ndim = load_batch_image(images[0], key=key)[1]
 
     task = PixelClassificationBatchTask(
         ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,
@@ -215,5 +217,5 @@ def batch_pixel_classifier(
     )
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
-        viewer=viewer, return_viewer=return_viewer, skip_done=skip_done,
+        viewer=viewer, return_viewer=return_viewer, skip_done=skip_done, key=key,
     )

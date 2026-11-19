@@ -1,5 +1,4 @@
 import os
-from glob import glob
 from typing import List, Optional, Union, Tuple
 
 import numpy as np
@@ -19,6 +18,8 @@ from ._tooltips import get_tooltip
 from ._titles import get_dock_title
 from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ._batch import BatchAnnotatorTask, load_batch_image, run_batch
+from .._io import get_image_shape, get_input_name, get_input_paths
+from ..util import load_image_data
 from .util import _sync_embedding_widget, _sync_tiling_widget, _validate_sam2_model_type
 
 # The tasks supported by the unified batch annotator.
@@ -33,7 +34,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
     def __init__(
         self, *, ndim, model_type, embedding_path, tile_shape, halo,
         precompute_autoseg_state, checkpoint_path, device, prefer_decoder,
-        initial_segmentations=None, batch_size=1,
+        initial_segmentations, segmentation_key=None, batch_size=1,
     ):
         _validate_sam2_model_type(model_type, "segmentation")
         self.ndim = ndim
@@ -46,6 +47,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         self.device = device
         self.prefer_decoder = prefer_decoder
         self.initial_segmentations = initial_segmentations
+        self.segmentation_key = segmentation_key
         self.batch_size = batch_size
         self.predictor = None
         self.decoder = None
@@ -53,7 +55,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
     def result_filename(self, entry, index):
         if self.have_inputs_as_arrays:
             return f"seg_{index:05}.tif"
-        return os.path.splitext(os.path.basename(entry))[0] + ".tif"
+        return get_input_name(entry) + ".tif"
 
     def precompute(self, images):
         # The tool computes embeddings lazily per item in start and advance (via 'initialize_predictor',
@@ -65,7 +67,7 @@ class SegmentationBatchTask(BatchAnnotatorTask):
         if self.have_inputs_as_arrays:
             return [os.path.join(self.embedding_path, f"embedding_{i:05}.zarr") for i in range(len(images))]
         return [
-            os.path.join(self.embedding_path, os.path.splitext(os.path.basename(p))[0] + ".zarr") for p in images
+            os.path.join(self.embedding_path, get_input_name(p) + ".zarr") for p in images
         ]
 
     def _resolve_initial_result(self, entry, index):
@@ -75,7 +77,9 @@ class SegmentationBatchTask(BatchAnnotatorTask):
             return imageio.imread(save_path)
         if self.initial_segmentations is not None:
             initial = self.initial_segmentations[index]
-            return initial if isinstance(initial, np.ndarray) else imageio.imread(initial)
+            if isinstance(initial, np.ndarray):
+                return initial
+            return load_image_data(initial, key=self.segmentation_key, is_segmentation=True)
         return None
 
     def _init_predictor(self, viewer, image, embedding_path):
@@ -145,6 +149,8 @@ def batch_annotator(
     model_type: str = DEFAULT_MODEL,
     embedding_path: Optional[str] = None,
     initial_segmentations: Optional[Union[List[Union[os.PathLike, str]], List[np.ndarray]]] = None,
+    key: Optional[str] = None,
+    segmentation_key: Optional[str] = None,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     viewer: Optional["napari.viewer.Viewer"] = None,
@@ -168,6 +174,8 @@ def batch_annotator(
         initial_segmentations: Initial segmentations to be corrected.
             By default no initial segmentations are loaded.
             If given, the initial segmentations will be loaded into 'committed_objects'.
+        key: The key for loading the images from files, see `micro_sam.util.load_image_data`.
+        segmentation_key: The key for loading the initial segmentations from files.
         tile_shape: Shape of tiles for tiled embedding prediction. If `None`, reuse the tiling of
             already cached embeddings, else use the default tiling for images exceeding the in-plane
             size threshold, and pass smaller images to Segment Anything without tiling.
@@ -205,18 +213,18 @@ def batch_annotator(
 
     # Derive the dimensionality from the first image if not given, and load every image with it.
     if ndim is None:
-        ndim = load_batch_image(images[0])[1]
+        ndim = load_batch_image(images[0], key=key)[1]
 
     task = SegmentationBatchTask(
         ndim=ndim, model_type=model_type, embedding_path=embedding_path,
         tile_shape=tile_shape, halo=halo,
         precompute_autoseg_state=precompute_autoseg_state,
         checkpoint_path=checkpoint_path, device=device, prefer_decoder=prefer_decoder,
-        initial_segmentations=initial_segmentations, batch_size=batch_size,
+        initial_segmentations=initial_segmentations, segmentation_key=segmentation_key, batch_size=batch_size,
     )
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
-        viewer=viewer, return_viewer=return_viewer, skip_done=skip_segmented,
+        viewer=viewer, return_viewer=return_viewer, skip_done=skip_segmented, key=key,
     )
 
 
@@ -239,7 +247,7 @@ def image_folder_annotator(
         output_folder: The folder where the segmentation results are saved.
         ndim: The number of spatial dimensions (2 or 3). If None, auto-detected from image shape.
         pattern: The glob pattern for loading files from `input_folder`.
-            By default all files will be loaded.
+            By default all files and zarr / n5 containers will be loaded.
         initial_segmentation_folder: A folder with initial segmentation results.
             By default no initial segmentations are loaded.
         initial_segmentation_pattern: The glob pattern for loading files from `initial_segmentation_folder`.
@@ -247,18 +255,17 @@ def image_folder_annotator(
             This enables using a pre-initialized viewer.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
             By default, does not return the napari viewer.
-        kwargs: The keyword arguments for `micro_sam.sam_annotator.batch_annotator.batch_annotator`.
+        kwargs: The keyword arguments for `micro_sam.sam_annotator.batch_annotator.batch_annotator`,
+            e.g. `key` and `segmentation_key` for loading container files.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
-    image_files = sorted(glob(os.path.join(input_folder, pattern)))
+    image_files = get_input_paths(input_folder, pattern)
     if initial_segmentation_folder is None:
         initial_segmentations = None
     else:
-        initial_segmentations = sorted(glob(os.path.join(
-            initial_segmentation_folder, initial_segmentation_pattern
-        )))
+        initial_segmentations = get_input_paths(initial_segmentation_folder, initial_segmentation_pattern)
 
     return batch_annotator(
         image_files, output_folder, ndim=ndim,
@@ -348,6 +355,14 @@ class BatchAnnotator(widgets._WidgetBase):
         self._content.layout().addLayout(layout)
         self._pattern_label = layout.itemAt(0).widget()
 
+        # Key for container files (zarr, n5, ome-zarr, hdf5). Empty: select the image automatically.
+        self.key = ""
+        self._key_param, layout = self._add_string_param(
+            "key", self.key, tooltip=get_tooltip("batch_annotator", "key")
+        )
+        self._content.layout().addLayout(layout)
+        self._key_label = layout.itemAt(0).widget()
+
         # Segmentation folder (object classification only), toggled by the task selector.
         self.segmentation_folder = None
         self.segmentation_pattern = "*"
@@ -361,6 +376,13 @@ class BatchAnnotator(widgets._WidgetBase):
         )
         seg_layout.addLayout(path_layout)
         self._seg_folder_label = path_layout.itemAt(0).widget()
+        self.segmentation_key = ""
+        _, key_layout = self._add_string_param(
+            "segmentation_key", self.segmentation_key, title="segmentation key",
+            tooltip=get_tooltip("batch_annotator", "segmentation_key"),
+        )
+        seg_layout.addLayout(key_layout)
+        self._seg_key_label = key_layout.itemAt(0).widget()
         self._seg_folder_container.setLayout(seg_layout)
         self._seg_folder_container.setVisible(False)
         self._content.layout().addWidget(self._seg_folder_container)
@@ -416,6 +438,7 @@ class BatchAnnotator(widgets._WidgetBase):
         self.task_dropdown.currentTextChanged.connect(self._on_task_changed)
         self._folder_textbox.textChanged.connect(self._update_default_tiling)
         self._pattern_param.textChanged.connect(self._update_default_tiling)
+        self._key_param.textChanged.connect(self._update_default_tiling)
 
     def _build_embedding_widget(self):
         # The classifier tasks use the classification embedding widget. Its 'Advanced Models' selector also
@@ -463,8 +486,8 @@ class BatchAnnotator(widgets._WidgetBase):
         # Uniform label widths so the input / segmentation / output / pattern fields and the model /
         # task dropdowns all start at the same x and span the same width.
         self._align_widths([
-            self._folder_label, self._pattern_label, self._seg_folder_label, self._output_label,
-            self._task_label, self._model_label,
+            self._folder_label, self._pattern_label, self._key_label, self._seg_folder_label, self._seg_key_label,
+            self._output_label, self._task_label, self._model_label,
         ])
 
         self._update_default_tiling()
@@ -481,11 +504,11 @@ class BatchAnnotator(widgets._WidgetBase):
         ew = self._embedding_widget
         if ew is None or not self.folder:
             return
-        files = sorted(glob(os.path.join(self.folder, self.pattern or "*")))
+        files = self._image_files()
         if not files:
             return
         try:
-            shape = imageio.improps(files[0]).shape
+            shape = get_image_shape(files[0], key=self.key or None)
         except Exception:
             return
         # Drop a trailing channel axis (RGB/RGBA) for the in-plane size judgement.
@@ -493,7 +516,7 @@ class BatchAnnotator(widgets._WidgetBase):
         ew._apply_default_tiling_for_shape(spatial)
 
     def _validate_inputs(self):
-        missing_data = self.folder is None or len(glob(os.path.join(self.folder, self.pattern or "*"))) == 0
+        missing_data = self.folder is None or len(self._image_files()) == 0
         missing_output = self.output_folder is None
         if missing_data or missing_output:
             msg = ""
@@ -505,13 +528,19 @@ class BatchAnnotator(widgets._WidgetBase):
 
         # For object classification with provided segmentations, the counts must match.
         if self.task == "Object Classification" and self.segmentation_folder:
-            n_img = len(glob(os.path.join(self.folder, self.pattern or "*")))
-            n_seg = len(glob(os.path.join(self.segmentation_folder, self.segmentation_pattern)))
+            n_img = len(self._image_files())
+            n_seg = len(self._segmentation_files())
             if n_img != n_seg:
                 return widgets._generate_message(
                     "error", f"The number of images ({n_img}) and segmentations ({n_seg}) does not match."
                 )
         return False
+
+    def _image_files(self):
+        return get_input_paths(self.folder, self.pattern or "*")
+
+    def _segmentation_files(self):
+        return get_input_paths(self.segmentation_folder, self.segmentation_pattern)
 
     def _embedding_paths_for(self, image_files):
         # Per-item embedding zarr paths under the chosen folder (the batch classification functions
@@ -521,7 +550,7 @@ class BatchAnnotator(widgets._WidgetBase):
             return None
         os.makedirs(save_path, exist_ok=True)
         return [
-            os.path.join(save_path, os.path.splitext(os.path.basename(f))[0] + ".zarr") for f in image_files
+            os.path.join(save_path, get_input_name(f) + ".zarr") for f in image_files
         ]
 
     def __call__(self, skip_validate=False):
@@ -549,10 +578,11 @@ class BatchAnnotator(widgets._WidgetBase):
             launched_viewer = image_folder_annotator(
                 input_folder=self.folder, output_folder=self.output_folder, ndim=ndim,
                 pattern=self.pattern or "*", embedding_path=ew.embeddings_save_path,
-                skip_segmented=bool(self.continue_annotation), **common,
+                skip_segmented=bool(self.continue_annotation), key=self.key or None, **common,
             )
         else:
-            image_files = sorted(glob(os.path.join(self.folder, self.pattern or "*")))
+            image_files = self._image_files()
+            common["key"] = self.key or None
             if self.task == "Tracking":
                 from .annotator_tracking import batch_tracking_annotator
                 launched_viewer = batch_tracking_annotator(
@@ -570,10 +600,10 @@ class BatchAnnotator(widgets._WidgetBase):
                     from .object_classifier import batch_object_classifier
                     seg_files = None
                     if self.segmentation_folder:
-                        seg_files = sorted(glob(os.path.join(self.segmentation_folder, self.segmentation_pattern)))
+                        seg_files = self._segmentation_files()
                     launched_viewer = batch_object_classifier(
-                        image_files, seg_files, self.output_folder,
-                        embedding_paths=embedding_paths, ndim=ndim, **common,
+                        image_files, seg_files, self.output_folder, embedding_paths=embedding_paths, ndim=ndim,
+                        segmentation_key=self.segmentation_key or None, **common,
                     )
 
         # A batch function returns None when all results already exist and continuing is enabled.

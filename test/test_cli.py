@@ -220,3 +220,100 @@ def test_v1_automatic_segmentation_forwards_the_tiling(monkeypatch):
     # The tile shape and the halo take exactly two values.
     result = runner.invoke(cli, [*command, "--tile_shape", "384"])
     assert result.exit_code != 0
+
+
+@pytest.fixture
+def container_folder(tmp_path):
+    from micro_sam._test_util import write_ome_zarr
+
+    data = binary_blobs(32, n_dim=2, rng=0).astype("uint8")
+    folder = tmp_path / "images"
+    folder.mkdir()
+    for name in ("a", "b"):
+        write_ome_zarr(str(folder / f"{name}.ome.zarr"), data, data)
+    imageio.imwrite(folder / "c.tif", data)
+    return folder
+
+
+def test_inference_segmentation_resolves_containers(monkeypatch, tmp_path, container_folder):
+    from click.testing import CliRunner
+
+    from micro_sam._cli import cli
+    import micro_sam.v2.automatic_segmentation as automatic_segmentation
+
+    calls = []
+    monkeypatch.setattr(automatic_segmentation, "get_predictor_and_segmenter", lambda **kwargs: (None, None))
+    monkeypatch.setattr(
+        automatic_segmentation, "automatic_instance_segmentation", lambda **kwargs: calls.append(kwargs)
+    )
+
+    runner = CliRunner()
+    out = str(tmp_path / "out")
+    result = runner.invoke(cli, ["inference", "segmentation", "-i", str(container_folder), "-o", out])
+    assert result.exit_code == 0, result.output
+    assert [call["input_path"] for call in calls] == [
+        str(container_folder / name) for name in ("a.ome.zarr", "b.ome.zarr", "c.tif")
+    ]
+    assert [call["output_path"] for call in calls] == [os.path.join(out, f"{name}.tif") for name in "abc"]
+
+    calls.clear()
+    path = str(container_folder / "a.ome.zarr")
+    result = runner.invoke(cli, ["inference", "segmentation", "-i", path, "-o", out, "--pattern", "*.tif"])
+    assert result.exit_code == 0, result.output
+    assert [call["input_path"] for call in calls] == [path]
+
+
+def test_inference_object_classification_resolves_containers(monkeypatch, tmp_path, container_folder):
+    from click.testing import CliRunner
+
+    import micro_sam._cli as micro_sam_cli
+    import micro_sam.object_classification as object_classification
+
+    calls = []
+
+    def _predict(**kwargs):
+        calls.append(kwargs)
+        return [util.load_image_data(path, key=kwargs["segmentation_key"], is_segmentation=True)
+                for path in kwargs["segmentations"]]
+
+    monkeypatch.setattr(micro_sam_cli, "_classifier_predictor", lambda *args: (None, None, None, "hvit_t", None, None))
+    monkeypatch.setattr(object_classification, "run_prediction_with_object_classifier", _predict)
+
+    out = str(tmp_path / "out")
+    result = CliRunner().invoke(micro_sam_cli.cli, [
+        "inference", "object-classification", "-i", str(container_folder), "--pattern", "*.zarr",
+        "-s", str(container_folder), "--segmentation_pattern", "*.zarr", "-o", out, "--classifier", "rf.joblib",
+    ])
+    assert result.exit_code == 0, result.output
+    expected = [str(container_folder / name) for name in ("a.ome.zarr", "b.ome.zarr")]
+    assert calls[0]["images"] == expected and calls[0]["segmentations"] == expected
+    assert sorted(os.listdir(out)) == ["a.tif", "b.tif"]
+
+
+def test_annotator_batch_forwards_the_keys(monkeypatch, tmp_path, container_folder):
+    from click.testing import CliRunner
+
+    import importlib
+    from micro_sam._cli import cli
+
+    # The package exports functions with the same names as these modules.
+    batch_annotator = importlib.import_module("micro_sam.sam_annotator.batch_annotator")
+    object_classifier = importlib.import_module("micro_sam.sam_annotator.object_classifier")
+
+    calls = []
+    monkeypatch.setattr(batch_annotator, "image_folder_annotator", lambda *args, **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(object_classifier, "batch_object_classifier", lambda *args, **kwargs: calls.append(args))
+
+    runner = CliRunner()
+    command = ["annotator", "batch", "-i", str(container_folder), "-o", str(tmp_path / "out")]
+    result = runner.invoke(cli, [*command, "-k", "s0", "--segmentation_key", "labels/cells"])
+    assert result.exit_code == 0, result.output
+    assert (calls[-1]["key"], calls[-1]["segmentation_key"]) == ("s0", "labels/cells")
+
+    result = runner.invoke(cli, [
+        *command, "--task", "object-classification", "-p", "*.zarr",
+        "--initial_segmentation_folder", str(container_folder), "--initial_segmentation_pattern", "*.zarr",
+    ])
+    assert result.exit_code == 0, result.output
+    expected = [str(container_folder / name) for name in ("a.ome.zarr", "b.ome.zarr")]
+    assert list(calls[-1][:2]) == [expected, expected]

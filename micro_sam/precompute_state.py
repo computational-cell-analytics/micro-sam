@@ -4,7 +4,6 @@
 import os
 import pickle
 import inspect
-from glob import glob
 from pathlib import Path
 from typing import Optional, Sequence, Tuple, Union
 
@@ -15,6 +14,7 @@ from segment_anything.predictor import SamPredictor
 import torch
 
 from . import util
+from ._io import get_input_name, get_input_paths
 from .util import AutoSegBase
 
 
@@ -689,9 +689,9 @@ def precompute_state(
 
     Args:
         input_path: The input image file(s). Can either be a single image file (e.g. tif or png),
-            a container file (e.g. hdf5 or zarr) or a folder with image files.
-            In case of a container file the argument `key` must be given. In case of a folder
-            the `pattern` argument must be given to subselect files.
+            a container file (e.g. hdf5, zarr, ome-zarr or n5) or a folder with image or container files.
+            In case of a container file the argument `key` selects the data, see `micro_sam.util.load_image_data`.
+            In case of a folder the `pattern` argument must be given to subselect files.
         output_path: The output path where the embeddings will be saved. For a single input this is the path
             to the embeddings zarr; for a folder of inputs this is the directory the embeddings are saved in.
         pattern: Glob pattern to select files in a folder. The embeddings will be computed
@@ -699,7 +699,7 @@ def precompute_state(
         model_type: The model to use. Supports SAM1 ('vit_*'), SAM2 ('hvit_*') and VFM (DINO / UNI)
             encoders. By default the `hvit_t` model is used.
         checkpoint_path: Path to a checkpoint for a custom model.
-        key: The key to the input file. This is needed for container files (e.g. hdf5 or zarr)
+        key: The key to the input file. This is needed for hdf5 files and for zarr / n5 files with several arrays,
             or to load several images as 3d volume. Provide a glob pattern, e.g. "*.tif", for this case.
         ndim: The dimensionality of the data. By default, computed from the input data.
         precompute_autoseg_state: Whether to also precompute the automatic-segmentation state in the
@@ -753,11 +753,11 @@ def precompute_state(
     if single:
         input_files, output_paths = [input_path], [output_path]
     else:
-        input_files = sorted(glob(os.path.join(input_path, pattern)))
+        input_files = get_input_paths(input_path, pattern)
         if len(input_files) == 0:
             raise ValueError(f"Could not find any files matching the pattern '{pattern}' in '{input_path}'.")
         os.makedirs(output_path, exist_ok=True)
-        output_paths = [os.path.join(output_path, os.path.basename(f)) for f in input_files]
+        output_paths = [os.path.join(output_path, f"{get_input_name(f)}.zarr") for f in input_files]
 
     predictor, current_ndim = None, None
     for input_file, out_path in util._progress_bar(

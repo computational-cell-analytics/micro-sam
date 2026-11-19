@@ -37,7 +37,7 @@ So a good strategy is to annotate a few images with one of the provided models u
 
 You need images and the corresponding label images, for example annotations created with the `micro_sam` annotation tools. The data can be:
 - image files, such as tif or png, given as single files, lists of files, or a folder and a pattern like `*.tif`.
-- container files, such as hdf5, zarr, n5 or OME-Zarr, given as the file path and the key of the data in the file.
+- container files, such as hdf5, zarr, n5 or OME-Zarr, given as the file path and the key of the data in the file. The key is optional for an OME-Zarr file with one image and for a zarr or n5 file with one array, see `micro_sam.util.load_image_data`.
 
 The data can be 2d or 3d. The labels are instance segmentations, where each object has its own id, or class labels for semantic segmentation.
 

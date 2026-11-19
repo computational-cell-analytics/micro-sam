@@ -20,6 +20,16 @@ The subcommands are:
 - `micro_sam train-generalist`: Train a generalist model on the collection of datasets we use for the `micro-sam2` models.
 - `micro_sam v1`: The commands of the previous version for SAM1 models, for example `micro_sam v1 automatic_segmentation` and `micro_sam v1 evaluate`.
 
+The commands read these input data:
+- Image files, for example tif or png.
+- Container files: hdf5, zarr, OME-Zarr or n5. Use `-k` / `--key` to select the data in the file.
+- Folders with image or container files. Use `--pattern` to select the files, for example `--pattern '*.ome.zarr'`.
+
+The key is optional for zarr, OME-Zarr and n5 files:
+- For an OME-Zarr file, the commands use the highest resolution of the image. For a segmentation input, for example `--segmentation_key`, they use the single label image in `labels/`.
+- For a zarr or n5 file, the commands use the single array in the file.
+- If a file has more than one image or array, the command shows an error that lists them. Then give the key, for example `-k labels/nuclei`.
+
 The automatic segmentation uses the best post-processing parameters for the chosen model by default.
 You can change a parameter by passing it to `micro_sam inference segmentation` as `--<PARAMETER_NAME> <VALUE>`, for example `--min_size 100` to remove smaller objects.
 The defaults are listed by `micro_sam.v2.postprocessing.default_postprocessing` (AIS) and `micro_sam.v2.automatic_prompt_generation.default_prompt_generation` (APG).
@@ -31,6 +41,9 @@ micro_sam inference segmentation -i images/ -o segmentations/ --pattern '*.tif'
 
 # Automatic segmentation with APG and a larger model.
 micro_sam inference segmentation -i image.tif -o segmentation.tif -m hvit_b_cells --engine apg
+
+# Automatic segmentation of all OME-Zarr images in a folder, without a key.
+micro_sam inference segmentation -i images/ -o segmentations/ --pattern '*.ome.zarr'
 
 # Automatic tracking of a timeseries, saved in the Cell Tracking Challenge format.
 micro_sam inference tracking -i timeseries.tif -o tracking_result/

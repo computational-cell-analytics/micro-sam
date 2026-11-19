@@ -393,7 +393,7 @@ def run_prediction_with_object_classifier(
         if isinstance(image, (str, os.PathLike)):
             image = util.load_image_data(image, key=image_key)
         if isinstance(segmentation, (str, os.PathLike)):
-            segmentation = util.load_image_data(segmentation, key=segmentation_key)
+            segmentation = util.load_image_data(segmentation, key=segmentation_key, is_segmentation=True)
         # Prepared in the same way as in the annotator, so the features match those of the GUI.
         image, this_ndim, _ = util.prepare_annotation_image(image, ndim=ndim)
         segmentation = util.match_image_shape(segmentation, image.shape[:this_ndim])

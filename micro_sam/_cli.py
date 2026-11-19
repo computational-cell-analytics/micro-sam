@@ -34,6 +34,20 @@ Examples:
 """
 
 
+KEY_HELP = (
+    "The key of the image data in container files, e.g. the internal path for hdf5 / zarr / n5. "
+    "Without a key, an ome-zarr file loads the highest resolution of its image, "
+    "and a zarr / n5 file loads its single array."
+)
+SEGMENTATION_KEY_HELP = (
+    "The key of the segmentation in container files. Without a key, an ome-zarr file loads the highest "
+    "resolution of its single label image, and a zarr / n5 file loads its single array."
+)
+INPUTS_HELP = (
+    "image files, container files (e.g. hdf5, zarr, ome-zarr, n5) or folders, together with '--pattern'"
+)
+
+
 @click.group(context_settings=dict(help_option_names=["-h", "--help"]), epilog=CLI_EPILOG)
 @click.version_option(package_name="micro_sam", prog_name="micro_sam")
 def cli():
@@ -64,12 +78,14 @@ def _model_options(f):
         click.option(
             "-i", "--input", "input_", required=True,
             help="The filepath to the image data. Supports all data types readable by imageio (e.g. tif, png, ...) "
-            "or elf.io.open_file (e.g. hdf5, zarr, mrc). For the latter also pass '--key'."
+            "or elf.io.open_file (e.g. hdf5, zarr, ome-zarr, n5, mrc). For the latter also pass '--key', "
+            "except for an ome-zarr image or a zarr / n5 file with a single array."
         ),
         click.option(
             "-k", "--key", default=None,
-            help="The key for opening data with elf.io.open_file, e.g. the internal path for hdf5 / zarr, "
-            "a wildcard like '*.png' for an image stack, or 'data' for mrc."
+            help="The key for opening data with elf.io.open_file, e.g. the internal path for hdf5 / zarr / n5, "
+            "a wildcard like '*.png' for an image stack, or 'data' for mrc. Without a key, an ome-zarr file "
+            "loads the highest resolution of its image, and a zarr / n5 file loads its single array."
         ),
         click.option(
             "-e", "--embedding_path", default=None,
@@ -119,7 +135,7 @@ def _interactive_options(f):
     "Supports the same file formats as '--input'."
 )
 @click.option(
-    "-sk", "--segmentation_key", default=None, help="The key for opening the segmentation data. Same rules as '--key'."
+    "-sk", "--segmentation_key", default=None, help=SEGMENTATION_KEY_HELP
 )
 @click.option(
     "--ndim", type=int, default=None,
@@ -145,7 +161,9 @@ def annotator_segmentation(
     from .v2.util import DEFAULT_MODEL
 
     image = load_image_data(input_, key=key)
-    segmentation = None if segmentation_result is None else load_image_data(segmentation_result, key=segmentation_key)
+    segmentation = None if segmentation_result is None else load_image_data(
+        segmentation_result, key=segmentation_key, is_segmentation=True
+    )
 
     annotator(
         image,
@@ -223,7 +241,7 @@ def annotator_pixel_classification(
     help="Optional segmentation whose objects will be classified. If omitted, start from an empty segmentation."
 )
 @click.option(
-    "-sk", "--segmentation_key", default=None, help="The key for opening the segmentation data. Same rules as '--key'."
+    "-sk", "--segmentation_key", default=None, help=SEGMENTATION_KEY_HELP
 )
 @click.option(
     "--ndim", type=int, default=None,
@@ -250,7 +268,7 @@ def annotator_object_classification(
         prepared, seg_ndim, _ = prepare_annotation_image(image, ndim=ndim)
         segmentation = np.zeros(prepared.shape[:seg_ndim], dtype="uint32")
     else:
-        segmentation = load_image_data(segmentation_result, key=segmentation_key)
+        segmentation = load_image_data(segmentation_result, key=segmentation_key, is_segmentation=True)
 
     object_classifier(
         image,
@@ -266,7 +284,10 @@ def annotator_object_classification(
 
 
 @annotator_group.command("batch")
-@click.option("-i", "--input", "input_folder", required=True, help="The folder containing the image data.")
+@click.option(
+    "-i", "--input", "input_folder", required=True,
+    help="The folder containing the image data: image files or container files (e.g. zarr, ome-zarr, n5)."
+)
 @click.option("-o", "--output", "output_folder", required=True, help="The folder where the results will be stored.")
 @click.option(
     "--task", type=click.Choice(["segmentation", "tracking", "pixel-classification", "object-classification"]),
@@ -278,8 +299,10 @@ def annotator_object_classification(
 )
 @click.option(
     "-p", "--pattern", default="*",
-    help="Glob pattern to select images from the input folder, e.g. '*.tif'. By default all files are loaded."
+    help="Glob pattern to select images from the input folder, e.g. '*.tif'. "
+    "By default all files and containers are loaded."
 )
+@click.option("-k", "--key", default=None, help=KEY_HELP)
 @click.option(
     "--initial_segmentation_folder", default=None,
     help="A folder with initial segmentations to load (used by 'segmentation' and 'object-classification')."
@@ -287,6 +310,7 @@ def annotator_object_classification(
 @click.option(
     "--initial_segmentation_pattern", default="*", help="The glob pattern for '--initial_segmentation_folder'."
 )
+@click.option("--segmentation_key", default=None, help=SEGMENTATION_KEY_HELP)
 @click.option(
     "-e", "--embedding_path", default=None,
     help="Folder for saving / loading the pre-computed image embeddings. Recommended to avoid recomputation."
@@ -326,8 +350,8 @@ def annotator_object_classification(
     help="Whether to skip images that were already segmented."
 )
 def annotator_batch(
-    input_folder, output_folder, task, ndim, pattern, initial_segmentation_folder, initial_segmentation_pattern,
-    embedding_path, model_type, checkpoint_path, device, tile_shape, halo,
+    input_folder, output_folder, task, ndim, pattern, key, initial_segmentation_folder, initial_segmentation_pattern,
+    segmentation_key, embedding_path, model_type, checkpoint_path, device, tile_shape, halo,
     precompute_autoseg_state, prefer_decoder, skip_segmented,
 ):
     """Annotate multiples images within a folder.
@@ -336,9 +360,7 @@ def annotator_batch(
     The tools 'segmentation' 'tracking' 'pixel-classification', and 'object-classification'
     are supported.
     """
-    import os
-    from glob import glob
-
+    from ._io import get_input_paths
     from .v2.util import DEFAULT_MODEL
 
     model_type = model_type or DEFAULT_MODEL
@@ -348,9 +370,9 @@ def annotator_batch(
     if task == "segmentation":
         from .sam_annotator.batch_annotator import image_folder_annotator
         image_folder_annotator(
-            input_folder, output_folder, pattern=pattern, ndim=ndim,
+            input_folder, output_folder, pattern=pattern, ndim=ndim, key=key,
             initial_segmentation_folder=initial_segmentation_folder,
-            initial_segmentation_pattern=initial_segmentation_pattern,
+            initial_segmentation_pattern=initial_segmentation_pattern, segmentation_key=segmentation_key,
             embedding_path=embedding_path, model_type=model_type,
             tile_shape=tile_shape, halo=halo,
             precompute_autoseg_state=precompute_autoseg_state,
@@ -359,7 +381,7 @@ def annotator_batch(
         )
         return
 
-    images = sorted(glob(os.path.join(input_folder, pattern)))
+    images = get_input_paths(input_folder, pattern)
     if len(images) == 0:
         raise click.UsageError(f"No images matched the pattern '{pattern}' in '{input_folder}'.")
 
@@ -369,22 +391,23 @@ def annotator_batch(
             images, output_folder, model_type=model_type, embedding_path=embedding_path,
             tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path, device=device,
             precompute_autoseg_state=precompute_autoseg_state,
-            skip_done=skip_segmented,
+            skip_done=skip_segmented, key=key,
         )
     elif task == "pixel-classification":
         from .sam_annotator.pixel_classifier import batch_pixel_classifier
         batch_pixel_classifier(
             images, output_folder, model_type=model_type, tile_shape=tile_shape, halo=halo,
-            checkpoint_path=checkpoint_path, device=device, ndim=ndim, skip_done=skip_segmented,
+            checkpoint_path=checkpoint_path, device=device, ndim=ndim, skip_done=skip_segmented, key=key,
         )
     else:  # object-classification
         from .sam_annotator.object_classifier import batch_object_classifier
         segmentations = None
         if initial_segmentation_folder is not None:
-            segmentations = sorted(glob(os.path.join(initial_segmentation_folder, initial_segmentation_pattern)))
+            segmentations = get_input_paths(initial_segmentation_folder, initial_segmentation_pattern)
         batch_object_classifier(
             images, segmentations, output_folder, model_type=model_type, tile_shape=tile_shape, halo=halo,
             checkpoint_path=checkpoint_path, device=device, ndim=ndim, skip_done=skip_segmented,
+            key=key, segmentation_key=segmentation_key,
         )
 
 
@@ -451,7 +474,7 @@ def _parse_extra(tokens):
 def _resolve_output_paths(input_paths, output_path):
     """Resolve per-input output tif paths. A single input maps to a tif, multiple inputs to a folder."""
     import os
-    from pathlib import Path
+    from ._io import get_input_name
 
     if len(input_paths) == 1:
         output_fpath = f"{os.path.splitext(output_path)[0]}.tif"
@@ -462,7 +485,7 @@ def _resolve_output_paths(input_paths, output_path):
 
     output_folder = os.path.splitext(output_path)[0]
     os.makedirs(output_folder, exist_ok=True)
-    return [os.path.join(output_folder, f"{Path(p).stem}.tif") for p in input_paths]
+    return [os.path.join(output_folder, f"{get_input_name(p)}.tif") for p in input_paths]
 
 
 def _view_result(image_path, key, segmentation):
@@ -482,7 +505,7 @@ def _view_result(image_path, key, segmentation):
 )
 @click.option(
     "-i", "--input", "input_path", required=True, multiple=True,
-    help="The filepath(s) to the image data (also container files or a folder together with '--pattern')."
+    help=f"The image data: {INPUTS_HELP}."
 )
 @click.option(
     "-o", "--output", "output_path", required=True,
@@ -494,7 +517,7 @@ def _view_result(image_path, key, segmentation):
     "--pattern", default=None,
     help="Glob pattern to select files in a folder, e.g. '*.tif'. Quote it so the shell does not expand it first."
 )
-@click.option("-k", "--key", default=None, help="The key for opening data with elf.io.open_file.")
+@click.option("-k", "--key", default=None, help=KEY_HELP)
 @click.option(
     "-m", "--model_type", default=None,
     help="The SAM2 model to use. Needs a registered decoder or a '--checkpoint'. Default: 'hvit_t_cells'."
@@ -562,7 +585,7 @@ def inference_segmentation(
     from .util import load_image_data
     from .v2.util import DEFAULT_MODEL
     from .v2.instance_segmentation import NoDecoderError
-    from .v1.automatic_segmentation import _get_inputs_from_paths
+    from ._io import get_input_name, get_input_paths
     from .v2.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
     model_type = model_type or DEFAULT_MODEL
@@ -572,7 +595,7 @@ def inference_segmentation(
     devices = _parse_devices(devices)
     generate_kwargs = _parse_extra(ctx.args)
 
-    input_paths = _get_inputs_from_paths(list(input_path), pattern)
+    input_paths = get_input_paths(list(input_path), pattern)
     if len(input_paths) == 0:
         raise click.UsageError(
             "'micro_sam' could not find any image data. If you passed a folder, provide '--pattern' and quote it "
@@ -582,7 +605,7 @@ def inference_segmentation(
     # Only APG builds a different segmenter per dimensionality, and it is built before any input is read.
     segmenter_ndim = ndim or 2
     if engine == "apg" and ndim is None:
-        segmenter_ndim = load_image_data(input_paths[0], key=key).ndim
+        segmenter_ndim = load_image_data(input_paths[0], key=key, lazy_loading=True).ndim
 
     # Only an initial guess: 'automatic_instance_segmentation' swaps in the tiling variant that
     # matches the image it reads, rebuilding it from the already loaded model and decoder.
@@ -603,7 +626,7 @@ def inference_segmentation(
         else:
             embedding_folder = os.path.splitext(embedding_path)[0]
             os.makedirs(embedding_folder, exist_ok=True)
-            embedding_fpath = os.path.join(embedding_folder, f"{os.path.splitext(os.path.basename(path))[0]}.zarr")
+            embedding_fpath = os.path.join(embedding_folder, f"{get_input_name(path)}.zarr")
 
         segmentation = automatic_instance_segmentation(
             predictor=predictor,
@@ -633,12 +656,13 @@ def inference_segmentation(
 )
 @click.option(
     "-i", "--input", "input_path", required=True,
-    help="The filepath to the timeseries data (or a folder together with '--key' as a wildcard)."
+    help="The filepath to the timeseries data: an image file, a container file (e.g. hdf5, zarr, ome-zarr, n5), "
+    "or a folder together with '--key' as a wildcard."
 )
 @click.option("-o", "--output", "output_path", required=True, help="The folder to store the tracking result (CTC).")
 @click.option(
     "-k", "--key", default=None,
-    help="The key for opening data with elf.io.open_file, e.g. '*.tif' to load a folder of frames as a stack."
+    help=f"{KEY_HELP} For a folder, a wildcard like '*.tif' loads its frames as a stack."
 )
 @click.option(
     "-m", "--model_type", default=None,
@@ -752,7 +776,7 @@ def _classifier_common_options(f):
     options = [
         click.option(
             "-i", "--input", "input_path", required=True, multiple=True,
-            help="The filepath(s) to the image data (also container files or a folder with '--pattern')."
+            help=f"The image data: {INPUTS_HELP}."
         ),
         click.option(
             "-o", "--output", "output_path", required=True,
@@ -762,7 +786,7 @@ def _classifier_common_options(f):
             "--classifier", "rf_path", required=True, help="The trained classifier (.joblib) to run prediction with."
         ),
         click.option("--pattern", default=None, help="Glob pattern to select files in a folder, e.g. '*.tif'."),
-        click.option("-k", "--key", default=None, help="The key for opening data with elf.io.open_file."),
+        click.option("-k", "--key", default=None, help=KEY_HELP),
         click.option(
             "-m", "--model_type", default=None,
             help="The model to compute embeddings with. By default the model the classifier was trained with is used."
@@ -789,7 +813,7 @@ def inference_pixel_classification(
     """Apply a trained pixel classifier."""
     import imageio.v3 as imageio
 
-    from .v1.automatic_segmentation import _get_inputs_from_paths
+    from ._io import get_input_paths
     from .pixel_classification import run_prediction_with_pixel_classifier
 
     tile_shape, halo = _parse_shape(tile_shape), _parse_shape(halo)
@@ -797,7 +821,7 @@ def inference_pixel_classification(
         rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
     )
 
-    input_paths = _get_inputs_from_paths(list(input_path), pattern)
+    input_paths = get_input_paths(list(input_path), pattern)
     if len(input_paths) == 0:
         raise click.UsageError("'micro_sam' could not find any image data (quote '--pattern' for folders).")
     output_paths = _resolve_output_paths(input_paths, output_path)
@@ -813,9 +837,10 @@ def inference_pixel_classification(
 @inference_group.command("object-classification")
 @click.option(
     "-s", "--segmentation", "segmentation_path", required=True, multiple=True,
-    help="The filepath(s) to the segmentation data, one per input image."
+    help="The segmentation data, one per input image: image files, container files or folders, "
+    "together with '--segmentation_pattern'."
 )
-@click.option("-sk", "--segmentation_key", default=None, help="The key for opening the segmentation data.")
+@click.option("-sk", "--segmentation_key", default=None, help=SEGMENTATION_KEY_HELP)
 @click.option(
     "--segmentation_pattern", default=None, help="Glob pattern to select segmentations in a folder, e.g. '*.tif'."
 )
@@ -827,7 +852,7 @@ def inference_object_classification(
     """Apply a trained object classifier."""
     import imageio.v3 as imageio
 
-    from .v1.automatic_segmentation import _get_inputs_from_paths
+    from ._io import get_input_paths
     from .object_classification import run_prediction_with_object_classifier
 
     tile_shape, halo = _parse_shape(tile_shape), _parse_shape(halo)
@@ -835,8 +860,8 @@ def inference_object_classification(
         rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
     )
 
-    input_paths = _get_inputs_from_paths(list(input_path), pattern)
-    segmentation_paths = _get_inputs_from_paths(list(segmentation_path), segmentation_pattern)
+    input_paths = get_input_paths(list(input_path), pattern)
+    segmentation_paths = get_input_paths(list(segmentation_path), segmentation_pattern)
     if len(input_paths) == 0:
         raise click.UsageError("'micro_sam' could not find any image data (quote '--pattern' for folders).")
     if len(input_paths) != len(segmentation_paths):
@@ -855,10 +880,10 @@ def inference_object_classification(
 
 
 @cli.command("precompute-embeddings")
-@click.option("-i", "--input", "input_path", required=True, help="The filepath to the image data (also containers).")
+@click.option("-i", "--input", "input_path", required=True, help=f"The image data: {INPUTS_HELP}.")
 @click.option("-e", "--embedding_path", required=True, help="The path where the embeddings will be saved.")
 @click.option("--pattern", default=None, help="Glob pattern to select files in a folder, e.g. '*.tif'.")
-@click.option("-k", "--key", default=None, help="The key for opening data with elf.io.open_file.")
+@click.option("-k", "--key", default=None, help=KEY_HELP)
 @click.option(
     "-m", "--model_type", default=None,
     help="The model to use: SAM1 ('vit_*'), SAM2 ('hvit_*') or a VFM (DINO / UNI) encoder. "
@@ -932,7 +957,7 @@ def _resolve_training_data(
         raise click.UsageError("Pass both '--val_images' and '--val_labels', or neither.")
     if not val_images:
         images, image_key = resolve_data_paths(list(images), image_key)
-        labels, label_key = resolve_data_paths(list(labels), label_key)
+        labels, label_key = resolve_data_paths(list(labels), label_key, is_segmentation=True)
         if len(images) != len(labels):
             raise click.UsageError(f"There are {len(images)} images, but {len(labels)} label images.")
         try:
@@ -1228,7 +1253,7 @@ def v1_train(ctx, **kwargs):
 )
 @click.option("-e", "--embedding_path", default=None, help="Optional path where the embeddings will be cached.")
 @click.option("--pattern", default=None, help="Glob pattern to select files in a folder, e.g. '*'.")
-@click.option("-k", "--key", default=None, help="The key for opening data with elf.io.open_file.")
+@click.option("-k", "--key", default=None, help=KEY_HELP)
 @click.option("-m", "--model_type", default=None, help="The Segment Anything model to use.")
 @click.option("-c", "--checkpoint", default=None, help="Checkpoint to load the SAM model from.")
 @click.option("--tile_shape", nargs=2, type=int, help="The tile shape for tiled prediction, e.g. '384 384'.")
