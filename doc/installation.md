@@ -92,8 +92,10 @@ conda activate sam2
 5. Install `micro_sam`:
 
 ```bash
-pip install -e .
+pip install --no-deps -e .
 ```
+
+The environment already contains all dependencies. `--no-deps` stops pip from installing the PyPI `sam2` on top of conda-forge's `sam-2`.
 
 <!---
 I disabled this for now. The installers are very outdated and we shouldn't advertise this feature any more.

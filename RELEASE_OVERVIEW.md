@@ -1,5 +1,9 @@
 # Release Overview
 
+**New in version 2.0.1**
+
+Fix the pip installation: pip now installs SAM2 (`sam2==1.1.0`, the same code as the latest SAM2 release from Meta). Source installations take SAM2 from conda-forge (`sam-2`) and install `micro_sam` with `pip install --no-deps -e .`. Pin `PyQt6<6.10` on Linux, so that pip installations work on Linux with glibc < 2.34, and stop installing the `test` package.
+
 **New in version 1.9.0**
 
 This is the final release of `micro_sam` 1.x. Development continues in `micro_sam` 2.0. Support napari 0.10, and cap all dependencies that can break `micro_sam` at their tested versions, so that new installations of 1.9 keep working. Pin MobileSAM to a fixed commit.
