@@ -137,15 +137,16 @@ if __name__ == "__main__" and sys.argv[1:2] == ["--cellvit_worker"]:
     _cellvit_worker(sys.argv[2:])
     sys.exit(0)
 
-from elf.segmentation import features, multicut, watershed  # noqa: E402
+from elf.segmentation import features, multicut, watershed  # noqa
 
-from common import (  # noqa: E402
+from common import (  # noqa
     pad_to_min_shape,
     CROP_SHAPE_3D, DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASETS_3D_LM, DATASETS_EM, DATASETS_HP, EVAL_CROPS,
     DATASETS_2D_LM_CELL_ID, DATASETS_2D_LM_CELL_SUPPLEMENTARY, DATASETS_2D_LM_CELL_OOD,
     DATASETS_2D_LM_NUCLEUS_ID, DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY, DATASETS_2D_LM_NUCLEUS_OOD,
     DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM, DATASETS_EM_MITO, DATASETS_EM_NUCLEUS, GT_MIN_SIZE_2D,
-    check_data_download, drop_severed_objects, ensure_8bit_range, evaluate_samples, load_data, n_samples,
+    check_data_download, check_experiment_variables, drop_severed_objects, ensure_8bit_range, evaluate_samples,
+    load_data, n_samples,
 )
 
 LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
@@ -812,8 +813,10 @@ class CellViTProcess:
         # The PYTHONPATH of this environment would put its packages before the ones of the older environment.
         env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
         self.process = subprocess.Popen(
-            [CELLVIT_PYTHON, os.path.abspath(__file__), "--cellvit_worker", "--checkpoint", checkpoint,
-             "--magnification", str(magnification)],
+            [
+                CELLVIT_PYTHON, os.path.abspath(__file__), "--cellvit_worker", "--checkpoint", checkpoint,
+                "--magnification", str(magnification)
+            ],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env,
         )
         self._read_until(lambda line: line == "ready")
@@ -1188,6 +1191,7 @@ def main():
     parser.add_argument("--n_shards", type=int, default=None, help="Split the samples over this many tasks.")
     parser.add_argument("--shard_index", type=int, default=None, help="The shard this task scores.")
     args = parser.parse_args()
+    check_experiment_variables(args.experiment_folder)
 
     check_data_download(args.dataset_name, args.input_path)
 

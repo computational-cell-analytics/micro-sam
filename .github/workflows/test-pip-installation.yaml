@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - dev
+      - v1.x
     tags:
       - "v*" # Push events to matching v*, i.e. v1.0, v20.15.10
   pull_request:  # run CI on commits to any open PR
@@ -27,10 +28,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 

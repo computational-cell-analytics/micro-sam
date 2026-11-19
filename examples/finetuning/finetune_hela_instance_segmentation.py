@@ -1,7 +1,16 @@
 import os
 
-import micro_sam.v1.training as sam_training
+import numpy as np
+
+import torch
+import torch_em
+from torch_em.data.sampler import MinInstanceSampler
+
 from micro_sam.util import get_device
+from micro_sam.v2.training import train_automatic
+from micro_sam.v2.normalization import normalize_raw
+from micro_sam.v2.datasets.wrapper import UniDataWrapper
+from micro_sam.v2.transforms.labels import GeodesicHybridDistanceTransform
 from micro_sam.sample_data import fetch_tracking_example_data, fetch_tracking_segmentation_data
 
 
@@ -9,20 +18,16 @@ DATA_FOLDER = "data"
 
 
 def get_dataloader(split, patch_shape, batch_size):
-    """Return train or val data loader for training the instance segmentation decoder.
+    """Return the train or val data loader for training the decoder for automatic segmentation.
 
-    The data loader must be a torch data loader that returns `x, y` tensors,
-    where `x` is the image data and `y` are the labels.
-    The labels have to be in a label mask instance segmentation format,
-    i.e. a tensor of the same spatial shape as `x`, with each object mask having its own ID.
-    Important: the ID 0 is reserved for background, and the IDs must be consecutive.
+    The data loader must be a torch data loader that returns `x, y` tensors, where `x` is the image data
+    and `y` are the targets for the decoder. The targets are computed from instance labels, i.e. a label mask
+    with each object mask having its own ID, by `GeodesicHybridDistanceTransform`.
+    Important: the ID 0 is reserved for background.
 
-    Here, we use `sam_training.default_sam_loader` for creating a suitable data loader from
-    the example hela data. You can either adapt this for your own data (see comments below)
-    or write a suitable torch dataloader yourself.
+    Here, we use `torch_em.default_segmentation_dataset` to load the example HeLa data.
+    You can adapt this for your own data (see comments below) or write a suitable torch dataset yourself.
     """
-    import numpy as np
-
     assert split in ("train", "val")
     os.makedirs(DATA_FOLDER, exist_ok=True)
 
@@ -30,96 +35,71 @@ def get_dataloader(split, patch_shape, batch_size):
     image_dir = fetch_tracking_example_data(DATA_FOLDER)
     segmentation_dir = fetch_tracking_segmentation_data(DATA_FOLDER)
 
-    # Load images from multiple files in folder via pattern (here: all tif files).
+    # We load the images and labels from the two folders with tif images that were downloaded above,
+    # by setting `raw_key` and `label_key` to `*.tif`. This loads all tif images in a folder as one stack.
+    # If you have tif stacks with multiple slices instead of a folder of images, set both keys to None.
     raw_key, label_key = "*.tif", "*.tif"
-    # Alternative: if you have tif stacks you can just set raw_key and label_key to None.
-    # raw_key, label_key = None, None
 
-    # The 'roi' argument can be used to subselect parts of the data.
-    # Here, we use it to select the first 70 frames for the train split and the other frames for the val split.
-    if split == "train":
-        roi = np.s_[:70, :, :]
-    else:
-        roi = np.s_[70:, :, :]
+    # The 'rois' argument selects a part of the data.
+    # Here, we select the first 70 frames for the train split and the other frames for the val split.
+    roi = np.s_[:70, :, :] if split == "train" else np.s_[70:, :, :]
 
-    # 'default_sam_loader' creates a dataloader suitable for SAM training.
-    # Setting 'train_instance_segmentation_only=True' configures the label transform to produce
-    # only the 3 distance-related channels (normalized distances, boundary distances, foreground
-    # probabilities), without the instance segmentation channel. This is the correct format
-    # for 'train_instance_segmentation'.
-    loader = sam_training.default_sam_loader(
+    dataset = torch_em.default_segmentation_dataset(
         raw_paths=image_dir, raw_key=raw_key,
         label_paths=segmentation_dir, label_key=label_key,
-        patch_shape=patch_shape, batch_size=batch_size,
-        with_segmentation_decoder=True,
-        train_instance_segmentation_only=True,
-        is_train=(split == "train"),
-        rois=roi,
-        num_workers=8, shuffle=True, raw_transform=sam_training.identity,
+        patch_shape=patch_shape, ndim=2, rois=roi,
+        # Normalize the images to [0, 1]. 'UniDataWrapper' then copies a grayscale image to three channels.
+        # Use a function from an importable module here: the checkpoint stores a reference to it.
+        raw_transform=normalize_raw,
+        # The decoder predicts the foreground, the directed distances to the object centers and boundaries,
+        # and the object boundaries.
+        label_transform2=GeodesicHybridDistanceTransform(with_boundaries=True),
+        sampler=MinInstanceSampler(min_num_instances=3),
+        label_dtype=torch.float32,
     )
-    return loader
-
-
-def run_training(checkpoint_name, model_type):
-    """Run training of the UNETR instance segmentation decoder."""
-
-    # All hyperparameters for training.
-    batch_size = 1  # the training batch size
-    patch_shape = (1, 512, 512)  # the size of patches for training
-    device = get_device()  # the device used for training
-
-    # Get the dataloaders.
-    train_loader = get_dataloader("train", patch_shape, batch_size)
-    val_loader = get_dataloader("val", patch_shape, batch_size)
-
-    # Run training of only the UNETR instance segmentation decoder.
-    # This trains the SAM image encoder together with the UNETR decoder,
-    # but does not train the prompt encoder or mask decoder.
-    sam_training.train_instance_segmentation(
-        name=checkpoint_name,
-        model_type=model_type,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        n_epochs=100,
-        device=device,
-    )
-
-
-def export_model(checkpoint_name, model_type):
-    """Export the trained model.
-
-    The exported model can be used with the micro_sam automatic instance segmentation (AIS) functionality.
-    Note: the exported model is only suitable for automatic segmentation,
-    not for interactive segmentation with prompts.
-    """
-    export_path = "./finetuned_hela_instance_segmentation_model.pth"
-    checkpoint_path = os.path.join("checkpoints", checkpoint_name, "best.pt")
-    sam_training.export_instance_segmentation_model(
-        trained_model_path=checkpoint_path,
-        output_path=export_path,
-        model_type=model_type,
-    )
+    # The micro-sam2 trainers expect every sample as (channels, z, y, x). A 2d image has a single z slice.
+    dataset = UniDataWrapper(dataset, source_ndim=2)
+    return torch_em.get_data_loader(dataset, batch_size=batch_size, shuffle=(split == "train"), num_workers=8)
 
 
 def main():
-    """Finetune only the instance segmentation decoder (UNETR) of a Segment Anything model.
+    """Finetune the micro-sam2 model for automatic instance segmentation.
 
     This example uses image data and segmentations from the cell tracking challenge,
     but can easily be adapted for other data (including data you have annotated with micro_sam beforehand).
 
-    Unlike 'finetune_hela.py', this script trains only the UNETR decoder for automatic instance
-    segmentation, without updating the interactive segmentation components (prompt encoder and mask decoder).
-    Use this when you only need automatic instance segmentation (AIS) and not interactive segmentation.
+    Unlike 'finetune_hela.py', this script trains the image encoder together with the decoder for automatic
+    instance segmentation (AIS and APG), but not the prompt encoder and the mask decoder for interactive
+    segmentation. Use this when you mainly need automatic instance segmentation.
     """
-    # The model_type determines which base model is used to initialize the weights that are finetuned.
-    # We use vit_b here because it can be trained faster. Note that vit_h usually yields higher quality results.
-    model_type = "vit_b"
+    # The model that is finetuned. We start from the micro-sam2 model for cells, including its decoder.
+    # You can also start from a base SAM2 model, e.g. 'hvit_t', which trains the decoder from scratch.
+    model_type = "hvit_t_cells"
 
-    # The name of the checkpoint. The checkpoints will be stored in './checkpoints/<checkpoint_name>'
-    checkpoint_name = "sam_hela_instance_segmentation"
+    # The name of the checkpoint. The checkpoints will be stored in './checkpoints/<checkpoint_name>'.
+    checkpoint_name = "sam2_hela_instance_segmentation"
 
-    run_training(checkpoint_name, model_type)
-    export_model(checkpoint_name, model_type)
+    batch_size = 1  # The training batch size.
+    patch_shape = (1, 512, 512)  # The size of the patches for training.
+
+    train_loader = get_dataloader("train", patch_shape, batch_size)
+    val_loader = get_dataloader("val", patch_shape, batch_size)
+
+    train_automatic(
+        name=checkpoint_name,
+        model_type=model_type,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        n_epochs=50,
+        # The decoders of the micro-sam2 models also predict the object boundaries.
+        with_boundaries=True,
+        device=get_device(),
+    )
+
+    # The best checkpoint holds the image encoder and the decoder. It can be used directly for automatic
+    # segmentation, e.g. with 'micro_sam.v2.automatic_segmentation.get_predictor_and_segmenter(checkpoint=...)',
+    # or in the annotator. The prompt encoder and mask decoder are then taken from the model that was finetuned.
+    print("The finetuned model is saved at", os.path.join("checkpoints", checkpoint_name, "best.pt"))
 
 
 if __name__ == "__main__":

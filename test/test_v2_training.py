@@ -561,6 +561,9 @@ def test_get_sam2_train_model_moves_peft_modules_to_device(monkeypatch):
     adapted_model.to = unittest.mock.Mock(return_value=adapted_model)
     monkeypatch.setattr(sam2_build, "build_sam2", lambda **kwargs: base_model)
     monkeypatch.setattr(peft_sam2, "PEFT_Sam2", lambda model, **kwargs: types.SimpleNamespace(sam=adapted_model))
+    monkeypatch.setattr(
+        training_util, "read_start_weights", lambda model_type, path: (base_model.state_dict(), "hvit_t", None)
+    )
 
     model = training_util.get_sam2_train_model(
         model_type="hvit_t", device="cpu", checkpoint_path="checkpoint.pt", peft_kwargs={"rank": 2}
@@ -581,6 +584,9 @@ def test_get_sam2_train_model_rejects_encoder_freezing_for_rankless_peft(monkeyp
     adapted_model = nn.Linear(2, 2)
     monkeypatch.setattr(sam2_build, "build_sam2", lambda **kwargs: base_model)
     monkeypatch.setattr(peft_sam2, "PEFT_Sam2", lambda model, **kwargs: types.SimpleNamespace(sam=adapted_model))
+    monkeypatch.setattr(
+        training_util, "read_start_weights", lambda model_type, path: (base_model.state_dict(), "hvit_t", None)
+    )
 
     with pytest.raises(ValueError, match="cannot use PEFT and freeze the image encoder"):
         training_util.get_sam2_train_model(
@@ -634,6 +640,16 @@ def test_the_trainer_trains_in_bfloat16_without_a_scaler_on_ampere(monkeypatch):
     trainer._amp_context()
 
     assert calls == [("cuda", torch.bfloat16)]
+
+
+def test_the_trainer_rejects_inputs_in_the_8bit_range():
+    trainer = _make_sam2_trainer("cpu")
+
+    assert trainer._check_input_normalization(torch.rand(1, 1, 8, 8), False) is True
+    with pytest.raises(ValueError, match=r"expects inputs in \[0, 1\]"):
+        trainer._check_input_normalization(255 * torch.rand(1, 1, 8, 8), False)
+    with pytest.warns(UserWarning, match="minimum"):
+        trainer._check_input_normalization(torch.rand(1, 1, 8, 8) - 0.5, False)
 
 
 if __name__ == "__main__":

@@ -28,7 +28,7 @@ $ git checkout dev
 Then create the environment, install the user and developer dependencies, and install micro-sam as an editable installation:
 ```bash
 $ conda env create -f environment.yaml
-$ conda activate sam
+$ conda activate sam2
 $ python -m pip install -r requirements-dev.txt
 $ python -m pip install -e .
 ```
@@ -43,6 +43,12 @@ $ git checkout -b my-new-feature
 
 We use [google style python docstrings](https://sphinxcontrib-napoleon.readthedocs.io/en/latest/example_google.html) for all new code.
 The [Python library documentation](https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#using-the-python-library) is a good starting point for understanding how the micro-sam code is organized.
+The SAM2 code is in `micro_sam/v2`, the SAM1 code of the previous version is in `micro_sam/v1` and the napari tools are in `micro_sam/sam_annotator`.
+
+We use [flake8](https://flake8.pycqa.org/) to check the code style. Run it before you open a pull request:
+```bash
+$ flake8 --max-line-length=120 --per-file-ignores="__init__.py:F401" micro_sam/
+```
 
 ## Run the tests
 
@@ -51,8 +57,11 @@ The tests are run with [pytest](https://docs.pytest.org/):
 $ pytest
 ```
 
+The full test suite takes a long time and downloads several models. While you develop, run only the tests that are relevant for your change, for example `pytest test/test_v2_prompt_based_segmentation.py`.
+You can skip the SAM1 tests with `pytest -m "not v1"` and the napari tests with `pytest -m "not gui"`.
+
 New code needs tests to go with it. We prefer small unit tests over integration tests; if your code is hard to unit test, it usually needs to be broken into smaller functions.
-See the [full guide](doc/contributing.md#writing-your-own-tests) for details on testing napari-based code and on code coverage.
+See the [full guide](doc/contributing.md#testing) for details on the test markers, on testing napari-based code and on code coverage.
 
 ## Open a pull request
 

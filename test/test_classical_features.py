@@ -3,7 +3,8 @@ import unittest
 import numpy as np
 from skimage.data import coins
 from skimage.filters import threshold_otsu
-from skimage.measure import label, regionprops_table
+from skimage.measure import regionprops_table
+from bioimage_cpp.segmentation import label
 
 from micro_sam.classical_features import (
     OBJECT_FEATURES, PIXEL_FEATURES, compute_classical_object_features, compute_classical_pixel_features,

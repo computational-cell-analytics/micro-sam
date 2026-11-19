@@ -13,10 +13,11 @@ from . import util as vutil
 from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
-from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 from ._titles import get_dock_title
 from ._annotator import _AnnotatorBase
+from ..util import prepare_annotation_image
 from ._batch import BatchAnnotatorTask, run_batch
+from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 
 # Cyan (track) and Magenta (division)
 STATE_COLOR_CYCLE = [
@@ -465,9 +466,12 @@ def annotator_tracking(
     """
     vutil._validate_sam2_model_type(model_type, "tracking")
 
+    # Prepare the image in the same way as the annotator. A timeseries is read as a volume (T, H, W).
+    image, _, rgb = prepare_annotation_image(image, ndim=3)
+
     # Initialize the predictor state.
     state = AnnotatorState()
-    state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
+    state.image_shape = image.shape[:3]
 
     # The API / CLI computes embeddings before creating the widget, so apply the same size
     # heuristic here. Reuse these resolved settings when syncing the widget below.
@@ -491,7 +495,7 @@ def annotator_tracking(
     if viewer is None:
         viewer = napari.Viewer()
 
-    viewer.add_image(image, name="image")
+    viewer.add_image(image, name="image", rgb=rgb)
     annotator = AnnotatorTracking(viewer, reset_state=False)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
@@ -523,6 +527,9 @@ class TrackingBatchTask(BatchAnnotatorTask):
     """Batch task for tracking: each item is a TYX timeseries tracked independently."""
 
     empty_item_message = "Nothing is tracked yet. Do you wish to continue to the next timeseries?"
+
+    # A timeseries is loaded as a volume (T, H, W).
+    ndim = 3
 
     def __init__(
         self, *, model_type, embedding_path=None, tile_shape=None, halo=None,
@@ -565,7 +572,8 @@ class TrackingBatchTask(BatchAnnotatorTask):
             kwargs = dict(predictor=state.predictor, decoder=state.decoder, prefer_decoder=False)
         else:
             kwargs = dict(prefer_decoder=True)
-        state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
+        # The image is prepared by 'load_batch_image', so a channel axis is always the last one.
+        state.image_shape = image.shape[:3]
         # Resolve the tiling per timeseries, since the shapes can differ across the batch.
         tile_shape, halo = resolve_default_tiling(state.image_shape, self.tile_shape, self.halo, embedding_path)
         state.initialize_predictor(
@@ -579,7 +587,7 @@ class TrackingBatchTask(BatchAnnotatorTask):
 
     def start(self, viewer, entry, image, embedding_path, index):
         tile_shape, halo = self._init_predictor(image, embedding_path, reuse=False)
-        viewer.add_image(image, name="image")
+        viewer.add_image(image, name="image", rgb=image.ndim > 3)
         AnnotatorState().image_scale = tuple(viewer.layers["image"].scale)
 
         annotator = AnnotatorTracking(viewer, reset_state=False)

@@ -1,48 +1,34 @@
 import os
 
-from elf.io import open_file
+import imageio.v3 as imageio
 from micro_sam.sam_annotator import annotator
-from micro_sam.sample_data import fetch_3d_example_data
 from micro_sam.util import get_cache_directory
+from micro_sam.sample_data import fetch_3d_example_data
 
 DATA_CACHE = os.path.join(get_cache_directory(), "sample_data")
 EMBEDDING_CACHE = os.path.join(get_cache_directory(), "embeddings")
 os.makedirs(EMBEDDING_CACHE, exist_ok=True)
 
 
-def em_3d_annotator(use_finetuned_model):
-    """Run the 3d annotator for an example EM volume."""
-    # download the example data
-    example_data = fetch_3d_example_data(DATA_CACHE)
-    # load the example data (load the sequence of tif files as 3d volume)
-    with open_file(example_data) as f:
-        raw = f["*.png"][:]
+def em_3d_annotator(model_type):
+    """Run the 3d annotator for an example EM volume of mitochondria."""
+    # Download the example volume and load it.
+    raw = imageio.imread(fetch_3d_example_data(DATA_CACHE))
 
-    if use_finetuned_model:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi-vit_b_em_organelles.zarr")
-        model_type = "vit_b_em_organelles"
-        precompute_autoseg_state = True
-    else:
-        embedding_path = os.path.join(EMBEDDING_CACHE, "embeddings-lucchi.zarr")
-        model_type = "vit_h"
-        precompute_autoseg_state = False
-
-    # start the annotator, cache the embeddings
-    annotator(
-        raw, embedding_path=embedding_path, model_type=model_type,
-        precompute_autoseg_state=precompute_autoseg_state,
-    )
+    # Start the annotator and cache the embeddings and the automatic segmentation state.
+    embedding_path = os.path.join(EMBEDDING_CACHE, f"embeddings-lucchi-{model_type}.zarr")
+    annotator(raw, embedding_path=embedding_path, model_type=model_type, precompute_autoseg_state=True)
 
 
 def main():
-    # Whether to use the fine-tuned SAM model for mitochondria (organelles).
-    use_finetuned_model = True
-
-    em_3d_annotator(use_finetuned_model)
+    # The micro-sam2 model for mitochondria in EM. Use 'hvit_t_cells' for light microscopy data.
+    model_type = "hvit_s_em_mito"
+    em_3d_annotator(model_type)
 
 
 # The corresponding CLI call for em_3d_annotator:
-# (replace with cache directory on your machine)
-# $ micro_sam.annotator -i /home/pape/.cache/micro_sam/sample_data/lucchi_pp.zip.unzip/Lucchi++/Test_In -k *.png -e /home/pape/.cache/micro_sam/embeddings/embeddings-lucchi.zarr  # noqa
+# (replace <cache> with the cache directory on your machine)
+# $ micro_sam annotator segmentation -i <cache>/sample_data/lucchi-test-volume.tif \
+#   -m hvit_s_em_mito -e <cache>/embeddings/embeddings-lucchi-hvit_s_em_mito.zarr
 if __name__ == "__main__":
     main()

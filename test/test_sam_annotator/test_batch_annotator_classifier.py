@@ -6,7 +6,7 @@ import pytest
 import numpy as np
 from joblib import load
 import imageio.v3 as imageio
-from skimage.measure import label
+from bioimage_cpp.segmentation import label
 from skimage.data import binary_blobs
 
 from micro_sam.v2.util import DEFAULT_MODEL

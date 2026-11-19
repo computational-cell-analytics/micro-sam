@@ -17,10 +17,10 @@ In order to use BAND and start `micro_sam` on it follow these steps:
 - This will open the napari GUI, where you can select the images and annotator tools you want to use (see screenshot). NOTE: this may take a few minutes.
 <img src="https://github.com/user-attachments/assets/23296589-be8d-4f9f-9a38-92d5eea60541" width="1000"/>
 
-- For testing if the tool works, it's best to use the **Annotator 2d** first.
+- For testing if the tool works, it's best to use the **Segmentation Annotator** first.
   - You can find an example image to use by selection `File` -> `Open Sample` -> `Segment Anything for Microscopy` -> `HeLa 2d example data` (see screenshot)
   <img src="https://github.com/user-attachments/assets/ac259787-6238-4b68-8739-48a62f169913" width="1000"/>
-- Then select `Plugins` -> `Segment Anything for Microscopy` -> `Annotator 2d`, and the tool will start.
+- Then select `Plugins` -> `Segment Anything for Microscopy` -> `Segmentation Annotator`, and the tool will start.
 <img src="https://github.com/user-attachments/assets/3062e723-6fe0-48f7-835f-663be7d78b87" width="1000"/>
 
 ## Transfering data to BAND

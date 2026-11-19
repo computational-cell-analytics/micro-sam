@@ -199,12 +199,18 @@ class Sam2Trainer(CheckpointAdapter, torch_em.trainer.DefaultTrainer):
 
     def _check_input_normalization(self, x, input_check_done):
         if not input_check_done:
-            data_min, data_max = x.min(), x.max()
-            if (data_min < 0) or (data_max > 1):
+            data_min, data_max = x.min().item(), x.max().item()
+            # Raise an error, because training on inputs in [0, 255] gives a model that you cannot use.
+            if data_max > 1:
+                raise ValueError(
+                    f"The training inputs have the range [{data_min:.3g}, {data_max:.3g}], but the SAM2 trainer "
+                    "expects inputs in [0, 1]. Normalize the inputs to [0, 1], for example with "
+                    "`micro_sam.v2.normalization.normalize_raw`."
+                )
+            if data_min < 0:
                 warnings.warn(
-                    "It looks like the training inputs are not in the [0, 1] range. "
-                    "The SAM2 training pipeline expects inputs in [0, 1] and applies ImageNet "
-                    "normalization internally. We recommend providing inputs in the range [0, 1]."
+                    f"The training inputs have the minimum {data_min:.3g}, but the SAM2 trainer expects inputs "
+                    "in [0, 1]. Normalize the inputs to [0, 1]."
                 )
             input_check_done = True
         return input_check_done

@@ -6,8 +6,8 @@ from functools import partial
 from typing import Dict, List, Optional, Union, Tuple, Literal
 
 import numpy as np
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 
 from torch_em.data.datasets.util import split_kwargs
 
@@ -393,7 +393,7 @@ def main(argv=None):
         "for an image stack it is a wild-card, e.g. '*.png' and for mrc it is 'data'."
     )
     parser.add_argument(
-        "-m", "--model_type", default=util._DEFAULT_MODEL, type=str,
+        "-m", "--model_type", default=util.DEFAULT_SAM1_MODEL, type=str,
         help=f"The segment anything model that will be used, one of {available_models}."
     )
     parser.add_argument(

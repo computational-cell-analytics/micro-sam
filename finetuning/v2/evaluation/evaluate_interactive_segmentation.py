@@ -28,8 +28,8 @@ import warnings
 from itertools import islice
 
 import numpy as np
-import imageio.v3 as imageio
 from tqdm import tqdm
+import imageio.v3 as imageio
 
 import torch
 
@@ -40,7 +40,7 @@ from micro_sam.v2.evaluation.inference import (
 
 from common import (
     CLICK_PROTOCOLS, DATA_ROOT, DATASETS_2D, DATASETS_3D, MODEL_TYPES, CHECKPOINT_PATHS,
-    check_data_download, checkpoint_checksum, export_joint_checkpoint, get_joint_checkpoint,
+    check_data_download, check_experiment_variables, checkpoint_checksum, export_joint_checkpoint, get_joint_checkpoint,
     interactive_result_name, interactive_run_tag, interactive_sample_ids_3d, load_data, n_samples,
     run_dataset_evaluation,
 )
@@ -345,8 +345,10 @@ def main():
     parser.add_argument("-iter", "--n_iterations", type=int, default=8, help="Iterative prompting rounds.")
     parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Weights instead of the joint export.")
     parser.add_argument("--joint_checkpoint", type=str, default="best", help="Joint checkpoint name, without '.pt'.")
-    parser.add_argument("--weights", type=str, default="joint", choices=("joint", "pretrained"),
-                        help="Prompt the finetuned joint branch, or the pretrained SAM2 backbone.")
+    parser.add_argument(
+        "--weights", type=str, default="joint", choices=("joint", "pretrained"),
+        help="Prompt the finetuned joint branch, or the pretrained SAM2 backbone."
+    )
     parser.add_argument("--ndim", type=int, default=None, choices=(2, 3), help="Defaults to the dataset's own.")
     parser.add_argument(
         "--min_size", type=int, default=0,
@@ -384,6 +386,7 @@ def main():
     )
     parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
     args = parser.parse_args()
+    check_experiment_variables(args.experiment_folder)
 
     if (args.shard_index is None) != (args.n_shards is None):
         raise ValueError("--shard_index and --n_shards must be given together.")

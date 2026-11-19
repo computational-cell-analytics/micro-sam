@@ -8,6 +8,50 @@ from micro_sam.util import get_device
 from micro_sam.v2.util import CFG_PATHS, FINETUNED_MODELS, _get_checkpoint, _download_finetuned_sam2_model
 
 
+def check_start_peft(peft_kwargs: Optional[Dict], start_peft_config: Optional[Dict]) -> None:
+    """Check that the PEFT settings of a training match the PEFT layers of its start weights.
+
+    Args:
+        peft_kwargs: The PEFT settings of the training, or None.
+        start_peft_config: The serialized PEFT settings of the start weights, or None.
+
+    Raises:
+        ValueError: If both are given and they are not the same.
+    """
+    from micro_sam.models.peft import serialize_peft_kwargs
+
+    if not peft_kwargs or start_peft_config is None:
+        return
+    requested = {k: v for k, v in serialize_peft_kwargs(peft_kwargs).items() if k != "quantize"}
+    if requested != start_peft_config:
+        raise ValueError(
+            f"The start weights have PEFT layers with {start_peft_config}, but the training uses {requested}. "
+            "Pass the same 'peft_kwargs', or none to use the PEFT settings of the start weights."
+        )
+
+
+def read_start_weights(model_type: str, checkpoint_path: Union[str, os.PathLike]):
+    """Read the SAM2 weights to start a training from.
+
+    The function accepts all checkpoints that `micro_sam.v2.util.get_sam2_model` accepts: the SAM2 and registry
+    files, the checkpoints of a micro-sam2 training (also from DDP or a compiled model), and a decoder file,
+    whose image encoder is used.
+
+    Args:
+        model_type: The SAM2 model. The backbone of the checkpoint replaces the backbone of this name.
+        checkpoint_path: The checkpoint.
+
+    Returns:
+        The weights of the SAM2 model.
+        The model type, with the backbone of the checkpoint.
+        The serialized PEFT settings of the weights, or None for weights without PEFT layers.
+    """
+    from micro_sam.v2.util import get_sam2_model
+
+    model = get_sam2_model(model_type=model_type, device="cpu", checkpoint_path=checkpoint_path)
+    return model.state_dict(), model.model_type, getattr(model, "peft_config", None)
+
+
 @functools.lru_cache(maxsize=1)
 def sam2_train_class():
     """Build the SAM2Train subclass that micro_sam uses for training.
@@ -168,7 +212,8 @@ def get_sam2_train_model(
     Args:
         model_type: SAM2 variant - one of "hvit_t", "hvit_s", "hvit_b", "hvit_l".
         device: Target device. Auto-selects if None.
-        checkpoint_path: Path to a custom checkpoint. Downloads default weights if None.
+        checkpoint_path: The checkpoint to start from, see `read_start_weights`. By default the weights of
+            `model_type`. The backbone of the checkpoint replaces the backbone of `model_type`.
         freeze: Component name prefixes to freeze (e.g. ["image_encoder"]).
         peft_kwargs: The arguments for `PEFT_Sam2`. These arguments freeze the encoder and apply the PEFT method.
         prob_to_use_pt_input: Probability of using point/box prompts (vs mask propagation).
@@ -206,11 +251,17 @@ def get_sam2_train_model(
     from sam2.build_sam import build_sam2
 
     device = get_device(device)
+    start_state, start_peft_config = None, None
     if checkpoint_path is None:
         if model_type in FINETUNED_MODELS:
             checkpoint_path, _, _ = _download_finetuned_sam2_model(model_type)
         else:
             checkpoint_path = _get_checkpoint(model_type=model_type)
+    else:
+        # SAM2 reads only its own format, so read the weights here and load them after the model is built.
+        start_state, model_type, start_peft_config = read_start_weights(model_type, checkpoint_path)
+        check_start_peft(peft_kwargs, start_peft_config)
+        checkpoint_path = None
 
     model_cfg = CFG_PATHS[model_type[:6]]
 
@@ -227,7 +278,7 @@ def get_sam2_train_model(
 
     model = build_sam2(
         config_file=model_cfg,
-        ckpt_path=str(checkpoint_path),
+        ckpt_path=None if checkpoint_path is None else str(checkpoint_path),
         device=str(device),
         mode="train",
         hydra_overrides_extra=[
@@ -256,12 +307,23 @@ def get_sam2_train_model(
         apply_postprocessing=False,
     )
 
-    if peft_kwargs:
-        from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
-        from micro_sam.models.peft import serialize_peft_kwargs
+    if start_peft_config is not None:
+        # The start weights hold PEFT layers, so add the same layers before the weights are loaded.
+        from micro_sam.v2.models.peft_sam2 import PEFT_MODULES, PEFT_Sam2
+        from micro_sam.models.peft import deserialize_peft_kwargs
 
-        model = PEFT_Sam2(model, **peft_kwargs).sam.to(device)
-        model.peft_config = serialize_peft_kwargs(peft_kwargs)
+        model = PEFT_Sam2(model, **deserialize_peft_kwargs(start_peft_config, PEFT_MODULES)).sam.to(device)
+        model.load_state_dict(start_state)
+        model.peft_config = start_peft_config
+    else:
+        if start_state is not None:
+            model.load_state_dict(start_state)
+        if peft_kwargs:
+            from micro_sam.v2.models.peft_sam2 import PEFT_Sam2
+            from micro_sam.models.peft import serialize_peft_kwargs
+
+            model = PEFT_Sam2(model, **peft_kwargs).sam.to(device)
+            model.peft_config = serialize_peft_kwargs(peft_kwargs)
 
     if freeze is not None:
         components = [freeze] if isinstance(freeze, str) else freeze
