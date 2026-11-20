@@ -247,4 +247,4 @@ def test_launcher_stays_open_when_all_images_are_annotated(make_napari_viewer_pr
         assert len(messages) == 1
         assert messages[0][0] == "info"
         assert "All images have already been annotated" in messages[0][1]
-        assert "Continue Annotation" in messages[0][1]
+        assert "Continue annotation" in messages[0][1]

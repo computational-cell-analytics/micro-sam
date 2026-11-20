@@ -260,6 +260,7 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         # Each container keeps the height of its contents. Without this the leftover space of the
         # dock is spread over the containers, which pulls their rows apart.
         annotator_widget.layout().addStretch()
+        widgets._make_panel(annotator_widget)
 
         self._annotator_widget = annotator_widget
         # Allow widget to resize within scroll area.
@@ -436,7 +437,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
     rf_attr = None  # state attribute holding the trained classifier
     features_attr = None  # state attribute caching the features
     aux_attr = None  # state attribute caching the per-tool aux data (grid_shape | seg_ids)
-    label_widget_title = "Label names:"
+    label_widget_title = "Label names"
     max_components = 256  # PCA upper bound (256 pixel channels, 257 object features)
     tool_key = None  # "pixel" | "object", selects the tool-specific tooltips
     classical_feature_choices = ()  # the classical features this tool supports
@@ -677,7 +678,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         self._class_layout.setContentsMargins(0, 0, 0, 0)
         self._class_layout.setSpacing(0)
 
-        add_button = QtWidgets.QPushButton("Add Class")
+        add_button = QtWidgets.QPushButton("Add class")
         add_button.setToolTip(get_tooltip("classification", "add_class"))
         add_button.clicked.connect(lambda: self._select_class(max(self._classes, default=0) + 1))
 
@@ -693,7 +694,6 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         header = QtWidgets.QLabel(self.label_widget_title)
         header.setToolTip(get_tooltip("classification", "label_names"))
         layout.addWidget(header)
-        layout.addWidget(QtWidgets.QLabel("Previous / next class [Alt + Left / Right]"))
         layout.addLayout(self._class_layout)
         layout.addWidget(add_button)
         return layout
@@ -886,14 +886,14 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         # (shown only for 3d data, see '_update_image'): when checked they act on the whole volume,
         # when unchecked (the default) only on the current slice. Tools that do not support it
         # ('supports_apply_to_volume' False) omit the checkbox and always run over the full image/volume.
-        train_button = PushButton(text="Train and Predict [Shift + T]")
+        train_button = PushButton(text="Train and predict")
         train_button.native.setToolTip(get_tooltip("classification", "train_button"))
-        clear_button = PushButton(text="Clear Annotations [Shift + C]")
+        clear_button = PushButton(text="Clear")
         clear_button.native.setToolTip(get_tooltip("classification", "clear_button"))
 
         apply_to_volume = None
         if self.supports_apply_to_volume:
-            apply_to_volume = CheckBox(value=False, text="Apply to Volume")
+            apply_to_volume = CheckBox(value=False, text="Apply to volume")
             apply_to_volume.native.setToolTip(get_tooltip("classification", "apply_to_volume"))
 
         def _volume_value():
@@ -947,9 +947,8 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         use_anyup = CheckBox(value=False, text="Upsample with AnyUp")
         use_anyup.native.setToolTip(get_tooltip("classification", "use_anyup"))
 
-        checkbox_row = Container(layout="horizontal", widgets=[use_top_features, use_anyup], labels=False)
+        checkbox_row = Container(widgets=[use_top_features, use_anyup], labels=False)
         checkbox_row.native.layout().setContentsMargins(0, 0, 0, 0)
-        checkbox_row.native.layout().addStretch(1)
 
         # Optional classical features, appended to the embedding features. Checking it reveals a
         # dropdown to select the features. Both change the features, so they clear the cached ones.
@@ -975,7 +974,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         top_features = SpinBox(value=10, min=1, max=self.max_components, step=1)
         top_features.native.setToolTip(top_features_tooltip)
         self._top_features_spinbox = top_features
-        top_features_label = Label(value="top feature channels:")
+        top_features_label = Label(value="Top feature channels")
         top_features_label.native.setToolTip(top_features_tooltip)
         top_features_row = Container(
             layout="horizontal", widgets=[top_features_label, top_features], labels=False,
@@ -994,7 +993,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         random_seed.native.setToolTip(random_seed_tooltip)
         # Let the dropdown expand to fill the row width (no trailing stretch), matching the path widgets.
         random_seed.native.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
-        random_seed_label = Label(value="random seed:")
+        random_seed_label = Label(value="Random seed")
         random_seed_label.native.setToolTip(random_seed_tooltip)
         random_seed_row = Container(
             layout="horizontal", widgets=[random_seed_label, random_seed], labels=False,
@@ -1073,7 +1072,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         settings.setLayout(QtWidgets.QVBoxLayout())
         settings.layout().addWidget(self._classifier_io_widget.native)
         collapsible = widgets._make_collapsible(
-            settings, title="Classification Settings", tooltip=get_tooltip("classification", "settings"),
+            settings, title="Classification settings", tooltip=get_tooltip("classification", "settings"),
         )
 
         # Any tool-specific sections (e.g. the object classifier's segmentation selector) sit above
@@ -1141,6 +1140,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         # Each container keeps the height of its contents. Without this the leftover space of the
         # dock is spread over the containers, which pulls their rows apart.
         self._annotator_widget.layout().addStretch()
+        widgets._make_panel(self._annotator_widget)
 
         # Connect the label layer and the refresh function.
         self._refresh_label_widget()

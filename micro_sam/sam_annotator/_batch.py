@@ -20,6 +20,7 @@ from qtpy.QtCore import QEvent, QObject, Qt, QTimer
 from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._titles import get_dock_title
+from ._tooltips import get_tooltip
 from ..util import prepare_annotation_image
 
 
@@ -70,7 +71,7 @@ def _embed_navigation(viewer, annotator, nav_container):
     if inner is None or inner.layout() is None:
         viewer.window.add_dock_widget(nav_container, name=get_dock_title("batch_navigation"))
         return
-    group = QtWidgets.QGroupBox("Batch Navigation")
+    group = QtWidgets.QGroupBox("Batch navigation")
     group_layout = QtWidgets.QVBoxLayout()
     # Add a top margin so the group title is not cramped against the navigation buttons.
     group_layout.setContentsMargins(8, 14, 8, 8)
@@ -315,14 +316,16 @@ def run_batch(
     # shared state, so it can be triggered programmatically (e.g. in tests) just like the annotator's
     # own widgets.
     state = AnnotatorState()
-    next_button = PushButton(text="Next Image [N]")
+    next_button = PushButton(text="Next image")
+    next_button.native.setToolTip(get_tooltip("batch_annotator", "next_image"))
     next_button.clicked.connect(lambda: _do_next())
     state.widgets["batch_next"] = _do_next
 
     nav_buttons = [next_button]
     prev_button = None
     if task.supports_previous:
-        prev_button = PushButton(text="Previous Image [Shift + N]", enabled=current_index > 0)
+        prev_button = PushButton(text="Previous image", enabled=current_index > 0)
+        prev_button.native.setToolTip(get_tooltip("batch_annotator", "previous_image"))
         prev_button.clicked.connect(lambda: _do_previous())
         state.widgets["batch_previous"] = _do_previous
         nav_buttons.insert(0, prev_button)

@@ -31,7 +31,7 @@ class PixelClassifier(_ClassifierBase):
     rf_attr = "pixel_rf"
     features_attr = "pixel_features"
     aux_attr = "pixel_grid_shape"
-    label_widget_title = "Pixel label names:"
+    label_widget_title = "Pixel label names"
     max_components = EMBEDDING_CHANNELS
     tool_key = "pixel"
     classical_feature_choices = PIXEL_FEATURES

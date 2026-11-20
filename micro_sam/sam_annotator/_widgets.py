@@ -20,7 +20,7 @@ from napari.utils import progress
 from napari.utils.notifications import show_info
 
 from qtpy import QtWidgets
-from qtpy.QtCore import QObject, Signal, Qt
+from qtpy.QtCore import QEvent, QObject, Signal, Qt
 from qtpy.QtGui import QStandardItem, QStandardItemModel
 
 from magicgui import magic_factory
@@ -53,10 +53,187 @@ def _select_layer(viewer, layer_name):
     viewer.layers.selection.select_only(viewer.layers[layer_name])
 
 
+# Display names for parameters whose attribute name does not read well as a label.
+_LABEL_NAMES = {
+    "n_iter": "Iterations",
+    "dt": "Step size",
+    "n_threads": "Threads",
+    "multimasking": "Multimask output",
+}
+
+# Margins of the bordered section boxes. All layouts inside a section have no margins.
+_GROUP_MARGINS = (8, 8, 8, 8)
+
+# Texts of the browse buttons from QFileDialog helpers and magicgui's FileEdit.
+_PATH_BUTTON_TEXTS = {
+    "select directory": True,
+    "choose directory": True,
+    "select file": False,
+    "choose file": False,
+    "select files": False,
+    "choose files": False,
+}
+
+
+def _sentence_case(text):
+    """Return a label in sentence case without a trailing colon.
+
+    Words with inner capitals or all capitals (for example 'AnyUp' or 'SAM') keep their case.
+    """
+    words = text.replace("_", " ").strip().rstrip(":").strip().split(" ")
+    for i, word in enumerate(words):
+        if i == 0:
+            words[i] = word[:1].upper() + word[1:]
+        elif len(word) > 1 and word[0].isupper() and word[1:].islower():
+            words[i] = word.lower()
+    return " ".join(words)
+
+
+def _label_text(name, title=None):
+    """Return the row label for a parameter, from its title or its attribute name."""
+    if title is None:
+        title = _LABEL_NAMES.get(name, name.replace("_", " "))
+    return _sentence_case(title)
+
+
+def _make_icon_button(button, directory):
+    """Turn a browse button into a small folder or file icon button."""
+    style = button.style()
+    icon = QtWidgets.QStyle.SP_DirOpenIcon if directory else QtWidgets.QStyle.SP_FileIcon
+    button.setText("")
+    button.setIcon(style.standardIcon(icon))
+    if not button.toolTip():
+        button.setToolTip("Select a folder" if directory else "Select a file")
+    button.setProperty("micro_sam_icon_button", True)
+    button.setFixedWidth(28)
+
+
+def _match_line_edit_height(button):
+    """Give an icon button the height of the text field next to it, so path rows match other rows."""
+    parent = button.parentWidget()
+    if parent is None or parent.layout() is None:
+        return
+    for layout in _iter_layouts(parent.layout()):
+        if layout.indexOf(button) < 0:
+            continue
+        for i in range(layout.count()):
+            field = layout.itemAt(i).widget()
+            if isinstance(field, QtWidgets.QLineEdit):
+                button.setFixedHeight(field.sizeHint().height())
+                return
+
+
+def _iter_layouts(layout):
+    yield layout
+    for i in range(layout.count()):
+        child = layout.itemAt(i).layout()
+        if child is not None:
+            yield from _iter_layouts(child)
+
+
+def _label_rows(root):
+    """Yield (label, layout) for every row that is a label followed by one or more fields."""
+    for widget in [root, *root.findChildren(QtWidgets.QWidget)]:
+        if widget.layout() is None:
+            continue
+        for layout in _iter_layouts(widget.layout()):
+            if not isinstance(layout, QtWidgets.QHBoxLayout) or layout.count() < 2:
+                continue
+            label = layout.itemAt(0).widget()
+            if not isinstance(label, QtWidgets.QLabel) or label.maximumWidth() < 1000:
+                continue
+            fields = [layout.itemAt(i).widget() for i in range(1, layout.count())]
+            if any(f is not None and not isinstance(f, QtWidgets.QLabel) for f in fields):
+                yield label, layout
+
+
+def _polish_panel(root):
+    """Give a dock panel one compact label | field grid.
+
+    Group boxes keep a small margin and all layouts inside them have none. Every row that starts with
+    a label gets the same label column width, so the fields of all sections start at the same x and
+    stretch to the right edge. Browse buttons become icon buttons. The function can be called again
+    after a section is rebuilt.
+    """
+    for widget in [root, *root.findChildren(QtWidgets.QWidget)]:
+        layout = widget.layout()
+        if layout is None:
+            continue
+        if isinstance(widget, QtWidgets.QGroupBox):
+            layout.setContentsMargins(*_GROUP_MARGINS)
+        elif widget is root:
+            layout.setContentsMargins(4, 4, 4, 4)
+        else:
+            layout.setContentsMargins(0, 0, 0, 0)
+        # A fixed row spacing. The style default depends on the widget types.
+        for sub_layout in _iter_layouts(layout):
+            if isinstance(sub_layout, QtWidgets.QVBoxLayout):
+                sub_layout.setSpacing(12 if widget is root else 8)
+
+    # Dropdowns elide long entries instead of widening the panel.
+    for combo in root.findChildren(QtWidgets.QComboBox):
+        combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        combo.setMinimumContentsLength(min(combo.minimumContentsLength() or 8, 8))
+
+    rows = list(_label_rows(root))
+    if rows:
+        width = max(label.sizeHint().width() for label, _ in rows)
+        size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
+        for label, layout in rows:
+            label.setText(_sentence_case(label.text()))
+            label.setMinimumWidth(width)
+            label.setSizePolicy(size_policy.Fixed, size_policy.Preferred)
+            layout.setSpacing(8)
+            layout.setStretch(0, 0)
+            # The first field takes the rest of the row. Buttons after it keep their size.
+            for i in range(1, layout.count()):
+                layout.setStretch(i, 1 if i == 1 else 0)
+
+    for button in root.findChildren(QtWidgets.QPushButton):
+        directory = _PATH_BUTTON_TEXTS.get(button.text().strip().lower())
+        if directory is not None:
+            _make_icon_button(button, directory)
+        if button.property("micro_sam_icon_button"):
+            _match_line_edit_height(button)
+
+    # A closed collapsible takes only the height of its header. The top margin of the content
+    # separates the header from the first row once it is open.
+    for collapsible in root.findChildren(QCollapsible):
+        collapsible.layout().setSpacing(0)
+        collapsible.content().layout().setContentsMargins(0, 6, 0, 0)
+
+
+class _PanelPolisher(QObject):
+    """Polish a panel again when it is shown, once napari's stylesheet sets the final fonts."""
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Show:
+            _polish_panel(obj)
+        return False
+
+
+def _make_panel(root):
+    """Mark a widget as a dock panel and give it the compact grid layout of `_polish_panel`."""
+    if not root.property("micro_sam_panel"):
+        root.setProperty("micro_sam_panel", True)
+        root.installEventFilter(_PanelPolisher(root))
+    _polish_panel(root)
+
+
+def _repolish(widget):
+    """Polish the dock panel that contains a rebuilt widget."""
+    panel = widget
+    while panel is not None and not panel.property("micro_sam_panel"):
+        panel = panel.parentWidget()
+    if panel is not None:
+        _polish_panel(panel)
+
+
 # Create a collapsible around the widget
 def _make_collapsible(widget, title, tooltip=None):
     parent_widget = QtWidgets.QWidget()
     parent_widget.setLayout(QtWidgets.QVBoxLayout())
+    parent_widget.layout().setContentsMargins(0, 0, 0, 0)
     collapsible = QCollapsible(title, parent_widget)
     if tooltip:
         collapsible.setToolTip(tooltip)
@@ -152,7 +329,7 @@ class _WidgetBase(QtWidgets.QWidget):
         self.setLayout(QtWidgets.QVBoxLayout())
 
     def _add_boolean_param(self, name, value, title=None, tooltip=None):
-        checkbox = QtWidgets.QCheckBox(name if title is None else title)
+        checkbox = QtWidgets.QCheckBox(_label_text(name, title))
         checkbox.setChecked(value)
         checkbox.stateChanged.connect(lambda val: setattr(self, name, val))
         if tooltip:
@@ -181,7 +358,7 @@ class _WidgetBase(QtWidgets.QWidget):
     ):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        label = QtWidgets.QLabel(title or name)
+        label = QtWidgets.QLabel(_label_text(name, title))
         if tooltip:
             label.setToolTip(tooltip)
         layout.addWidget(label)
@@ -209,7 +386,7 @@ class _WidgetBase(QtWidgets.QWidget):
     ):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        label = QtWidgets.QLabel(title or name)
+        label = QtWidgets.QLabel(_label_text(name, title))
         if tooltip:
             label.setToolTip(tooltip)
         layout.addWidget(label)
@@ -237,7 +414,7 @@ class _WidgetBase(QtWidgets.QWidget):
     ):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        label = QtWidgets.QLabel(title or name)
+        label = QtWidgets.QLabel(_label_text(name, title))
         if tooltip:
             label.setToolTip(tooltip)
         layout.addWidget(label)
@@ -277,7 +454,7 @@ class _WidgetBase(QtWidgets.QWidget):
     ):
         if layout is None:
             layout = QtWidgets.QHBoxLayout()
-        label = QtWidgets.QLabel(title or name)
+        label = QtWidgets.QLabel(_label_text(name, title))
         if tooltip:
             label.setToolTip(tooltip)
         layout.addWidget(label)
@@ -350,7 +527,7 @@ class _WidgetBase(QtWidgets.QWidget):
         assert select_type in ("directory", "file", "both")
 
         layout = QtWidgets.QHBoxLayout()
-        label = QtWidgets.QLabel(title or name)
+        label = QtWidgets.QLabel(_label_text(name, title))
         if tooltip:
             label.setToolTip(tooltip)
         layout.addWidget(label)
@@ -372,9 +549,8 @@ class _WidgetBase(QtWidgets.QWidget):
         layout.addWidget(path_textbox)
 
         def add_path_button(select_type, tooltip=None):
-            # Adjust button text.
-            button_text = f"Select {select_type.capitalize()}"
-            path_button = QtWidgets.QPushButton(button_text)
+            path_button = QtWidgets.QPushButton()
+            _make_icon_button(path_button, directory=select_type == "directory")
 
             # Call appropriate function based on select_type.
             path_button.clicked.connect(
@@ -418,15 +594,6 @@ class _WidgetBase(QtWidgets.QWidget):
         else:
             # Handle the case where the selected path is not a file
             print("Invalid file selected. Please try again.")
-
-    def _align_widths(self, widgets):
-        # Give a set of widgets a uniform (max) fixed width so rows line up symmetrically.
-        widgets = [w for w in widgets if w is not None]
-        if not widgets:
-            return
-        width = max(w.sizeHint().width() for w in widgets)
-        for w in widgets:
-            w.setFixedWidth(width)
 
     def _get_model_size_options(self):
         # The available model sizes depend on the selected family: the base SAM2 family supports all
@@ -539,7 +706,7 @@ class _WidgetBase(QtWidgets.QWidget):
 
         kwargs = {}
         if create_layout:
-            layout = QtWidgets.QVBoxLayout()
+            layout = QtWidgets.QHBoxLayout()
             kwargs["layout"] = layout
 
         # NOTE: We stick to the base variant for each model family.
@@ -548,7 +715,7 @@ class _WidgetBase(QtWidgets.QWidget):
             "model_family",
             self.model_family,
             list(self.supported_dropdown_maps.keys()),
-            title="Model:",
+            title="Model",
             tooltip=get_tooltip("embedding", "model_family"),
             **kwargs,
         )
@@ -574,7 +741,7 @@ class _WidgetBase(QtWidgets.QWidget):
             "model_size",
             self.model_size,
             self.model_size_options,
-            title="model size:",
+            title="Model size",
             tooltip=get_tooltip("embedding", "model_size"),
         )
         self.model_size_dropdown.currentTextChanged.connect(
@@ -752,7 +919,7 @@ def _reset_tracking_state(viewer):
 #
 
 
-@magic_factory(call_button="Clear Annotations [Shift + C]")
+@magic_factory(call_button="Clear")
 def clear(viewer: "napari.viewer.Viewer") -> None:
     """Widget for clearing the current annotations.
 
@@ -765,7 +932,7 @@ def clear(viewer: "napari.viewer.Viewer") -> None:
     gc.collect()
 
 
-@magic_factory(call_button="Clear Annotations [Shift + C]")
+@magic_factory(call_button="Clear")
 def clear_volume(
     viewer: "napari.viewer.Viewer", all_slices: bool = True
 ) -> None:
@@ -792,7 +959,7 @@ def clear_volume(
     gc.collect()
 
 
-@magic_factory(call_button="Clear Annotations [Shift + C]")
+@magic_factory(call_button="Clear")
 def clear_track(
     viewer: "napari.viewer.Viewer", all_frames: bool = True
 ) -> None:
@@ -1115,7 +1282,7 @@ def _call_button_tooltip(widget_type, name):
 
 
 @magic_factory(
-    call_button="Commit [C]",
+    call_button="Commit",
     widget_init=_call_button_tooltip("commit", "commit_button"),
     layer={
         "choices": ["current_object", "auto_segmentation"],
@@ -1173,7 +1340,7 @@ def commit(
 
 
 @magic_factory(
-    call_button="Commit [C]",
+    call_button="Commit",
     widget_init=_call_button_tooltip("commit", "commit_button"),
     layer={
         "choices": ["current_object", "auto_segmentation"],
@@ -1414,7 +1581,7 @@ def _ask_load_or_recompute(message: str) -> str:
 def _validate_embeddings(viewer: "napari.viewer.Viewer"):
     state = AnnotatorState()
     if state.image_embeddings is None:
-        msg = "Image embeddings are not yet computed. Press 'Compute Embeddings' to compute them for your image."
+        msg = "Image embeddings are not yet computed. Press 'Compute embeddings' to compute them for your image."
         return _generate_message("error", msg)
     else:
         return False
@@ -1720,7 +1887,7 @@ def _segment_object_2d(viewer, batched=False):
     viewer.layers["current_object"].refresh()
 
 
-@magic_factory(call_button="Segment Object [S]")
+@magic_factory(call_button="Segment object")
 def segment(viewer: "napari.viewer.Viewer", batched: bool = False) -> None:
     """Segment object(s) for the current prompts.
 
@@ -1794,9 +1961,8 @@ class EmbeddingWidget(_WidgetBase):
         # embedding progress accordingly (the underlying compute path is the same as for 3D).
         self.is_timeseries = is_timeseries
 
-        # Create a nested layout for the sections.
-        # Section 1: Image and Model.
-        section1_layout = QtWidgets.QHBoxLayout()
+        # Section 1: the image and model rows.
+        section1_layout = QtWidgets.QVBoxLayout()
         section1_layout.addLayout(self._create_image_section())
         # Default to the single-source 'DEFAULT_MODEL' (the 'Microscopy' / 'hvit_t_cells' model);
         # '_create_model_section' derives the synthetic selector string from it when no value is given.
@@ -1813,14 +1979,14 @@ class EmbeddingWidget(_WidgetBase):
         self._set_default_tiling()
 
         # Section 3: The button to trigger the embedding computation.
-        self.run_button = QtWidgets.QPushButton("Compute Embeddings")
+        self.run_button = QtWidgets.QPushButton("Compute embeddings")
         self.run_button.clicked.connect(self.__call__)
         self.run_button.setToolTip(get_tooltip("embedding", "run_button"))
         self.layout().addWidget(self.run_button)
 
     def _create_image_section(self):
-        image_section = QtWidgets.QVBoxLayout()
-        layer_label = "Timeseries Layer:" if self.is_timeseries else "Image Layer:"
+        image_section = QtWidgets.QHBoxLayout()
+        layer_label = "Timeseries layer" if self.is_timeseries else "Image layer"
         self.image_layer_label = QtWidgets.QLabel(layer_label)
         # self.image_layer_label.setToolTip(get_tooltip("embedding", "image")) #  this adds tooltip to label
         image_section.addWidget(self.image_layer_label)
@@ -1901,22 +2067,18 @@ class EmbeddingWidget(_WidgetBase):
         setting_values.setToolTip(get_tooltip("embedding", "settings"))
         setting_values.setLayout(QtWidgets.QVBoxLayout())
 
-        # The dropdown rows of this panel, collected so that they get a uniform layout at the end.
-        choice_rows = []
-
         # Optional image dimensionality override. 'auto' detects 2d or 3d (including channels) from the
         # selected image. '2d' and '3d' force the interpretation, e.g. to read a channels-first
         # (C, H, W) array as a 2d multi-channel image.
         if self.ndim_choice:
             self.image_ndim_mode = "auto"
             self.image_ndim_dropdown, ndim_layout = self._add_choice_param(
-                "image_ndim_mode", self.image_ndim_mode, ["auto", "2d", "3d"], title="image dimensions:",
+                "image_ndim_mode", self.image_ndim_mode, ["auto", "2d", "3d"], title="Image dimensions",
                 tooltip=get_tooltip("embedding", "image_ndim"),
             )
             # Forcing '2d' on a volume removes the slices the batch would span.
             self.image_ndim_dropdown.currentIndexChanged.connect(self._refresh_batch_size)
             setting_values.layout().addLayout(ndim_layout)
-            choice_rows.append(ndim_layout)
 
         # Create UI for tiling. A dropdown toggles whether the tool uses tiling. When you enable it,
         # the tile shape and halo fields appear with sensible defaults.
@@ -1925,12 +2087,11 @@ class EmbeddingWidget(_WidgetBase):
             "tiling",
             self.tiling,
             ["no", "yes"],
-            title="tiling:",
+            title="Tiling",
             update=self._update_tiling_visibility,
             tooltip=get_tooltip("embedding", "tiling"),
         )
         setting_values.layout().addLayout(tiling_layout)
-        choice_rows.append(tiling_layout)
 
         # Container holding the tile shape and halo fields (hidden unless tiling is 'yes').
         self._tiling_widget = QtWidgets.QWidget()
@@ -1970,7 +2131,6 @@ class EmbeddingWidget(_WidgetBase):
         # Add the model size widget section.
         model_size_layout = self._create_model_size_section()
         setting_values.layout().addLayout(model_size_layout)
-        choice_rows.append(model_size_layout)
 
         # Create UI for the device.
         self.device = "auto"
@@ -1983,7 +2143,6 @@ class EmbeddingWidget(_WidgetBase):
             tooltip=get_tooltip("embedding", "device"),
         )
         setting_values.layout().addLayout(device_layout)
-        choice_rows.append(device_layout)
 
         # The batch size follows the model and the device until the user edits it, after which their
         # value is kept. Until then it only previews what the backend will pick per device, see
@@ -2010,7 +2169,7 @@ class EmbeddingWidget(_WidgetBase):
             "embeddings_save_path",
             self.embeddings_save_path,
             "directory",
-            title="embeddings save path:",
+            title="Embeddings save path",
             tooltip=get_tooltip("embedding", "embeddings_save_path"),
         )
         setting_values.layout().addLayout(save_layout)
@@ -2021,28 +2180,10 @@ class EmbeddingWidget(_WidgetBase):
             "custom_weights",
             self.custom_weights,
             "file",
-            title="custom weights path:",
+            title="Custom weights path",
             tooltip=get_tooltip("embedding", "custom_weights"),
         )
         setting_values.layout().addLayout(weights_layout)
-
-        # Make the two path rows symmetric: equal label widths, so their text boxes match too.
-        self._align_widths([save_layout.itemAt(0).widget(), weights_layout.itemAt(0).widget()])
-        # Move the horizontal space trimmed from the text boxes into the browse buttons (rather than
-        # leaving a gap): widen them uniformly by that amount ('Select Directory' is wider than
-        # 'Select File', which would otherwise offset the rows).
-        path_button_extra = 20
-        save_button = save_layout.itemAt(save_layout.count() - 1).widget()
-        weights_button = weights_layout.itemAt(weights_layout.count() - 1).widget()
-        button_width = max(save_button.sizeHint().width(), weights_button.sizeHint().width()) + path_button_extra
-        for button in (save_button, weights_button):
-            button.setFixedWidth(button_width)
-
-        # Give the dropdowns a slightly larger share of their row than the labels, so that they extend
-        # a bit further to the left (their right edge stays at the panel margin).
-        for row in choice_rows:
-            row.setStretch(0, 4)
-            row.setStretch(1, 5)
 
         # Opt-in disk caching of the automatic-segmentation state (off by default). When on, the state
         # is precomputed to disk (next to the embeddings) while the embeddings are computed and reused
@@ -2060,7 +2201,7 @@ class EmbeddingWidget(_WidgetBase):
         self._add_extra_model_settings(setting_values.layout())
 
         settings = _make_collapsible(
-            setting_values, title="Embedding Settings", tooltip=get_tooltip("embedding", "settings"),
+            setting_values, title="Embedding settings", tooltip=get_tooltip("embedding", "settings"),
         )
         return settings
 
@@ -2920,15 +3061,15 @@ class UnifiedSegmentWidget(_WidgetBase):
         """Get dynamic button text based on current mode."""
         if self.tracking:
             return (
-                "Segment All Frames [S]"
+                "Segment all frames"
                 if self.apply_to_volume
-                else "Segment Frame [S]"
+                else "Segment frame"
             )
         else:
             return (
-                "Segment Volume [S]"
+                "Segment volume"
                 if self.apply_to_volume
-                else "Segment Slice [S]"
+                else "Segment slice"
             )
 
     def __call__(self, viewer=None):
@@ -3458,11 +3599,11 @@ class InteractiveSegmentationWidget(_WidgetBase):
         # Prompt label menu.
         self.layout().addWidget(self._prompt_widget.native)
 
-        self.clear_button = QtWidgets.QPushButton("Clear Annotations [Shift + C]")
+        self.clear_button = QtWidgets.QPushButton("Clear")
         self.clear_button.setToolTip(get_tooltip("unified_segment", "clear_button"))
         self.clear_button.clicked.connect(lambda: self.clear())
 
-        self.segment_button = QtWidgets.QPushButton("Segment Object [S]")
+        self.segment_button = QtWidgets.QPushButton("Segment object")
         self.segment_button.setToolTip(get_tooltip("unified_segment", "segment_button"))
         self.segment_button.clicked.connect(lambda: self.segment())
 
@@ -3592,7 +3733,7 @@ class InteractiveSegmentationWidget(_WidgetBase):
         self.z_range_slider.valueChanged.connect(self._sync_propagation_settings)
 
         return _make_collapsible(
-            container, title="Volume Propagation Settings", tooltip=get_tooltip("segmentnd", "settings"),
+            container, title="Volume propagation settings", tooltip=get_tooltip("segmentnd", "settings"),
         )
 
     def _on_full_z_range_changed(self, state):
@@ -3704,9 +3845,8 @@ class InteractiveTrackingWidget(_WidgetBase):
 
     def _create_widget(self):
         # The combined prompt label / track id / track state menus (one container so the three
-        # dropdowns share an aligned label column). Lay each row out as label-left, box-right.
+        # dropdowns share an aligned label column).
         self.layout().addWidget(self._tracking_widget.native)
-        self._align_menu_rows()
 
         # Hidden segmentation engine: owns the per-frame and propagation logic, driven via its
         # 'apply_to_volume' attribute. Its own controls are not shown.
@@ -3723,32 +3863,16 @@ class InteractiveTrackingWidget(_WidgetBase):
         self.layout().addWidget(self.apply_to_volume_checkbox)
 
         # 'Segment Object' / 'Clear Annotations' side by side.
-        self.segment_button = QtWidgets.QPushButton("Segment Object [S]")
+        self.segment_button = QtWidgets.QPushButton("Segment object")
         self.segment_button.setToolTip(get_tooltip("unified_segment", "segment_button"))
         self.segment_button.clicked.connect(lambda: self.segment())
-        self.clear_button = QtWidgets.QPushButton("Clear Annotations [Shift + C]")
+        self.clear_button = QtWidgets.QPushButton("Clear")
         self.clear_button.setToolTip(get_tooltip("unified_segment", "clear_button"))
         self.clear_button.clicked.connect(lambda: self.clear())
         button_row = QtWidgets.QHBoxLayout()
         button_row.addWidget(self.segment_button)
         button_row.addWidget(self.clear_button)
         self.layout().addLayout(button_row)
-
-    def _align_menu_rows(self):
-        # Each menu row is a QHBoxLayout of [QLabel, QComboBox]. Insert a stretch between them so the
-        # label stays left and the (fixed-width) combo box is right-aligned. Idempotent, since the
-        # menu container persists across layout rebuilds.
-        container_layout = self._tracking_widget.native.layout()
-        for i in range(container_layout.count()):
-            row = container_layout.itemAt(i).widget()
-            row_layout = None if row is None else row.layout()
-            if row_layout is None or row_layout.count() < 2:
-                continue
-            combo = row_layout.itemAt(row_layout.count() - 1).widget()
-            if combo is not None:
-                combo.setFixedWidth(300)
-            if row_layout.count() < 3:  # No stretch inserted yet.
-                row_layout.insertStretch(1)
 
     def _on_apply_to_volume_changed(self, state):
         self.apply_to_volume = bool(state)
@@ -3936,22 +4060,16 @@ class AutoSegmentWidget(_WidgetBase):
         return tuple(self.mode_dropdown.itemText(i) for i in range(self.mode_dropdown.count()))
 
     def _create_widget(self):
-        # Top row: the mode dropdown on the left, the 'Apply to Volume' switch (3d only) on the right.
-        top_row = QtWidgets.QHBoxLayout()
-
+        # The mode dropdown, then the 'Apply to volume' switch (3d only) in its own row.
         self.mode_dropdown, mode_layout = self._add_choice_param(
             "mode",
             self.mode,
             list(self._available_modes()),
-            title="mode:",
+            title="Mode",
             update=self._on_mode_changed,
             tooltip=get_tooltip("autosegment", "mode"),
         )
-        # Keep the label at its text width so that the dropdown starts right after it and covers
-        # the rest of the row.
-        mode_layout.setStretch(0, 0)
-        mode_layout.setStretch(1, 1)
-        top_row.addLayout(mode_layout)
+        self.layout().addLayout(mode_layout)
 
         if self.volumetric:
             self.apply_to_volume = False
@@ -3963,16 +4081,14 @@ class AutoSegmentWidget(_WidgetBase):
             )
             # The handler reads 'apply_to_volume', so it must run after the checkbox updates it.
             self.apply_to_volume_checkbox.stateChanged.connect(self._on_apply_to_volume_changed)
-            top_row.addWidget(self.apply_to_volume_checkbox)
-
-        self.layout().addLayout(top_row)
+            self.layout().addWidget(self.apply_to_volume_checkbox)
 
         # Advanced post-processing settings, shown inline and refreshed on mode change.
         self.settings = self._make_settings_widget()
         self.layout().addWidget(self.settings)
 
         # Run button. It is only active with a decoder, since every mode needs one.
-        self.run_button = QtWidgets.QPushButton("Automatic Segmentation")
+        self.run_button = QtWidgets.QPushButton("Automatic segmentation")
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
         self._update_run_button()
@@ -4018,6 +4134,7 @@ class AutoSegmentWidget(_WidgetBase):
         self.layout().replaceWidget(self.settings, new_settings)
         self.settings.deleteLater()
         self.settings = new_settings
+        _repolish(self)
 
     def _make_settings_widget(self):
         # All hyperparameters (except mode and apply-to-volume) live in one collapsible
@@ -4038,7 +4155,7 @@ class AutoSegmentWidget(_WidgetBase):
         settings.layout().setContentsMargins(0, 0, 0, 0)
         advanced_tooltip = get_tooltip("autosegment", "advanced_settings")
         settings.layout().addWidget(
-            _make_collapsible(advanced, title="Advanced Settings", tooltip=advanced_tooltip)
+            _make_collapsible(advanced, title="Advanced settings", tooltip=advanced_tooltip)
         )
         return settings
 
@@ -4051,20 +4168,20 @@ class AutoSegmentWidget(_WidgetBase):
 
     def _add_z_tiling_params(self, settings):
         # 3d decoder inference decodes the volume in z blocks (with a halo for context) to bound
-        # memory. 'tile_z' and 'halo_z' sit side by side at the top of the settings. Only for
-        # volumetric segmentation - not 2d and not tracking (which segments each frame in 2d).
+        # memory. 'tile_z' and 'halo_z' sit at the top of the settings. Only for volumetric
+        # segmentation. 2d and tracking (which segments each frame in 2d) do not use them.
         if not self.volumetric or self._is_tracking:
             return
-        row = QtWidgets.QHBoxLayout()
-        self.tile_z_param, _ = self._add_int_param(
-            "tile_z", self.tile_z, min_val=1, max_val=512, title="tile_z:",
-            tooltip=get_tooltip("autosegment", "tile_z"), layout=row,
+        self.tile_z_param, tile_row = self._add_int_param(
+            "tile_z", self.tile_z, min_val=1, max_val=512, title="Tile z",
+            tooltip=get_tooltip("autosegment", "tile_z"),
         )
-        self.halo_z_param, _ = self._add_int_param(
-            "halo_z", self.halo_z, min_val=0, max_val=128, title="overlap_z:",
-            tooltip=get_tooltip("autosegment", "halo_z"), layout=row,
+        settings.layout().addLayout(tile_row)
+        self.halo_z_param, halo_row = self._add_int_param(
+            "halo_z", self.halo_z, min_val=0, max_val=128, title="Overlap z",
+            tooltip=get_tooltip("autosegment", "halo_z"),
         )
-        settings.layout().addLayout(row)
+        settings.layout().addLayout(halo_row)
 
     def _add_flow_integration_params(self, settings, n_iter, dt=0.5, sigma=1.0):
         self.n_iter = n_iter
@@ -4676,39 +4793,31 @@ class AutoTrackWidget(AutoSegmentWidget):
     _RUN_TOOLTIP = ("autotrack", "run_button")
 
     def _create_widget(self):
-        # Top row: the 'Track Timeseries' switch on the left, the mode dropdown on the right.
-        top_row = QtWidgets.QHBoxLayout()
+        # The mode dropdown, then the 'Track timeseries' switch in its own row.
+        self.mode_dropdown, mode_layout = self._add_choice_param(
+            "mode",
+            self.mode,
+            list(self._available_modes()),
+            title="Mode",
+            update=self._on_mode_changed,
+            tooltip=get_tooltip("autosegment", "mode"),
+        )
+        self.layout().addLayout(mode_layout)
 
         self.apply_to_volume = False
         self.apply_to_volume_checkbox = self._add_boolean_param(
             "apply_to_volume",
             self.apply_to_volume,
-            title="Track Timeseries",
+            title="Track timeseries",
             tooltip=get_tooltip("autotrack", "run_tracking"),
         )
-        top_row.addWidget(self.apply_to_volume_checkbox)
-
-        self.mode_dropdown, mode_layout = self._add_choice_param(
-            "mode",
-            self.mode,
-            list(self._available_modes()),
-            title="mode:",
-            update=self._on_mode_changed,
-            tooltip=get_tooltip("autosegment", "mode"),
-        )
-        # Keep the label at its text width so that the dropdown starts right after it and covers
-        # the rest of the row.
-        mode_layout.setStretch(0, 0)
-        mode_layout.setStretch(1, 1)
-        top_row.addLayout(mode_layout)
-
-        self.layout().addLayout(top_row)
+        self.layout().addWidget(self.apply_to_volume_checkbox)
 
         self.settings = self._make_settings_widget()
         self.layout().addWidget(self.settings)
 
         # The run button is only active with a decoder, since every mode needs one.
-        self.run_button = QtWidgets.QPushButton("Automatic Tracking")
+        self.run_button = QtWidgets.QPushButton("Automatic tracking")
         self.run_button.clicked.connect(self.__call__)
         self.layout().addWidget(self.run_button)
         self._update_run_button()

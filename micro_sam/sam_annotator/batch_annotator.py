@@ -300,7 +300,7 @@ class BatchAnnotator(widgets._WidgetBase):
         self._create_options()
 
         # Add the run button to trigger the embedding computation.
-        self.run_button = QtWidgets.QPushButton("Annotate Images")
+        self.run_button = QtWidgets.QPushButton("Annotate images")
         self.run_button.clicked.connect(self.__call__)
         self._content.layout().addWidget(self.run_button)
 
@@ -334,7 +334,7 @@ class BatchAnnotator(widgets._WidgetBase):
         self.folder = None
         self._folder_textbox, layout = self._add_path_param(
             "folder", self.folder, "directory",
-            title="Input Folder", placeholder="Folder with images ...",
+            title="Input folder", placeholder="Folder with images ...",
             tooltip=get_tooltip("batch_annotator", "folder")
         )
         self._content.layout().addLayout(layout)
@@ -356,7 +356,7 @@ class BatchAnnotator(widgets._WidgetBase):
         seg_layout.setContentsMargins(0, 0, 0, 0)
         _, path_layout = self._add_path_param(
             "segmentation_folder", self.segmentation_folder, "directory",
-            title="Segmentation Folder", placeholder="Folder with segmentations (optional) ...",
+            title="Segmentation folder", placeholder="Folder with segmentations (optional) ...",
             tooltip=get_tooltip("batch_annotator", "segmentation_folder"),
         )
         seg_layout.addLayout(path_layout)
@@ -368,7 +368,7 @@ class BatchAnnotator(widgets._WidgetBase):
         self.output_folder = None
         _, layout = self._add_path_param(
             "output_folder", self.output_folder, "directory",
-            title="Output Folder", placeholder="Folder to save the results ...",
+            title="Output folder", placeholder="Folder to save the results ...",
             tooltip=get_tooltip("batch_annotator", "output_folder")
         )
         self._content.layout().addLayout(layout)
@@ -378,7 +378,7 @@ class BatchAnnotator(widgets._WidgetBase):
         # width would widen the whole console whenever the segmentation task is selected.
         self.continue_annotation = True
         self.continue_annotation_checkbox = self._add_boolean_param(
-            "continue_annotation", self.continue_annotation, title="Continue Annotation",
+            "continue_annotation", self.continue_annotation, title="Continue annotation",
             tooltip=get_tooltip("batch_annotator", "continue_annotation"),
         )
         self._content.layout().addWidget(self.continue_annotation_checkbox)
@@ -392,10 +392,9 @@ class BatchAnnotator(widgets._WidgetBase):
 
         self.task = "Segmentation"
         self.task_dropdown, task_layout = self._add_choice_param(
-            "task", self.task, TASKS, title="Task:", tooltip=get_tooltip("batch_annotator", "task"),
+            "task", self.task, TASKS, title="Task", tooltip=get_tooltip("batch_annotator", "task"),
         )
-        # Let the dropdown absorb the row's extra width so the 'Task:' label hugs it (otherwise the
-        # label expands and leaves a gap between the text and the dropdown).
+        # The dropdown takes the extra width of the row.
         size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
         self.task_dropdown.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
         self._content.layout().addLayout(task_layout)
@@ -451,21 +450,17 @@ class BatchAnnotator(widgets._WidgetBase):
 
         # Relocate the model-family dropdown into the model row (above Task), then hide the now-empty
         # image / model row at the top of the embedding widget.
-        self._model_label = QtWidgets.QLabel("Model:")
+        self._model_label = QtWidgets.QLabel("Model")
         self._relocated_model_dropdown = self._embedding_widget.model_family_dropdown
-        # Expanding so the 'Model:' label hugs the dropdown (matching the Task field).
+        # The dropdown takes the extra width of the row, as in the Task row.
         size_policy = getattr(QtWidgets.QSizePolicy, "Policy", QtWidgets.QSizePolicy)
         self._relocated_model_dropdown.setSizePolicy(size_policy.Expanding, size_policy.Fixed)
         self._model_row.addWidget(self._model_label)
         self._model_row.addWidget(self._relocated_model_dropdown)
         _hide_layout_widgets(self._embedding_widget.layout().itemAt(0))
 
-        # Uniform label widths so the input / segmentation / output / pattern fields and the model /
-        # task dropdowns all start at the same x and span the same width.
-        self._align_widths([
-            self._folder_label, self._pattern_label, self._seg_folder_label, self._output_label,
-            self._task_label, self._model_label,
-        ])
+        # One label column for the launcher rows and the embedded embedding settings.
+        widgets._make_panel(self._content)
 
         self._update_default_tiling()
 
@@ -582,7 +577,7 @@ class BatchAnnotator(widgets._WidgetBase):
             message = "All images have already been annotated. "
             if self.task == "Segmentation":
                 message += (
-                    "To review or edit them, uncheck 'Continue Annotation' and start the batch annotator again, "
+                    "To review or edit them, uncheck 'Continue annotation' and start the batch annotator again, "
                     "or choose a different output folder."
                 )
             else:
