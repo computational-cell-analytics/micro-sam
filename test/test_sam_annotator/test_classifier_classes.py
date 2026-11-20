@@ -57,7 +57,7 @@ def test_class_rows_and_selection(annotator):
 
     # 'Add Class' paints with the next free id.
     add_button = [
-        b for b in annotator._label_widget.parentWidget().findChildren(QtWidgets.QPushButton) if b.text() == "Add Class"
+        b for b in annotator._label_widget.parentWidget().findChildren(QtWidgets.QPushButton) if b.text() == "Add class"
     ][0]
     add_button.click()
     assert layer.selected_label == 2 and layer.mode == "paint"

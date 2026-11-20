@@ -45,8 +45,8 @@ def test_tracking_uses_timeseries_layer_label(qtbot):
     qtbot.addWidget(tracking_widget)
     qtbot.addWidget(image_widget)
 
-    assert tracking_widget.image_layer_label.text() == "Timeseries Layer:"
-    assert image_widget.image_layer_label.text() == "Image Layer:"
+    assert tracking_widget.image_layer_label.text() == "Timeseries layer"
+    assert image_widget.image_layer_label.text() == "Image layer"
 
 
 def test_box_selection_updates_current_track_id(qtbot):

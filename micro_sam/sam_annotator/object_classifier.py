@@ -91,7 +91,7 @@ class ObjectClassifier(_ClassifierBase):
     rf_attr = "object_rf"
     features_attr = "object_features"
     aux_attr = "seg_ids"
-    label_widget_title = "Object label names:"
+    label_widget_title = "Object label names"
     max_components = N_OBJECT_FEATURES
     tool_key = "object"
     classical_feature_choices = OBJECT_FEATURES
@@ -184,8 +184,8 @@ class ObjectClassifier(_ClassifierBase):
             self._invalidate_features()
 
     def _create_segmentation_layer_section(self):
-        segmentation_selection = QtWidgets.QVBoxLayout()
-        seg_label = QtWidgets.QLabel("Segmentation:")
+        segmentation_selection = QtWidgets.QHBoxLayout()
+        seg_label = QtWidgets.QLabel("Segmentation")
         seg_label.setToolTip(get_tooltip("classification", "segmentation"))
         segmentation_selection.addWidget(seg_label)
         self.segmentation_selection = ComboBox(choices=lambda _: self._segmentation_layer_choices())
