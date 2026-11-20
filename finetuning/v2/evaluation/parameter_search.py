@@ -59,6 +59,7 @@ from micro_sam.v2.postprocessing import watershed_heightmap, _compute_flow_densi
 from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, models as model_registry
 
 from common import (
+    CREMI_IGNORE_ZERO_LABEL, DATASETS_SA50,
     DATASETS_2D_EM_NUCLEUS_MOCK, DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
     EM_NUCLEUS_MOCK_2D_ROOT, GT_MIN_SIZE_2D, CROP_SHAPE_3D, DATA_ROOT, LABELLED_ONLY_DATASETS, MODEL_TYPES, MODES,
     TUNING_CROPS, VOLUME_SPEED_OPTIONS, build_model, check_data_download, drop_severed_objects, em_roi,
@@ -210,11 +211,19 @@ FLOW_DENSITY_KEYS = ("foreground_threshold", "sigma", "n_iter", "dt")
 # multicut-solve step) then varies on top. See score_image_dense_cached.
 OVERSEG_KEYS = ("density_threshold", "sigma", "n_iter", "dt")
 
-# Metric the grid is ranked by, and whether lower is better. 'msa' (mean segmentation accuracy) is
-# maximised; 'cremi' (a VI + adapted-Rand combination for neuron segmentation) is minimised.
-CRITERION_ASCENDING = {"msa": False, "cremi": True}
+# Metric the grid is ranked by, and whether lower is better. 'msa' (mean segmentation accuracy) and 'sa50' (the
+# segmentation accuracy at an IoU of 0.5, see `common.DATASETS_SA50`) are maximised; 'cremi' (a VI + adapted-Rand
+# combination for neuron segmentation) is minimised.
+CRITERION_ASCENDING = {"msa": False, "sa50": False, "cremi": True}
 
 POSTPROC_THREADS = 4
+
+
+def default_criterion(dataset_name):
+    """The metric a dataset is ranked by: the CREMI score for the dense datasets, SA50 or mSA for the others."""
+    if dataset_name in DATASETS_DENSE:
+        return "cremi"
+    return "sa50" if dataset_name in DATASETS_SA50 else "msa"
 
 
 def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_override=None, grid_preset="default"):
@@ -271,21 +280,25 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_over
         "grid": grid,
         "spacing": DATASET_SPACING.get(dataset_name, None),
         "crop": (crop_shape or CROP_SHAPE_3D) if is_3d else None,
-        "criterion": criterion or ("cremi" if is_dense else "msa"),
+        "criterion": criterion or default_criterion(dataset_name),
         # Only set for the volumes with no split of their own.
         "z_range": VAL_Z_RANGE.get(dataset_name),
     }
 
 
-def compute_metrics(seg, labels, metric_mode, border_min_size=0, valid_roi=None, labelled_only=False):
+def compute_metrics(
+    seg, labels, metric_mode, border_min_size=0, valid_roi=None, labelled_only=False, ignore_zero=False,
+):
     """Compute the evaluation metrics for one segmentation.
 
     The segmentation is restricted to the scored region first, like `common.run_evaluation` does on the test data:
     it is cleared outside 'valid_roi' (the annotated part of a partially annotated volume), and with 'labelled_only'
     (see LABELLED_ONLY_DATASETS) only the objects that overlap the labelled foreground stay.
-    The function always reports mSA. Sparse mode also logs the symmetric best Dice (SBD), which no ranking uses.
+    The function always reports mSA and SA50. Sparse mode also logs the symmetric best Dice (SBD), which no ranking
+    uses.
     Dense (EM neuron) mode also reports the CREMI score with its VI-split, VI-merge and adapted-Rand components.
-    Neuron segmentation is ranked by CREMI (lower is better) instead of mSA.
+    Neuron segmentation is ranked by CREMI (lower is better) instead of mSA. With 'ignore_zero' the CREMI score
+    leaves out the voxels with label zero (see `common.CREMI_IGNORE_ZERO_LABEL`).
     """
     if valid_roi is not None:
         seg = np.where(valid_roi, seg, 0).astype(seg.dtype)
@@ -294,12 +307,13 @@ def compute_metrics(seg, labels, metric_mode, border_min_size=0, valid_roi=None,
     if seg.ndim == 2:
         # Symmetric with the ground truth, which `load_evaluation_sample_2d` filtered the same way.
         seg = drop_severed_objects(seg, border_min_size)
-    metrics = {"msa": float(mean_segmentation_accuracy(seg, labels))}
+    msa, accuracies = mean_segmentation_accuracy(seg, labels, return_accuracies=True)
+    metrics = {"msa": float(msa), "sa50": float(accuracies[0])}  # The thresholds start at an IoU of 0.5.
     if metric_mode == "sparse":
         metrics["sbd"] = float(symmetric_best_dice_score(seg, labels))
     if metric_mode == "dense":
         from elf.evaluation import cremi_score
-        vi_split, vi_merge, adapted_rand, cremi = cremi_score(seg, labels)
+        vi_split, vi_merge, adapted_rand, cremi = cremi_score(seg, labels, ignore_gt=[0] if ignore_zero else None)
         metrics["cremi"] = float(cremi)
         metrics["vi_split"] = float(vi_split)
         metrics["vi_merge"] = float(vi_merge)
@@ -522,7 +536,7 @@ def dense_solve(rag, feats, z_edges, overseg, n_slices, beta):
 
 def score_image_dense_cached(
     prediction, labels, params_list, n_threads=POSTPROC_THREADS, border_min_size=0, valid_roi=None,
-    labelled_only=False,
+    labelled_only=False, ignore_zero=False,
 ):
     """Score all dense combos on one image, caching the oversegmentation and RAG across shared combos."""
     boundary_map, distances = dense_boundary_and_distances(prediction)
@@ -539,7 +553,9 @@ def score_image_dense_cached(
         overseg, rag, feats, z_edges, n_slices = overseg_cache[key]
         try:
             seg = dense_solve(rag, feats, z_edges, overseg, n_slices, params["beta"])
-            scores.append(compute_metrics(seg, labels, "dense", border_min_size, valid_roi, labelled_only))
+            scores.append(compute_metrics(
+                seg, labels, "dense", border_min_size, valid_roi, labelled_only, ignore_zero,
+            ))
         except Exception as e:
             warnings.warn(f"Dense multicut solve failed for {params}: {e}")
             scores.append(None)
@@ -627,11 +643,12 @@ def cached_prediction(cache_dir, index, model, raw, ndim, device):
 
 def score_image(
     prediction, labels, mode, params_list, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0,
-    valid_roi=None, labelled_only=False,
+    valid_roi=None, labelled_only=False, ignore_zero=False,
 ):
     """Return a per-combo list of metric dicts for one decoder prediction, aligned with params_list.
 
-    'valid_roi' and 'labelled_only' restrict the scored region, see `compute_metrics`.
+    'valid_roi' and 'labelled_only' restrict the scored region and 'ignore_zero' the CREMI score of the dense
+    mode, see `compute_metrics`.
     """
     if mode == "sparse":
         return score_image_sparse_cached(
@@ -640,7 +657,7 @@ def score_image(
         )
     return score_image_dense_cached(
         prediction, labels, params_list, n_threads=n_threads, border_min_size=border_min_size,
-        valid_roi=valid_roi, labelled_only=labelled_only,
+        valid_roi=valid_roi, labelled_only=labelled_only, ignore_zero=ignore_zero,
     )
 
 
@@ -660,11 +677,15 @@ def report_best(df, dataset_name, config):
 
 
 def sweep_cache_is_current(csv_path, config):
-    """Return whether a cached sweep contains every parameter in the current grid."""
+    """Return whether a cached sweep contains every parameter in the current grid and the metric it is ranked by."""
     columns = set(pd.read_csv(csv_path, nrows=0).columns)
     missing = [key for key in config["grid"] if key not in columns]
     if missing:
         print(f"Ignoring the cached sweep at '{csv_path}'. It lacks parameter columns: {missing}.")
+        return False
+    criterion = config.get("criterion")
+    if criterion is not None and f"{criterion}_mean" not in columns:
+        print(f"Ignoring the cached sweep at '{csv_path}'. It lacks the ranking metric '{criterion}'.")
         return False
     return True
 
@@ -876,6 +897,7 @@ def tune_parameters(
                     prediction, labels, postproc_mode, params_list,
                     n_threads=n_threads, spacing=config["spacing"], border_min_size=border_min_size,
                     valid_roi=valid_roi, labelled_only=labelled_only,
+                    ignore_zero=dataset_name in CREMI_IGNORE_ZERO_LABEL,
                 )
         except Exception as e:
             warnings.warn(f"Skipping validation sample {index} of '{dataset_name}': {e}")
@@ -931,9 +953,13 @@ IN_DOMAIN_CELLS = {
     "3d": [
         "plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid",
         "embedseg_mouse_skull", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear", "nucverse3d",
-        "platynereis_cells", "densecell", "synapsenet_compartments", "embedseg_platy_ish",
+        "densecell", "embedseg_platy_ish",
     ],
-    "dense": ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress"],
+    # The last two are segmented and scored like the neurites, see `common.DATASETS_DENSE`.
+    "dense": [
+        "cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress", "platynereis_cells",
+        "synapsenet_compartments",
+    ],
 }
 # The in-domain data of the EM mitochondria model: the held-out parts of its training data.
 IN_DOMAIN_EM_MITO = {

@@ -34,9 +34,9 @@ OUT_ROOT = os.environ.get(
     "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/decoder_training/param_analysis/tune_set",
 )
 # The datasets whose best mSA over the whole v6 grid stayed below 0.3 (see analyze_parameter_search.py).
-LOW_SCORING = (
-    "cartocell", "platynereis_cells", "plantseg_root", "celegans_atlas", "synapsenet_compartments", "nucverse3d",
-)
+# platynereis_cells and synapsenet_compartments scored low as well. They moved to the dense (multicut) pool, see
+# `common.DATASETS_DENSE`.
+LOW_SCORING = ("cartocell", "plantseg_root", "celegans_atlas", "nucverse3d")
 MAX_TILES = 10
 MIN_OBJECT_SIZE = 10  # Voxels; smaller label fragments are not counted as objects in the statistics.
 # The hvit_t cells defaults for volumes (micro_sam/_model_settings.py).

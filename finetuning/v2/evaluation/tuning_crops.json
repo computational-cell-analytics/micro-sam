@@ -1270,6 +1270,185 @@
      ]
     ]
    }
+  },
+  "platynereis_cells": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "All 6 tiles inside the bounding boxes of the labels of volumes 7 and 8 (common.PLATYNEREIS_CELLS_VAL_ROIS); the halo around them is unlabelled. Label zero and the neuropil label are not scored. Placed by hand (user, 2026-11-20), not by 'prepare'.",
+   "starts": {
+    "train_data_membrane_07.n5": [
+     [
+      15,
+      36,
+      50
+     ],
+     [
+      47,
+      36,
+      50
+     ],
+     [
+      79,
+      36,
+      50
+     ]
+    ],
+    "train_data_membrane_08.n5": [
+     [
+      15,
+      64,
+      64
+     ],
+     [
+      47,
+      64,
+      64
+     ],
+     [
+      79,
+      64,
+      64
+     ]
+    ]
+   }
+  },
+  "synapsenet_compartments": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "One tile per tuning tomogram: its whole tuning region, the last 20 % of the sections (22-27 sections). Label zero is not scored. Placed by hand (user, 2026-11-20), not by 'prepare'.",
+   "starts": {
+    "36859_J1_66K_TS_CA3_MF_18_rec_2Kb1dawbp_crop.h5": [
+     [
+      96,
+      0,
+      0
+     ]
+    ],
+    "36859_J2_66K_TS_R04_MF03_rec_2Kb1dawbp_crop.h5": [
+     [
+      93,
+      0,
+      0
+     ]
+    ],
+    "36859_J2_66K_TS_R04_MF06_rec_2Kb1dawbp_crop.h5": [
+     [
+      96,
+      0,
+      0
+     ]
+    ],
+    "36859_J1_66K_TS_CA3_PS_26_rec_2Kb1dawbp_crop.h5": [
+     [
+      105,
+      0,
+      0
+     ]
+    ],
+    "36859_J1_66K_TS_CA3_PS_42_rec_2Kb1dawbp_crop.h5": [
+     [
+      108,
+      0,
+      0
+     ]
+    ],
+    "36859_J1_66K_TS_CA3_PS_46_rec_2Kb1dawbp_crop.h5": [
+     [
+      92,
+      0,
+      0
+     ]
+    ],
+    "36859_J2_66K_TS_R04_PS13_rec_2Kb1dawbp_crop.h5": [
+     [
+      88,
+      0,
+      0
+     ]
+    ],
+    "36859_H2_SP_01_rec_2Kb1dawbp_crop.h5": [
+     [
+      64,
+      0,
+      0
+     ]
+    ]
+   }
+  },
+  "cartocell": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "The 9 tiles with at least 16 sections and 10 cells of the 6 test volumes that tune (common.CARTOCELL_TUNING_TEST_VOLUMES). The 2 volumes of the validation folder get no tile: they are of the train_M1 acquisition ('cyst ...', shallow stacks), which the test split does not hold. Ranked by SA50 (common.DATASETS_SA50). Placed by hand (user, 2026-11-21), not by 'prepare'.",
+   "starts": {
+    "10d.1B.23.2.tif": [
+     [
+      32,
+      0,
+      0
+     ]
+    ],
+    "10d.1B.41.2.tif": [
+     [
+      32,
+      0,
+      0
+     ],
+     [
+      64,
+      0,
+      0
+     ]
+    ],
+    "4d.3B.3_2.tif": [
+     [
+      32,
+      0,
+      0
+     ]
+    ],
+    "4d.5C.3_1.tif": [
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      32,
+      0,
+      0
+     ]
+    ],
+    "7d.1.B.10_3.tif": [
+     [
+      0,
+      0,
+      0
+     ],
+     [
+      32,
+      0,
+      0
+     ]
+    ],
+    "7d.4C.11_2.tif": [
+     [
+      32,
+      0,
+      0
+     ]
+    ],
+    "CYST 7d Filt 3well Pha,Bcat,DAPI 40x Z4 15.7.19 3a.tif": [],
+    "cyst 4d fil 3well Pha,bcat,dapi 02.08.19 40x Z5 12a.tif": []
+   }
   }
  }
 }

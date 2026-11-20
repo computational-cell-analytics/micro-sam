@@ -114,3 +114,79 @@ def test_tile_starts_adds_edge_tiles_only_for_half_a_tile_of_new_data():
     starts = parameter_search.tile_starts(region, (32, 512, 512), edge_aligned=True)
     # z: 8 slices rest (< 16), y: 466 px rest (>= 256), x: 136 px rest (< 256).
     assert starts == [(0, 0, 10), (0, 466, 10)]
+
+
+def test_compute_metrics_ignores_label_zero_in_the_cremi_score():
+    import numpy as np
+
+    labels = np.zeros((4, 8, 8), dtype="uint32")
+    labels[:, :4, :4], labels[:, :4, 4:] = 1, 2  # The lower half is not annotated.
+    seg = np.zeros_like(labels)
+    seg[:, :4] = 1  # Merges the two objects.
+    scored = parameter_search.compute_metrics(seg, labels, "dense", valid_roi=labels > 0)
+    ignored = parameter_search.compute_metrics(seg, labels, "dense", valid_roi=labels > 0, ignore_zero=True)
+    # The unannotated half matches trivially, which hides a part of the merge unless it is ignored.
+    assert ignored["vi_merge"] == pytest.approx(1.0)
+    assert scored["vi_merge"] == pytest.approx(0.5)
+    assert ignored["cremi"] > scored["cremi"]
+
+
+@pytest.mark.parametrize("dataset", ["platynereis_cells", "synapsenet_compartments"])
+def test_volume_filling_em_cells_are_tuned_and_scored_as_dense_datasets(dataset):
+    import common
+
+    assert dataset in common.DATASETS_DENSE
+    assert dataset in common.CREMI_IGNORE_ZERO_LABEL
+    assert dataset in parameter_search.IN_DOMAIN_CELLS["dense"]
+    assert dataset not in parameter_search.IN_DOMAIN_CELLS["3d"]
+    assert parameter_search.tuning_config(dataset, "ais")["metric_mode"] == "dense"
+    assert dataset in common.TUNING_CROPS
+
+
+def test_platynereis_cells_tuning_crops_stay_inside_the_labelled_boxes():
+    import common
+
+    crop_shape, starts = common.TUNING_CROPS["platynereis_cells"]
+    for volume, roi in common.PLATYNEREIS_CELLS_VAL_ROIS.items():
+        assert len(starts[volume]) == 3
+        # The crops start inside the labelled box, on its lateral corner (the loader clips them at its end).
+        for start, _ in starts[volume]:
+            assert all(sl.start <= s < sl.stop for s, sl in zip(start, roi))
+            assert tuple(start[1:]) == (roi[1].start, roi[2].start)
+
+
+def test_cartocell_is_ranked_by_sa50_on_the_test_like_volumes(tmp_path):
+    import common
+
+    assert "cartocell" in common.DATASETS_SA50
+    config = parameter_search.tuning_config("cartocell", "ais")
+    assert config["criterion"] == "sa50"
+    assert parameter_search.CRITERION_ASCENDING["sa50"] is False
+    assert parameter_search.tuning_config("gonuclear", "ais")["criterion"] == "msa"
+    assert parameter_search.tuning_config("cremi", "ais")["criterion"] == "cremi"
+    # Only the test volumes that moved into tuning hold crops; the validation folder is another acquisition.
+    _, starts = common.TUNING_CROPS["cartocell"]
+    with_crops = {volume for volume, crops in starts.items() if crops}
+    assert with_crops == set(common.CARTOCELL_TUNING_TEST_VOLUMES)
+    assert sum(len(crops) for crops in starts.values()) == 9
+    # A sweep that was ranked by mSA holds no SA50 column and is recomputed.
+    row = {key: values[0] for key, values in config["grid"].items()}
+    old, new = tmp_path / "old.csv", tmp_path / "new.csv"
+    pd.DataFrame([{**row, "msa_mean": 0.1, "msa_std": 0.0}]).to_csv(old, index=False)
+    pd.DataFrame([{**row, "msa_mean": 0.1, "sa50_mean": 0.3}]).to_csv(new, index=False)
+    assert not parameter_search.sweep_cache_is_current(old, config)
+    assert parameter_search.sweep_cache_is_current(new, config)
+
+
+def test_compute_metrics_reports_sa50():
+    import numpy as np
+
+    labels = np.zeros((1, 8, 8), dtype="uint32")
+    labels[:, :4], labels[:, 4:] = 1, 2
+    seg = labels.copy()
+    seg[:, 4:5] = 0  # The second object keeps three quarters of its pixels: an IoU of 0.75.
+    metrics = parameter_search.compute_metrics(seg, labels, "sparse")
+    assert metrics["sa50"] == pytest.approx(1.0)  # Both objects match at an IoU of 0.5 ...
+    assert metrics["msa"] < 1.0  # ... but the second one not at the higher thresholds.
+    seg[:, 4:7] = 0  # A quarter of its pixels: no match, so one hit, one miss and one false positive.
+    assert parameter_search.compute_metrics(seg, labels, "sparse")["sa50"] == pytest.approx(1 / 3)

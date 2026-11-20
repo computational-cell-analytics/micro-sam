@@ -171,6 +171,8 @@ Outputs: `<root>/param_analysis/` (`report.md`, `transfer.csv`, `sensitivity.csv
 
 ## Post-processing parameter search: 3D tuning set
 
+`TUNING_DATA.md` lists the current tuning data per setting and the test data with its ID / OOD panels.
+
 The v6 search tuned the 3D parameters on one 32x512x512 center crop per validation volume (15 datasets, 68 crops).
 `tune_set.py` builds a larger tuning set from the same held-out data (user decisions, 2026-11-19):
 
@@ -182,9 +184,33 @@ The v6 search tuned the 3D parameters on one 32x512x512 center crop per validati
   (`common.legacy_test_sample_ids`, used by `evaluate_decoder.py report`).
 - The search scores inside `valid_roi` like the test evaluation (before, predictions in the unannotated tissue of
   plantseg_root and platynereis_cells counted as false positives).
+- platynereis_cells moved to the dense pool (user, 2026-11-20): it is segmented with the multicut and ranked by the
+  CREMI score in tuning (`parameter_search.IN_DOMAIN_CELLS["dense"]`) and in the test evaluation
+  (`common.DATASETS_DENSE`). Its labels hold many small objects that are no cells (ids of a few hundred voxels on
+  one or two sections, specks split off the cells), which mSA counts like cells. Label zero and the neuropil label
+  are not scored (`common.CREMI_IGNORE_ZERO_LABEL`). The tuning volumes 7-8 are read inside the bounding box of
+  their labels (`common.PLATYNEREIS_CELLS_VAL_ROIS`; half of each volume is an unlabelled halo that shows cells)
+  and tune on the 6 tiles of these boxes (`tuning_crops.json`). The test crops already tile the labelled box of
+  volume 9, which holds no zero label. The sparse scores of the earlier tiles: `tune_set/superseded_20261120*/`.
+- synapsenet_compartments moved to the dense pool the same way (user, 2026-11-20): multicut and CREMI score in
+  tuning and test, label zero (unannotated parts of the tomograms, 2-46 % of a tile) not scored. More than half of
+  its objects are fragments below 1000 voxels next to compartments of 1e5-1e6 voxels. It tunes on one tile per
+  tomogram, the whole tuning region (`tuning_crops.json`).
+- cartocell is ranked and compared by SA50 instead of mSA (user, 2026-11-21; `common.DATASETS_SA50`, criterion
+  `sa50` in `parameter_search.py`, column `SA50` in `evaluate_decoder.py report`, which lists it apart from the mSA
+  means). The cells are thin (about 12 x 17 x 17 voxels), so shrinking the ground truth by one voxel already scores
+  mSA 0.01. It tunes on the 9 tiles (>= 16 sections, >= 10 cells) of the 6 moved test volumes
+  (`tuning_crops.json`); the 2 volumes of the validation folder are of the `train_M1` acquisition, which the test
+  split does not hold, and get no tile.
 - The tiles of the low-scoring datasets (v6 best mSA < 0.3) are scored with Hiera-U and hvit_t_cells on a compact
   grid (`score` / `submit`, `report`) before the tiles are chosen.
 
 Subcommands: `candidates` (tiles + label statistics, CPU), `score` / `submit` (GPU), `report`, `write [--picks]`.
 Outputs: `<root>/param_analysis/tune_set/` (`candidates.csv`, `scores/<model>/`, `predictions/<model>/` as float16,
 `report.md`).
+
+`select_tune_tiles.py` shows the scored tiles of the low-scoring datasets in napari for a manual choice: tiles with
+at least 16 slices and 10 objects (no object filter for synapsenet_compartments), without the center crops, per
+dataset sorted by the best Hiera-U score. "Include" / "Exclude" (keys I / E, B takes the last decision back) are
+stored in `<root>/param_analysis/tune_set/tile_selection.csv`; a restart continues with the first undecided tile.
+`--list` prints the tiles and decisions without napari.

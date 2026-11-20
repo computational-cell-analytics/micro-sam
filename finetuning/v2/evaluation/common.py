@@ -532,8 +532,24 @@ DATASETS_EM_MITO = (
 DATASETS_3D = DATASETS_3D_LM + DATASETS_3D_EM
 
 # The neurite datasets need the dense (multicut) pipeline and are ranked by the CREMI score. The EM cell datasets
-# segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking.
-DATASETS_DENSE = DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_OOD
+# segment separable objects, so they stay on the sparse (flow) pipeline and mSA ranking. The exceptions are
+# platynereis_cells and synapsenet_compartments (user, 2026-11-20): their objects fill the volume like neurites,
+# and their labels hold many small objects next to the large ones, which mSA counts like the large ones and the
+# voxel-weighted CREMI score hardly sees.
+DATASETS_DENSE = (
+    DATASETS_3D_EM_NEURITE_ID + DATASETS_3D_EM_NEURITE_SUPPLEMENTARY + DATASETS_3D_EM_NEURITE_OOD
+    + ["platynereis_cells", "synapsenet_compartments"]
+)
+# Sparse datasets that are ranked and reported by SA50, the segmentation accuracy at an IoU of 0.5, instead of mSA
+# (user, 2026-11-21). The cartocell cells are thin (about 12 x 17 x 17 voxels): shrinking the ground truth by one
+# voxel already scores mSA 0.01, so the higher IoU thresholds of mSA measure the voxel grid, not the segmentation.
+# The result tables hold both columns; this set selects the one that is tuned for and compared.
+DATASETS_SA50 = {"cartocell"}
+# Dense datasets whose label zero is not scored by the CREMI score: zero marks voxels without annotation (for
+# platynereis_cells the neuropil and the cells that were left out, for synapsenet_compartments the unlabelled
+# parts of the tomogram, see load_volume), not a segment to match.
+# The other partially annotated dense datasets (e.g. synapseweb) keep the scoring of the reported results.
+CREMI_IGNORE_ZERO_LABEL = {"platynereis_cells", "synapsenet_compartments"}
 
 # Everything outside the main in-domain and OOD panels: supplementary, held-out platform and reserve sets.
 # The submission script skips them unless asked for them.
@@ -626,7 +642,8 @@ EM_ROIS = {
     "liconn": {"test": (slice(576, 640), *LICONN_ROI[1:]), "val": (slice(512, 576), *LICONN_ROI[1:])},
     "xpress": {"test": (slice(308, 328), *XPRESS_CORE[1:]), "val": (slice(288, 308), *XPRESS_CORE[1:])},
     "cremi": {"test": np.s_[:, :, :], "val": np.s_[100:, :, :]},
-    # Volume 9 (test) and volumes 7-8 (val) are read inside the bounding boxes of their labelled cells.
+    # Volume 9 (test) is read inside the bounding box of its labelled cells. The tuning volumes 7-8 have their
+    # own boxes, see PLATYNEREIS_CELLS_VAL_ROIS.
     "platynereis_cells": {"test": np.s_[10:110, 128:1152, 128:1152], "val": np.s_[:, :, :]},
     "densecell": {"test": np.s_[:, :, :], "val": np.s_[35:, :, :]},
     # The CEM-Mito-Benchmark volumes are annotated throughout (salivary_gland from z 76). The tuning slab is the
@@ -685,6 +702,13 @@ def asem_crop_name(volume_id):
 
 # The test and tuning regions of datasets with several volumes, per volume file name. The tuning slab is the start of
 # the annotated stack of each volume, about a fifth of it, and the rest is scored.
+# The bounding boxes of the non-zero labels of the platynereis_cells tuning volumes (at scale s1). The rest of a
+# volume is an unlabelled halo: it shows cells, but its labels are zero.
+PLATYNEREIS_CELLS_VAL_ROIS = {
+    "train_data_membrane_07.n5": np.s_[15:115, 36:564, 50:567],
+    "train_data_membrane_08.n5": np.s_[15:115, 64:564, 64:581],
+}
+
 EM_VOLUME_ROIS = {
     "asem_mito": {
         asem_crop_name("61"): {"test": np.s_[140:, :, :], "val": np.s_[:140, :, :]},
@@ -738,6 +762,8 @@ def em_roi(dataset_name: str, label_path: str, split: str):
         return SYNAPSEWEB_CORE_ROIS[region]
     if dataset_name in EM_VOLUME_ROIS:
         return EM_VOLUME_ROIS[dataset_name][os.path.basename(label_path)][split]
+    if dataset_name == "platynereis_cells" and split == "val":
+        return PLATYNEREIS_CELLS_VAL_ROIS[os.path.basename(label_path)]
     if dataset_name == "platynereis_nuclei":
         # The annotated box of the volume (its valid ROI), as in training; the halo around it is unlabeled.
         sample_id = int(os.path.basename(label_path).replace("train_data_nuclei_", "").replace(".h5", ""))
@@ -2537,8 +2563,8 @@ def load_volume(
     """Load a 3D volume, apply dataset-specific preprocessing, and center-crop.
 
     valid_roi is a boolean mask that is True where the data is annotated. It is None except for the datasets
-    that are annotated only in part (platynereis_cells, synapseweb, plantseg_root, plantseg_ovules, kasthuri,
-    mouse_embryo_membrane) and for donglai_wei_mito, whose blank raw strips are excluded.
+    that are annotated only in part (platynereis_cells, synapsenet_compartments, synapseweb, plantseg_root,
+    plantseg_ovules, kasthuri, mouse_embryo_membrane) and for donglai_wei_mito, whose blank raw strips are excluded.
 
     'split' selects the test or the tuning region of the EM volumes, see EM_ROIS. 'z_range' restricts the
     volume to a z-slab before the center crop, which is how a dataset without splits holds tuning data out
@@ -2566,12 +2592,19 @@ def load_volume(
 
     valid_roi = None
     if dataset_name == "platynereis_cells":
-        # The neuropil is not resolved into cells and carries the ignore label; it is excluded from scoring.
-        ignore = labels == datasets.electron_microscopy.platynereis.CELL_IGNORE_LABEL
+        # The neuropil is not resolved into cells and carries the ignore label. Zero is unlabelled as well: the
+        # cells are labelled without a background, so zero marks cells that were left out (it occurs only in the
+        # tuning volumes; the test region has no zero label). Both are excluded from scoring: the segmentation is
+        # cleared there, and the CREMI score ignores label zero (CREMI_IGNORE_ZERO_LABEL).
+        ignore = (labels == datasets.electron_microscopy.platynereis.CELL_IGNORE_LABEL) | (labels == 0)
         valid_roi = ~ignore
         labels[ignore] = 0
     elif dataset_name == "synapseweb":
         # Annotation covers only part of the core, so the unlabelled voxels are excluded from scoring.
+        valid_roi = labels != 0
+    elif dataset_name == "synapsenet_compartments":
+        # The compartments are labelled without a background: zero marks the parts of the tomogram that were not
+        # annotated. They are excluded from scoring, also by the CREMI score (CREMI_IGNORE_ZERO_LABEL).
         valid_roi = labels != 0
     elif dataset_name == "plantseg_root":
         # Label 1 is the background, label 0 the unannotated deeper tissue.
@@ -3236,9 +3269,10 @@ def run_dataset_evaluation(gt_paths, prediction_paths, dataset_name: str, save_p
     import pandas as pd
     from elf.evaluation import cremi_score
 
+    ignore_gt = [0] if dataset_name in CREMI_IGNORE_ZERO_LABEL else None
     rows = []
     for gt, seg in zip(gt_paths, prediction_paths):
-        vi_split, vi_merge, adapted_rand, cremi = cremi_score(seg, gt)
+        vi_split, vi_merge, adapted_rand, cremi = cremi_score(seg, gt, ignore_gt=ignore_gt)
         rows.append({
             "cremi": float(cremi),
             "vi_split": float(vi_split),

@@ -328,7 +328,9 @@ def run(args):
 
 
 def _metric_column(dataset, evaluation_common):
-    return "cremi" if dataset in evaluation_common.DATASETS_DENSE else "mSA"
+    if dataset in evaluation_common.DATASETS_DENSE:
+        return "cremi"
+    return "SA50" if dataset in evaluation_common.DATASETS_SA50 else "mSA"
 
 
 def _reference_result(dataset):
@@ -392,7 +394,7 @@ def report(args):
         column = _metric_column(dataset, evaluation_common)
         row = {
             "dataset": dataset, "figure": figure, "panel": panel, "domain": domain,
-            "metric": "cremi" if column == "cremi" else "msa", "new": None, "reference": None, "n_samples": None,
+            "metric": column.lower(), "new": None, "reference": None, "n_samples": None,
         }
         new_path = _new_result(args.experiment_folder, dataset, tag, args.checkpoint_id)
         if new_path is not None:
@@ -417,9 +419,11 @@ def report(args):
     pd.set_option("display.width", 200)
     print(table.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
     both = table.dropna(subset=["new", "reference"])
-    means = both.groupby(["figure", "panel", "domain"])[["new", "reference", "delta"]].mean()
-    means["n_datasets"] = both.groupby(["figure", "panel", "domain"]).size()
-    print("\nMeans over the datasets with both results (msa: higher is better, cremi: lower is better):")
+    # Per metric, so that the datasets scored by SA50 (common.DATASETS_SA50) do not enter a mean of mSA values.
+    groups = ["figure", "panel", "domain", "metric"]
+    means = both.groupby(groups)[["new", "reference", "delta"]].mean()
+    means["n_datasets"] = both.groupby(groups).size()
+    print("\nMeans over the datasets with both results (msa, sa50: higher is better, cremi: lower is better):")
     print(means.to_string(float_format=lambda value: f"{value:.4f}"))
     missing = table[table["new"].isna()]["dataset"].tolist()
     if missing:
