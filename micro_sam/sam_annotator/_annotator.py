@@ -20,7 +20,8 @@ from ..__version__ import __version__ as micro_sam_version
 
 # Placeholder shapes used to seed the annotator layers before a real image is loaded.
 # Only the dimensionality matters. The tool resets the values to the image shape on load.
-PLACEHOLDER_SHAPE = {2: (256, 256), 3: (16, 256, 256)}
+# 4 is a 3d timeseries, (T, Z, Y, X), which only the tracking annotator supports.
+PLACEHOLDER_SHAPE = {2: (256, 256), 3: (16, 256, 256), 4: (4, 16, 256, 256)}
 
 
 class _AnnotatorBase(QtWidgets.QScrollArea):

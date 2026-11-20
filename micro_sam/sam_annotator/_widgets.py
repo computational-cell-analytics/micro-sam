@@ -2152,14 +2152,15 @@ class EmbeddingWidget(_WidgetBase):
             return None
 
         ndim = self._ndim_override() or len(shape)
-        n_slices = shape[0] if ndim == 3 else 1
+        # The encoder processes a 3d timeseries, (T, Z, Y, X), plane by plane.
+        n_slices = {3: shape[0], 4: shape[0] * shape[1]}.get(ndim, 1)
         if self.tiling != "yes":
             return n_slices
 
         tile_shape, _ = _process_tiling_inputs(self.tile_x, self.tile_y, self.halo_x, self.halo_y)
         if tile_shape is None:
             return n_slices
-        in_plane = shape[1:3] if ndim == 3 else shape[:2]
+        in_plane = shape[-2:] if ndim >= 3 else shape[:2]
         return Blocking([0, 0], list(in_plane), list(tile_shape)).number_of_blocks * n_slices
 
     def _recommended_batch_size(self):
@@ -2451,6 +2452,12 @@ class EmbeddingWidget(_WidgetBase):
         # Get the image.
         image = self.image_selection.get_value()
 
+        if len(self._selected_image_shape()) == 4:
+            if not self.is_timeseries:
+                return _generate_message("error", "Only the tracking annotator supports a 3d timeseries.")
+            if self.tiling == "yes":
+                return _generate_message("error", "A 3d timeseries does not support tiling. Turn the tiling off.")
+
         # Update the image embeddings:
         state = AnnotatorState()
         if self._validate_existing_embeddings(state):
@@ -2503,7 +2510,7 @@ class EmbeddingWidget(_WidgetBase):
         # ephemeral zarr the eager setup creates for SAM2 volumes / tiled images (removed on reset).
         # Plain in-memory 2d has no disk location, so it needs a save path to persist.
         is_sam2 = self.model_type.startswith("hvit")
-        embeddings_on_disk = save_path is not None or (is_sam2 and (ndim == 3 or tile_shape is not None))
+        embeddings_on_disk = save_path is not None or (is_sam2 and (ndim >= 3 or tile_shape is not None))
         precompute_autoseg_state = self.cache_state and embeddings_on_disk
         if self.cache_state and not embeddings_on_disk:
             show_info("Set an embeddings save path to cache the automatic segmentation state.")
@@ -3107,6 +3114,8 @@ class UnifiedSegmentWidget(_WidgetBase):
     def _run_frame_segmentation(self):
         """Execute per-frame segmentation for the current track (tracking mode)."""
         state = AnnotatorState()
+        if len(state.image_shape) == 4:
+            return self._run_timepoint_segmentation()
         shape = state.image_shape[1:]
         t = vutil.current_slice(self._viewer, self._viewer.layers["current_object"])
 
@@ -3261,6 +3270,133 @@ class UnifiedSegmentWidget(_WidgetBase):
         # worker.start()
         # return worker
 
+    def _push_prompts_3d(self, state, track_id, timepoint=None):
+        """Push the prompts of a track in a 3d timeseries, (T, Z, Y, X), to the tracker.
+
+        A prompt lies on one plane (t, z). A lone negative point that is the only prompt of the track
+        on a timepoint is a stop annotation. On a timepoint with other prompts it is a correction.
+
+        Args:
+            state: The annotator state.
+            track_id: The track.
+            timepoint: The timepoint whose prompts the function pushes. None pushes all prompts.
+
+        Returns:
+            The prompted timepoints, the stop timepoints and whether a positive prompt exists.
+        """
+        point_layer = self._viewer.layers["point_prompts"]
+        shape_layer = self._viewer.layers["prompts"]
+        segmenter = state.interactive_segmenter
+        segmenter.reset_predictor()
+
+        per_timepoint = {}
+        for t, z in vutil.prompted_planes(point_layer, shape_layer):
+            if timepoint is not None and t != timepoint:
+                continue
+            # Division markers are lineage events, not prompts.
+            prompts = vutil.collect_frame_prompts(
+                point_layer, shape_layer, state.image_shape[2:], i=(t, z), track_id=track_id,
+                exclude_states=("division",), with_stop_annotation=False,
+            )
+            if len(prompts.points) or prompts.boxes:
+                per_timepoint.setdefault(t, []).append((z, prompts))
+
+        prompted, stops, have_positive_cue = [], [], False
+        for t, planes in sorted(per_timepoint.items()):
+            n_points = sum(len(prompts.points) for _, prompts in planes)
+            is_positive = any(prompts.boxes or np.any(prompts.labels == 1) for _, prompts in planes)
+            if not is_positive and n_points == 1:
+                stops.append(t)
+                continue
+            for z, prompts in planes:
+                if prompts.boxes:
+                    segmenter.add_box_prompts(t, z, prompts.boxes)
+                if len(prompts.points):
+                    segmenter.add_point_prompts(t, z, prompts.points, prompts.labels)
+            prompted.append(t)
+            have_positive_cue = have_positive_cue or is_positive
+        return prompted, stops, have_positive_cue
+
+    def _run_timepoint_segmentation(self):
+        """Segment the current track in the volume of the current timepoint of a 3d timeseries."""
+        state = AnnotatorState()
+        layer = self._viewer.layers["current_object"]
+        t = vutil.current_slice(self._viewer, layer)
+        track_id = state.current_track_id
+
+        prompted, _, have_positive_cue = self._push_prompts_3d(state, track_id, timepoint=t)
+        if not prompted or not have_positive_cue:
+            print("The track has no valid prompts on this timepoint. The annotator skips the segmentation.")
+            return
+
+        mask = state.interactive_segmenter.segment_timepoint(t)
+        layer.data[t][layer.data[t] == track_id] = 0
+        layer.data[t][mask] = track_id
+        layer.refresh()
+
+    def _run_tracking_3d(self):
+        """Track the current track through a 3d timeseries, (T, Z, Y, X).
+
+        The rules are those of `_run_tracking`:
+        - The track goes forward in time from its first prompted timepoint.
+        - A stop annotation or a division bounds the track.
+        - A division seeds two daughter tracks.
+        """
+        state = AnnotatorState()
+        track_id = state.current_track_id
+        point_layer = self._viewer.layers["point_prompts"]
+        layer = self._viewer.layers["current_object"]
+
+        # A division of a segmented track only erases the track after the division timepoint.
+        division_frame = _division_frame_for_track(point_layer, track_id)
+        if division_frame is not None and np.any(layer.data[:division_frame + 1] == track_id):
+            after = layer.data[division_frame + 1:]
+            after[after == track_id] = 0
+            _update_lineage(self._viewer, mother=track_id)
+            layer.refresh()
+            return
+
+        prompted, stops, have_positive_cue = self._push_prompts_3d(state, track_id)
+        if not prompted:
+            print("The track has no prompts. The annotator skips the tracking.")
+            return
+        if not have_positive_cue:
+            show_info(
+                "Negative prompts alone cannot track an object. "
+                "Add a positive point, positive scribble or box prompt."
+            )
+            return
+
+        annotated = sorted(set(prompted) | set(stops))
+        t_lo = min(prompted)
+        t_hi = max(prompted) if annotated[-1] in stops else state.image_shape[0] - 1
+        if division_frame is not None:
+            t_hi = min(t_hi, division_frame)
+        if t_hi < t_lo:
+            return
+
+        pbar, pbar_signals = _create_pbar_for_threadworker()
+
+        def emit_progress(update):
+            pbar_signals.pbar_update.emit(update)
+            QtWidgets.QApplication.processEvents()
+
+        segmenter = state.interactive_segmenter
+        pbar_signals.pbar_description.emit(f"Track object {track_id}")
+        pbar_signals.pbar_total.emit(segmenter.get_progress_total((t_lo, t_hi)))
+        track = segmenter.predict(t_range=(t_lo, t_hi), update_progress=emit_progress)
+        pbar_signals.pbar_stop.emit()
+
+        # A daughter starts on the timepoint after the division of its mother.
+        mother_division = _mother_division_frame(point_layer, state.lineage, track_id)
+        layer.data[layer.data == track_id] = 0
+        for t, mask in track.items():
+            if mother_division is None or t > mother_division:
+                layer.data[t][mask] = track_id
+        if division_frame is not None:
+            _update_lineage(self._viewer, mother=track_id)
+        layer.refresh()
+
     def _run_tracking(self):
         """Execute interactive tracking by propagating the current track's prompts across frames.
 
@@ -3272,6 +3408,8 @@ class UnifiedSegmentWidget(_WidgetBase):
         trackastra, which predicts lineages from per-frame segmentations; it is not SAM2.
         """
         state = AnnotatorState()
+        if len(state.image_shape) == 4:
+            return self._run_tracking_3d()
         pbar, pbar_signals = _create_pbar_for_threadworker()
 
         def emit_progress(update):
@@ -4816,6 +4954,8 @@ class AutoTrackWidget(AutoSegmentWidget):
 
     def __call__(self):
         state = AnnotatorState()
+        if state.image_shape is not None and len(state.image_shape) == 4:
+            return _generate_message("error", "Automatic tracking is not available for a 3d timeseries.")
         if not self.with_decoder or state.decoder is None:
             return _generate_message("error", NO_DECODER_MESSAGE)
         # Tracking prompts the video predictor per frame, so APG needs an accelerator here for a

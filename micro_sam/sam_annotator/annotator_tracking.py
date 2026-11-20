@@ -388,19 +388,23 @@ class AnnotatorTracking(_AnnotatorBase):
             interactive.clear(viewer)
 
     def __init__(
-        self, viewer: "napari.viewer.Viewer", reset_state: bool = True
+        self, viewer: "napari.viewer.Viewer", reset_state: bool = True, ndim: int = 3
     ) -> None:
+        # ndim is 3 for a 2d timeseries, (T, Y, X), and 4 for a 3d timeseries, (T, Z, Y, X).
         # Initialize the state for tracking.
         self._init_track_state()
         # At startup the decoder is not loaded yet. Also treat the default model as decoder-capable
         # when it has a registered decoder, so the default mode is correct before 'Compute Embeddings'.
         from ..v2.util import has_registered_decoder
         self._with_decoder = AnnotatorState().decoder is not None or has_registered_decoder(DEFAULT_MODEL)
-        super().__init__(viewer=viewer, ndim=3)
+        super().__init__(viewer=viewer, ndim=ndim)
         # Go to t=0.
-        self._viewer.dims.current_step = (0, 0, 0) + tuple(
-            sh // 2 for sh in self._shape[1:]
-        )
+        if ndim == 4:
+            self._viewer.dims.current_step = (0,) + tuple(sh // 2 for sh in self._shape[1:])
+        else:
+            self._viewer.dims.current_step = (0, 0, 0) + tuple(
+                sh // 2 for sh in self._shape[1:]
+            )
 
         # Set the expected annotator class to the state.
         state = AnnotatorState()
@@ -418,6 +422,15 @@ class AnnotatorTracking(_AnnotatorBase):
         state.committed_lineages = []
 
     def _update_image(self):
+        # The image can change between a 2d and a 3d timeseries.
+        state = AnnotatorState()
+        if (
+            not state.skip_recomputing_embeddings and state.image_shape is not None
+            and len(state.image_shape) != self._ndim
+        ):
+            # The new prompt layers read the lineage.
+            self._init_track_state()
+            self._rebuild_for_ndim(len(state.image_shape))
         super()._update_image()
         self._init_track_state()
 
@@ -435,11 +448,12 @@ def annotator_tracking(
     checkpoint_path: Optional[str] = None,
     decoder_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
+    volumetric: Optional[bool] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the tracking annotation tool fora given timeseries.
 
     Args:
-        image: The image data.
+        image: The image data: a 2d timeseries, (T, Y, X), or a 3d timeseries, (T, Z, Y, X).
         embedding_path: Filepath for saving the precomputed embeddings.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
@@ -460,22 +474,37 @@ def annotator_tracking(
         decoder_path: Path to a custom decoder checkpoint from which to load the 'micro-sam` decoder.
         device: The computational device to use for the SAM model.
             By default, automatically chooses the best available device.
+        volumetric: Whether the image is a 3d timeseries, (T, Z, Y, X). By default, a 4d image is a
+            3d timeseries unless its last axis is a channel axis of size 2 to 4. Pass False for a 2d
+            timeseries with a channel axis in another position. Tiling and the automatic tracking
+            are not available for a 3d timeseries.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
     vutil._validate_sam2_model_type(model_type, "tracking")
 
-    # Prepare the image in the same way as the annotator. A timeseries is read as a volume (T, H, W).
-    image, _, rgb = prepare_annotation_image(image, ndim=3)
+    if volumetric is None:
+        volumetric = image.ndim == 4 and image.shape[-1] not in (2, 3, 4)
+    if volumetric and image.ndim != 4:
+        raise ValueError(
+            f"The image has the shape {image.shape}. A 3d timeseries must have the shape (T, Z, Y, X)."
+        )
 
     # Initialize the predictor state.
     state = AnnotatorState()
-    state.image_shape = image.shape[:3]
+    if volumetric:
+        ndim, rgb = 4, False
+        state.image_shape = image.shape
+    else:
+        # Prepare the image in the same way as the annotator. A timeseries is read as a volume (T, H, W).
+        ndim = 3
+        image, _, rgb = prepare_annotation_image(image, ndim=3)
+        state.image_shape = image.shape[:3]
 
-    # The API / CLI computes embeddings before creating the widget, so apply the same size
-    # heuristic here. Reuse these resolved settings when syncing the widget below.
-    tile_shape, halo = resolve_default_tiling(state.image_shape, tile_shape, halo, embedding_path)
+        # The API / CLI computes embeddings before creating the widget, so apply the same size
+        # heuristic here. Reuse these resolved settings when syncing the widget below.
+        tile_shape, halo = resolve_default_tiling(state.image_shape, tile_shape, halo, embedding_path)
 
     state.initialize_predictor(
         image,
@@ -484,7 +513,7 @@ def annotator_tracking(
         halo=halo,
         tile_shape=tile_shape,
         prefer_decoder=True,
-        ndim=3,
+        ndim=ndim,
         checkpoint_path=checkpoint_path,
         decoder_path=decoder_path,
         device=device,
@@ -496,7 +525,7 @@ def annotator_tracking(
         viewer = napari.Viewer()
 
     viewer.add_image(image, name="image", rgb=rgb)
-    annotator = AnnotatorTracking(viewer, reset_state=False)
+    annotator = AnnotatorTracking(viewer, reset_state=False, ndim=ndim)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
     annotator._update_image()

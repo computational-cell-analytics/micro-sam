@@ -1022,8 +1022,10 @@ def get_block_shape(shape: Tuple[int]) -> Tuple[int]:
         block_shape = tuple(min(bs, sh) for bs, sh in zip((1024, 1024), shape))
     elif ndim == 3:
         block_shape = tuple(min(bs, sh) for bs, sh in zip((32, 256, 256), shape))
+    elif ndim == 4:  # A 3d timeseries, (T, Z, Y, X).
+        block_shape = tuple(min(bs, sh) for bs, sh in zip((1, 32, 256, 256), shape))
     else:
-        raise ValueError(f"Only 2 or 3 dimensional shapes are supported, got {ndim}D.")
+        raise ValueError(f"Only 2, 3 or 4 dimensional shapes are supported, got {ndim}D.")
 
     return block_shape
 
