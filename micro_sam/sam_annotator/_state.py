@@ -22,6 +22,10 @@ from micro_sam.util import _get_sam_model
 from micro_sam.precompute_state import cache_autoseg_state
 
 
+# The tracking state describes the annotations in the layers. It does not depend on the embeddings.
+_ANNOTATION_ATTRIBUTES = ("current_track_id", "lineage", "committed_lineages", "auto_lineages")
+
+
 class Singleton(type):
     _instances = {}
 
@@ -47,7 +51,6 @@ class AnnotatorState(metaclass=Singleton):
     # tiled images), so embeddings stream from disk instead of filling RAM. Removed on reset / exit.
     embedding_tmpdir: Optional[str] = None
     data_signature: Optional[str] = None
-    skip_recomputing_embeddings: Optional[bool] = None
     # The un-resolved device request, forwarded to every batched backend so inference stays on the
     # selected device. None means 'auto', i.e. fan out over all visible GPUs.
     inference_devices: Optional[Union[str, List[str]]] = None
@@ -363,8 +366,15 @@ class AnnotatorState(metaclass=Singleton):
             shutil.rmtree(self.embedding_tmpdir, ignore_errors=True)
             self.embedding_tmpdir = None
 
-    def reset_state(self):
-        """Reset state, clear all attributes."""
+    def reset_state(self, keep_annotations: bool = False):
+        """Reset state, clear all attributes.
+
+        Args:
+            keep_annotations: Whether to keep the tracking state (track ids and lineages). The embedding
+                widget keeps it when it recomputes the embeddings, so that the annotator can keep the
+                annotations of the same image.
+        """
+        kept = {name: getattr(self, name) for name in _ANNOTATION_ATTRIBUTES} if keep_annotations else {}
         self._cleanup_embedding_tmpdir()
         self.image_embeddings = None
         self.predictor = None
@@ -389,3 +399,5 @@ class AnnotatorState(metaclass=Singleton):
         self.batch_training_data = None
         self.batch_index = None
         # Note: we don't clear the widgets here, because they are fixed for a viewer session.
+        for name, value in kept.items():
+            setattr(self, name, value)

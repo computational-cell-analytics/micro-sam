@@ -416,6 +416,7 @@ class AnnotatorTracking(_AnnotatorBase):
         state.current_track_id = 1
         state.lineage = {1: []}
         state.committed_lineages = []
+        state.auto_lineages = None
 
     def _update_image(self):
         super()._update_image()
