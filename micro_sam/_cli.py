@@ -165,10 +165,14 @@ def annotator_segmentation(
 
 @annotator_group.command("tracking")
 @_interactive_options
+@click.option(
+    "--volumetric/--no-volumetric", default=None,
+    help="Whether the input is a 3d timeseries (T, Z, Y, X). By default the tool derives this from its shape.",
+)
 def annotator_tracking(
-    input_, key, embedding_path, model_type, checkpoint_path, decoder_path, device, tile_shape, halo,
+    input_, key, embedding_path, model_type, checkpoint_path, decoder_path, device, tile_shape, halo, volumetric,
 ):
-    """Interactively track cells in a timeseries."""
+    """Interactively track cells in a 2d or 3d timeseries."""
     from .util import load_image_data
     from .sam_annotator.annotator_tracking import annotator_tracking as run_annotator_tracking
     from .v2.util import DEFAULT_MODEL
@@ -183,6 +187,7 @@ def annotator_tracking(
         checkpoint_path=checkpoint_path,
         decoder_path=decoder_path,
         device=device,
+        volumetric=volumetric,
     )
 
 

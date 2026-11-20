@@ -123,7 +123,9 @@ class AnnotatorState(metaclass=Singleton):
         pbar_update=None,
         use_cli=False,
     ):
-        assert ndim in (2, 3)
+        # 4 is a 3d timeseries, (T, Z, Y, X). The encoder embeds its planes like the slices of one volume.
+        assert ndim in (2, 3, 4)
+        embedding_ndim = min(ndim, 3)
 
         # GUI path inputs are optional. Treat empty and whitespace-only strings like ``None`` so a
         # cleared custom-weights field cannot override a registered model with an invalid path.
@@ -137,10 +139,16 @@ class AnnotatorState(metaclass=Singleton):
         from micro_sam.models.vfm import is_vfm_model
         self.is_sam2 = model_type.startswith("hvit")
         self.is_vfm = is_vfm_model(model_type)
+        if ndim == 4 and not self.is_sam2:
+            raise ValueError(f"A 3d timeseries needs a SAM2 model, but the model is '{model_type}'.")
+        if ndim == 4 and tile_shape is not None:
+            raise ValueError("A 3d timeseries does not support tiling. Do not pass a tile shape.")
 
         # Initialize the model if necessary.
         if predictor is None:
-            self.predictor, _ = _get_sam_model(model_type, ndim, device, checkpoint_path, decoder_path, use_cli)
+            self.predictor, _ = _get_sam_model(
+                model_type, embedding_ndim, device, checkpoint_path, decoder_path, use_cli
+            )
 
         else:
             self.predictor = predictor
@@ -202,7 +210,7 @@ class AnnotatorState(metaclass=Singleton):
             # cost about 200 MB per slice and run out of memory on large volumes. The disk cache lets
             # the consumers stream slices or tiles one at a time. It is removed on 'reset_state' and at
             # process exit. Small non-tiled 2d stays in memory (a single image is cheap).
-            needs_disk_cache = self.is_sam2 and (ndim == 3 or tile_shape is not None)
+            needs_disk_cache = self.is_sam2 and (ndim >= 3 or tile_shape is not None)
             if needs_disk_cache and not isinstance(save_path, str):
                 self._cleanup_embedding_tmpdir()
                 save_path = util.make_temp_embedding_path()
@@ -220,11 +228,15 @@ class AnnotatorState(metaclass=Singleton):
                 embedding_tile_shape = (image_data.shape[0], *tile_shape)
                 embedding_halo = None if halo is None else (0, *halo)
 
+            embedding_input = image_data
+            if ndim == 4:
+                embedding_input = np.asarray(image_data).reshape(-1, *image_data.shape[2:])
+
             self.image_embeddings = _comp_embed_fn(
                 predictor=self.predictor,
-                input_=image_data,
+                input_=embedding_input,
                 save_path=save_path,
-                ndim=ndim,
+                ndim=embedding_ndim,
                 tile_shape=embedding_tile_shape,
                 halo=embedding_halo,
                 batch_size=batch_size,
@@ -239,7 +251,14 @@ class AnnotatorState(metaclass=Singleton):
         # Let's prepare the interactive segmentation class. When the embeddings are tiled (their
         # top-level 'input_size' is None, per-tile sizes live in the tile attrs) we use the tiled
         # variant, which routes prompts to the matching tile-column and stitches the results.
-        if self.is_sam2 and ndim == 3:
+        if ndim == 4:
+            from micro_sam.v2.prompt_based_tracking import PromptableTracking3D
+            self.interactive_segmenter = PromptableTracking3D(
+                predictor=self.predictor, timeseries=image_data,
+                embeddings=self.image_embeddings, device=device,
+            )
+
+        elif self.is_sam2 and ndim == 3:
             is_tiled = self.image_embeddings.get("input_size") is None
             if is_tiled:
                 from micro_sam.v2.prompt_based_segmentation import TiledPromptableSegmentation3D
@@ -267,7 +286,7 @@ class AnnotatorState(metaclass=Singleton):
         # Precompute the automatic-segmentation state (if specified). This is the AIS state, the
         # decoder predictions every automatic segmentation mode in the annotator runs off, so there
         # is nothing to precompute for a model without a decoder.
-        if precompute_autoseg_state and self.decoder is not None:
+        if precompute_autoseg_state and self.decoder is not None and ndim < 4:
             if save_path is None:
                 raise RuntimeError("Require a save path to precompute the automatic segmentation state")
 

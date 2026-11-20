@@ -796,7 +796,7 @@ def get_napari_track_data(
     def compute_props(t):
         props = regionprops(segmentation[t])
         # Create the track data representation for napari, which expects:
-        # track_id, timepoint, y, x
+        # track_id, timepoint, (z,) y, x
         track_data = np.array([[prop.label, t] + list(prop.centroid) for prop in props])
         return track_data
 
@@ -804,7 +804,7 @@ def get_napari_track_data(
         track_data = list(tp.map(compute_props, range(segmentation.shape[0])))
     track_data = [data for data in track_data if data.size > 0]
     # The segmentation can be empty, e.g. if 'min_time_extent' filtered out all tracks.
-    track_data = np.concatenate(track_data) if track_data else np.zeros((0, 4), dtype="float64")
+    track_data = np.concatenate(track_data) if track_data else np.zeros((0, segmentation.ndim + 1), dtype="float64")
 
     # The graph representation of napari uses the children as keys and the parents as values,
     # whereas our representation uses parents as keys and children as values.
@@ -830,12 +830,12 @@ def export_tracking_result_to_ctc(
     - 'SEG/man_seg<frame>.tif', the per-frame segmentation masks.
 
     Args:
-        segmentation: The tracking result of shape (T, Y, X), with each object labeled by its track id.
+        segmentation: The tracking result of shape (T, Y, X) or (T, Z, Y, X), with each object labeled by its
+            track id.
         lineages: The lineage information, a list of dicts mapping each parent track id to its child track ids.
         output_folder: The folder where the CTC results are written, with 'TRA' and 'SEG' subfolders.
     """
-    if segmentation.ndim != 3:
-        raise ValueError(f"Expected a 3d (T, Y, X) tracking result, got shape {segmentation.shape}.")
+    _validate_tracking_result(segmentation)
 
     tra_folder = os.path.join(output_folder, "TRA")
     seg_folder = os.path.join(output_folder, "SEG")

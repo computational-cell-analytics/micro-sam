@@ -257,7 +257,7 @@ def point_layer_to_prompts(
 
     Args:
         layer: The point layer from which to extract the prompts.
-        i: Index for the data (required for 3d or timeseries data).
+        i: Index for the data (required for 3d or timeseries data). A 3d timeseries takes (t, z).
         track_id: Id of the current track (required for tracking data).
         with_stop_annotation: Whether a single negative point will be interpreted
             as stop annotation or just returned as normal prompt.
@@ -282,9 +282,10 @@ def point_layer_to_prompts(
         assert points.shape[1] == 2, f"{points.shape}"
         this_points, this_labels = points[keep], labels[keep]
     else:
-        assert points.shape[1] == 3, f"{points.shape}"
-        mask = (np.round(points[:, 0]) == i) & keep
-        this_points = points[mask][:, 1:]
+        index = np.atleast_1d(i)
+        assert points.shape[1] == 2 + len(index), f"{points.shape}"
+        mask = (np.round(points[:, :len(index)]) == index).all(axis=1) & keep
+        this_points = points[mask][:, len(index):]
         this_labels = labels[mask]
     assert len(this_points) == len(this_labels)
 
@@ -562,12 +563,13 @@ def scribble_layer_to_prompts(
                 raise ValueError("2D scribble vertices must have shape (N, 2).")
             vertices_yx = vertices
         else:
-            if vertices.ndim != 2 or vertices.shape[1] != 3:
-                raise ValueError("3D scribble vertices must have shape (N, 3).")
-            stroke_slices = np.round(vertices[:, 0]).astype(int)
-            if not np.all(stroke_slices == i):
+            index = np.atleast_1d(i)
+            if vertices.ndim != 2 or vertices.shape[1] != 2 + len(index):
+                raise ValueError(f"The scribble vertices must have the shape (N, {2 + len(index)}).")
+            stroke_slices = np.round(vertices[:, :len(index)]).astype(int)
+            if not np.all(stroke_slices == index):
                 continue
-            vertices_yx = vertices[:, 1:]
+            vertices_yx = vertices[:, len(index):]
 
         desired_count, length = _scribble_sample_count(vertices_yx, image_shape, spacing)
         if max_points_per_stroke is not None:
@@ -641,6 +643,13 @@ def get_scribble_slices(layer: napari.layers.Shapes, track_id=None) -> np.ndarra
         slices.append(stroke_slices[0])
 
     return np.unique(slices).astype("int64") if slices else np.empty((0,), dtype="int64")
+
+
+def prompted_planes(point_layer: napari.layers.Points, shape_layer: napari.layers.Shapes) -> List[Tuple[int, int]]:
+    """Return the sorted planes (t, z) of a 3d timeseries that hold a point or a shape prompt."""
+    planes = {tuple(plane) for plane in np.round(point_layer.data[:, :2]).astype(int).tolist()}
+    planes.update(tuple(np.round(data[0, :2]).astype(int).tolist()) for data in shape_layer.data)
+    return sorted(planes)
 
 
 def merge_point_prompts(*prompt_sets):
@@ -800,16 +809,17 @@ def shape_layer_to_prompts(
         return [], []
 
     if i is not None:
+        index = np.atleast_1d(i)
         if track_id is None:
-            prompt_selection = [j for j, data in enumerate(shape_data) if (data[:, 0] == i).all()]
+            prompt_selection = [j for j, data in enumerate(shape_data) if (data[:, :len(index)] == index).all()]
         else:
             track_ids = np.array(list(map(int, layer.properties["track_id"])))
             prompt_selection = [
                 j for j, (data, this_track_id) in enumerate(zip(shape_data, track_ids))
-                if ((data[:, 0] == i).all() and this_track_id == track_id)
+                if ((data[:, :len(index)] == index).all() and this_track_id == track_id)
             ]
 
-        shape_data = [shape_data[j][:, 1:] for j in prompt_selection]
+        shape_data = [shape_data[j][:, len(index):] for j in prompt_selection]
         shape_types = [shape_types[j] for j in prompt_selection]
 
     boxes, masks = _to_prompts(shape_data, shape_types)
