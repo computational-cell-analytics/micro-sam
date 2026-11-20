@@ -23,12 +23,32 @@ from ..__version__ import __version__ as micro_sam_version
 PLACEHOLDER_SHAPE = {2: (256, 256), 3: (16, 256, 256)}
 
 
+def _is_annotated_image(annotated_signature, layers):
+    """Whether the layers hold the annotations of the image the embeddings were computed for.
+
+    Args:
+        annotated_signature: The data signature of the image the layers were last reset for.
+        layers: The label layers holding the annotations.
+
+    Returns:
+        Whether the image is the same and every layer matches its shape.
+    """
+    state = AnnotatorState()
+    if state.image_shape is None or state.data_signature is None or state.data_signature != annotated_signature:
+        return False
+    shape = tuple(state.image_shape)[:state.ndim]
+    return all(layer.data.shape == shape for layer in layers)
+
+
 class _AnnotatorBase(QtWidgets.QScrollArea):
     """Base class for micro_sam annotation plugins.
 
     Implements the logic for the 2d, 3d and tracking annotator.
     The annotators differ in their data dimensionality and the widgets.
     """
+
+    # The data signature of the image the layers were last reset for.
+    _annotated_signature = None
 
     def _require_layers(self, layer_choices: Optional[List[str]] = None):
 
@@ -146,8 +166,8 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
         self._viewer.layers.events.removed.connect(
             self._embedding_widget.image_selection.reset_choices
         )
-        # Connect the run button with the function to update the image.
-        self._embedding_widget.run_button.clicked.connect(self._update_image)
+        # Update the layers once new embeddings are available.
+        self._embedding_widget.embeddings_computed.connect(self._on_embeddings_computed)
 
         # Create the prompt widget. (The same for all plugins.)
         # Child plugins decide whether to expose it as a separate group (e.g. tracking) or to
@@ -325,6 +345,8 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
             if layer_name in self._viewer.layers:
                 del self._viewer.layers[layer_name]
         self._require_layers()
+        # The new layers are empty placeholders, so the next embeddings have to reset them.
+        self._annotated_signature = None
 
         # The prompt widget is bound to the point prompt layer, so it is recreated alongside it.
         shape_prompt_layer = self._viewer.layers["prompts"]
@@ -371,10 +393,6 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
     def _update_image(self, segmentation_result=None):
         state = AnnotatorState()
 
-        # Whether embeddings already exist and avoid clearing objects in layers.
-        if state.skip_recomputing_embeddings:
-            return
-
         # This is encountered when there is no image layer available / selected.
         # In this case, we need not update the image shape or check for changes.
         # NOTE: On code-level, this happens when '__init__' method is called by '_AnnotatorBase',
@@ -420,6 +438,14 @@ class _AnnotatorBase(QtWidgets.QScrollArea):
 
         vutil.clear_annotations(self._viewer, clear_segmentations=False)
         self._set_commit_layer("current_object")
+        self._annotated_signature = state.data_signature
+
+    def _on_embeddings_computed(self):
+        """Reset the layers for a new image. Keep the annotations when the embeddings are for the same image."""
+        layers = [self._viewer.layers[name] for name in ("current_object", "auto_segmentation", "committed_objects")]
+        if _is_annotated_image(self._annotated_signature, layers):
+            return
+        self._update_image()
 
 
 class _ClassifierBase(QtWidgets.QScrollArea):
@@ -441,6 +467,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
     tool_key = None  # "pixel" | "object", selects the tool-specific tooltips
     classical_feature_choices = ()  # the classical features this tool supports
     supports_apply_to_volume = True  # if False the tool always runs over the full image/volume
+    _annotated_signature = None  # data signature of the image the layers were last reset for
 
     #
     # Hooks the subclasses implement.
@@ -631,10 +658,6 @@ class _ClassifierBase(QtWidgets.QScrollArea):
     def _update_image(self, segmentation_result=None):
         state = AnnotatorState()
 
-        # Whether embeddings already exist and avoid clearing objects in layers.
-        if state.skip_recomputing_embeddings:
-            return
-
         if state.image_shape is None:
             return
 
@@ -661,6 +684,18 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         if scale is not None:
             self._viewer.layers["annotations"].scale = scale
             self._viewer.layers["prediction"].scale = scale
+        self._annotated_signature = state.data_signature
+
+    def _on_embeddings_computed(self):
+        """Reset the layers for a new image. Keep the annotations when the embeddings are for the same image."""
+        layers = [self._viewer.layers[name] for name in ("annotations", "prediction")]
+        if not _is_annotated_image(self._annotated_signature, layers):
+            self._update_image()
+            return
+        # The features come from the embeddings, so they have to be recomputed. The prediction is
+        # kept but marked as stale until the classifier is trained again.
+        self._invalidate_features()
+        self._trained_annotations = None
 
     #
     # Class widget.
@@ -1062,7 +1097,7 @@ class _ClassifierBase(QtWidgets.QScrollArea):
         self._embedding_widget = widgets.ClassificationEmbeddingWidget()
         self._viewer.layers.events.inserted.connect(self._embedding_widget.image_selection.reset_choices)
         self._viewer.layers.events.removed.connect(self._embedding_widget.image_selection.reset_choices)
-        self._embedding_widget.run_button.clicked.connect(self._update_image)
+        self._embedding_widget.embeddings_computed.connect(self._on_embeddings_computed)
 
         self._train_and_predict_widget, self._apply_to_volume = self._create_train_widget()
         if self._apply_to_volume is not None:

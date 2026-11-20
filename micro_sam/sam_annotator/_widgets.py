@@ -1774,6 +1774,10 @@ def _process_tiling_inputs(tile_shape_x, tile_shape_y, halo_x, halo_y):
 
 
 class EmbeddingWidget(_WidgetBase):
+    # Emitted after the embeddings were computed or loaded. It is not emitted when the user cancels,
+    # when the validation fails or when the computation raises.
+    embeddings_computed = Signal()
+
     # Whether to show the CPU info popup for expensive (many-tile / 3D) computations.
     warn_on_cpu = True
 
@@ -1891,10 +1895,14 @@ class EmbeddingWidget(_WidgetBase):
 
         # Now that the (possibly tiled) embeddings are known, refresh the 'Batched' control on the
         # segment/track widgets: batched prompting is unsupported with tiling, so it is hidden then.
+        # The cached volume segmentation was computed with the previous embeddings, so drop it.
         for widget in state.widgets.values():
             update_batched = getattr(widget, "_update_batched_visibility", None)
             if callable(update_batched):
                 update_batched()
+            segment_widget = getattr(widget, "_segment_widget", None)
+            if segment_widget is not None:
+                segment_widget.reset_last_volume_run()
 
     def _create_settings_widget(self):
         setting_values = QtWidgets.QWidget()
@@ -2445,13 +2453,11 @@ class EmbeddingWidget(_WidgetBase):
         # Update the image embeddings:
         state = AnnotatorState()
         if self._validate_existing_embeddings(state):
-            # Whether embeddings already exist to control existing objects in layers.
-            state.skip_recomputing_embeddings = True
             return
 
-        state.skip_recomputing_embeddings = False
-        # Reset the state.
-        state.reset_state()
+        # Reset the state. The tracking state belongs to the annotations, which the annotator keeps
+        # when the embeddings are recomputed for the same image.
+        state.reset_state(keep_annotations=True)
 
         # Get image dimensions.
         state.image_shape = self._selected_image_shape()
@@ -2545,6 +2551,7 @@ class EmbeddingWidget(_WidgetBase):
         compute_image_embedding()
         self._clear_autosegment_cache(state)
         self._update_model(state)
+        self.embeddings_computed.emit()
         # worker = compute_image_embedding()
         # worker.returned.connect(self._update_model)
         # worker.start()
