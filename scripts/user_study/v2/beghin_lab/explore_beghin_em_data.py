@@ -2,7 +2,11 @@
 
 convert: write the tif as an OME-Zarr (zarr v3, OME-NGFF 0.5) with sharded, chunked and compressed arrays and a mean
 downsampled pyramid s0, s1, ... The layout follows the stitched Expanded_Platynereis.ome.zarr of the Huisken data.
-The tif has no voxel size, pass it with '--voxel_size' (z, y, x in nanometer) once it is known.
+The tif has no voxel size, the OME-Zarr gets VOXEL_SIZE. The first downsampling step is in y and x only, since z is
+3x coarser than y and x at s0, the later steps are in z, y and x (DOWNSCALE_FACTORS).
+
+rebuild_pyramid: rewrite s1, s2, ... of the raw and of every label image from their s0 with DOWNSCALE_FACTORS, and
+the OME metadata with VOXEL_SIZE.
 
 segment_crops: segment 768 x 768 crops of one scale level in 2d with micro-sam2 (cells and nuclei, AIS and APG), save
 one h5 file per crop and plot the objects of all crops.
@@ -35,6 +39,7 @@ render_section: find an xy plane where every nucleus is segmented (2d micro-sam2
 the nuclei in the studio with the plane and the nuclei of the plane standing on its raw, and plot them side by side.
 """
 import os
+import math
 import time
 import shutil
 import argparse
@@ -61,6 +66,28 @@ CROP_DIR = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/beghin_data/
 
 SHARD_SHAPE = (256, 512, 512)
 CHUNK_SHAPE = (64, 128, 128)
+
+# The voxel size of s0 (z, y, x in nanometer). The co-authors give 16.6 nm pixels and 100 nm sections. The tif is
+# binned 2x in y and x after the acquisition: at 16.6 nm the cells would be ~6 um and the spheroid twice as deep as
+# wide, at 33.2 nm the cells are ~11 um and the spheroid is round (nuclei and spheroid extent at s0).
+VOXEL_SIZE = (100.0, 33.2, 33.2)
+# The ZYX downsampling factor from each level to the next (s0 -> s1, s1 -> s2, ...). The first step brings y and x
+# to 66.4 nm, the closest to the 100 nm of z, the later steps keep the ratio.
+DOWNSCALE_FACTORS = ((1, 2, 2), (2, 2, 2), (2, 2, 2))
+
+
+def get_level_factor(level):
+    """The ZYX downsampling factor of a scale level relative to s0."""
+    factor = np.ones(3, dtype=int)
+    for step in DOWNSCALE_FACTORS[:level]:
+        factor *= step
+    return tuple(int(f) for f in factor)
+
+
+def get_level_voxel_size(level):
+    """The ZYX voxel size of a scale level in nanometer."""
+    return tuple(vs * f for vs, f in zip(VOXEL_SIZE, get_level_factor(level)))
+
 
 # ZYX start of 768 x 768 crops of s0: center, interior and border of the spheroid at z 250, 434 and 620. The crops of
 # a lower scale level have the same center and size, so they hold the same cells and their neighbours.
@@ -96,6 +123,15 @@ RUNS_3D = {
 FULL_BLOCK_SHAPE = (384, 1024, 1024)
 FULL_OVERLAP = (96, 320, 320)
 FULL_BLOCK_DIR = os.path.join(SEGMENT_3D_DIR, "nuclei_s0_full_blocks")
+# The decoder outputs of a whole scale level (predict_volume): the tiling of the 3d s0 run (the library default for
+# blocks above 768 px), predicted in z slabs of VOLUME_SLAB_SIZE slices.
+VOLUME_TILE_SHAPE = (4, 512, 512)
+VOLUME_HALO = (2, 128, 128)
+VOLUME_SLAB_SIZE = 128
+# 'em_spheroids' is not writable for every user of the group, the volume predictions get their own folder.
+VOLUME_PREDICTION_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(SEGMENT_3D_DIR)), "em_spheroids_volume_predictions"
+)
 MIN_OVERLAP = 0.5
 MIN_SIZE = 3e4
 # After stitching: a nucleus spans ~70 slices of s0 and ~300 px in y and x. Objects of at most MAX_FLAT_Z slices are
@@ -107,10 +143,10 @@ MAX_YX_EXTENT = 700
 TILE_SIZE = 512
 TILE_TOLERANCE = 12
 MIN_CLEAN_SIZE = 1e5
-# The 3d renders of 'labels/nuclei_clean', at s2. The voxel size is unknown: z is scaled by RENDER_Z_SCALE, the z
-# spacing over the xy spacing estimated from the nuclei (~70 slices deep, ~280 px wide at s0).
+# The 3d renders of 'labels/nuclei_clean', at s2. z is scaled by RENDER_Z_SCALE, the z spacing over the xy spacing of
+# that level.
 RENDER_LEVEL = 2
-RENDER_Z_SCALE = 3.5
+RENDER_Z_SCALE = get_level_voxel_size(RENDER_LEVEL)[0] / get_level_voxel_size(RENDER_LEVEL)[2]
 RENDER_DIR = "renders"
 FOR_PAPER = os.path.join(os.path.dirname(os.path.abspath(__file__)), *[os.pardir] * 3, "plotting", "v2", "for_paper")
 PREDICTION_CHANNELS = ("foreground", "distance_z", "distance_y", "distance_x", "boundary")
@@ -124,25 +160,25 @@ def create_level(group, name, shape, dtype):
     )
 
 
-def write_ome_metadata(group, name, num_levels, voxel_size):
-    unit = None if voxel_size is None else "nanometer"
-    voxel_size = (1.0, 1.0, 1.0) if voxel_size is None else voxel_size
-    axes = [{"name": ax, "type": "space"} for ax in "zyx"]
-    if unit is not None:
-        for ax in axes:
-            ax["unit"] = unit
+def get_multiscale(name, num_levels, kind):
+    """The OME-NGFF multiscale metadata of a pyramid with VOXEL_SIZE and DOWNSCALE_FACTORS.
 
+    kind is 'mean' for the raw, the mean of a block sits at the center of the block, or 'nearest' for the labels,
+    which are taken at the first voxel of each block.
+    """
+    axes = [{"name": ax, "type": "space", "unit": "nanometer"} for ax in "zyx"]
     datasets = []
     for level in range(num_levels):
-        factor = 2 ** level
-        scale = [float(vs * factor) for vs in voxel_size]
-        # The mean of a 2x2x2 block sits at the center of the block.
-        translation = [float(vs * (factor - 1) / 2) for vs in voxel_size]
-        transforms = [{"type": "scale", "scale": scale}, {"type": "translation", "translation": translation}]
+        transforms = [{"type": "scale", "scale": [round(float(vs), 6) for vs in get_level_voxel_size(level)]}]
+        if kind == "mean":
+            translation = [round(float(vs * (f - 1) / 2), 6) for vs, f in zip(VOXEL_SIZE, get_level_factor(level))]
+            transforms.append({"type": "translation", "translation": translation})
         datasets.append({"path": f"s{level}", "coordinateTransformations": transforms})
+    return {"name": name, "axes": axes, "datasets": datasets, "type": kind}
 
-    multiscale = {"name": name, "axes": axes, "datasets": datasets, "type": "mean"}
-    group.attrs["ome"] = {"version": "0.5", "multiscales": [multiscale]}
+
+def write_ome_metadata(group, name, num_levels):
+    group.attrs["ome"] = {"version": "0.5", "multiscales": [get_multiscale(name, num_levels, "mean")]}
 
 
 def write_s0(input_path, array, num_workers):
@@ -155,28 +191,52 @@ def write_s0(input_path, array, num_workers):
         print(f"s0: wrote z {z0} - {z1} of {n_slices}")
 
 
-def downsample_mean(block):
-    """Downsample a 3d block by 2 with the mean of each 2x2x2 block. An odd edge is padded with its last value."""
-    pad = [(0, s % 2) for s in block.shape]
+def downsample_mean(block, factor):
+    """Downsample a 3d block with the mean of each block of the ZYX factor. An uneven edge is padded with its last
+    value."""
+    pad = [(0, -s % f) for s, f in zip(block.shape, factor)]
     block = np.pad(block, pad, mode="edge")
-    mean = np.zeros([s // 2 for s in block.shape], dtype="float32")
-    for oz, oy, ox in product(range(2), repeat=3):
-        mean += block[oz::2, oy::2, ox::2]
-    mean /= 8
+    mean = np.zeros([s // f for s, f in zip(block.shape, factor)], dtype="float32")
+    for oz, oy, ox in product(*[range(f) for f in factor]):
+        mean += block[oz::factor[0], oy::factor[1], ox::factor[2]]
+    mean /= np.prod(factor)
     return np.round(mean).astype(block.dtype)
 
 
-def write_downsampled_level(source, target, num_workers):
+def get_downsampled_shape(shape, factor):
+    return tuple((s + f - 1) // f for s, f in zip(shape, factor))
+
+
+def write_downsampled_level(source, target, factor, num_workers):
     """Write target from source, one target shard per task, so that no two tasks write the same shard."""
     grid = [range(0, s, sh) for s, sh in zip(target.shape, SHARD_SHAPE)]
 
     def write_shard(start):
         bb = tuple(slice(st, min(st + sh, s)) for st, sh, s in zip(start, SHARD_SHAPE, target.shape))
-        source_bb = tuple(slice(2 * b.start, min(2 * b.stop, s)) for b, s in zip(bb, source.shape))
-        target[bb] = downsample_mean(source[source_bb])
+        source_bb = tuple(slice(f * b.start, min(f * b.stop, s)) for b, f, s in zip(bb, factor, source.shape))
+        target[bb] = downsample_mean(source[source_bb], factor)
 
     with ThreadPoolExecutor(num_workers) as pool:
         list(pool.map(write_shard, product(*grid)))
+
+
+def write_raw_pyramid(group, num_workers):
+    """Write s1, s2, ... of the raw from s0 with DOWNSCALE_FACTORS, replacing the levels that exist already."""
+    source = group["s0"]
+    for level, factor in enumerate(DOWNSCALE_FACTORS, 1):
+        name = f"s{level}"
+        if name in group:
+            del group[name]
+        target = create_level(group, name, get_downsampled_shape(source.shape, factor), source.dtype)
+        write_downsampled_level(source, target, factor, num_workers)
+        print(f"{name}: wrote shape {target.shape}, voxel size {get_level_voxel_size(level)} nm", flush=True)
+        source = target
+    level_names = {f"s{level}" for level in range(len(DOWNSCALE_FACTORS) + 1)}
+    for name in list(group.array_keys()):
+        if name not in level_names:
+            print(f"Removed {name}, a level beyond DOWNSCALE_FACTORS")
+            del group[name]
+    write_ome_metadata(group, group.attrs["ome"]["multiscales"][0]["name"], len(DOWNSCALE_FACTORS) + 1)
 
 
 def check_s0(input_path, array):
@@ -187,7 +247,7 @@ def check_s0(input_path, array):
     print("s0 matches the tif at the first, middle and last slice")
 
 
-def convert_to_ome_zarr(input_path, output_path, voxel_size, num_levels, num_workers):
+def convert_to_ome_zarr(input_path, output_path, num_workers):
     if os.path.exists(output_path):
         raise FileExistsError(f"{output_path} exists already, delete it first to convert again.")
     zarr.config.set({"threading.max_workers": num_workers, "async.concurrency": 4 * num_workers})
@@ -199,21 +259,26 @@ def convert_to_ome_zarr(input_path, output_path, voxel_size, num_levels, num_wor
 
     group = zarr.open_group(output_path, mode="w", zarr_format=3)
     name = os.path.basename(output_path).replace(".ome.zarr", "")
-    write_ome_metadata(group, name, num_levels, voxel_size)
+    write_ome_metadata(group, name, len(DOWNSCALE_FACTORS) + 1)
 
     source = create_level(group, "s0", shape, dtype)
     write_s0(input_path, source, num_workers)
     check_s0(input_path, source)
+    write_raw_pyramid(group, num_workers)
 
-    for level in range(1, num_levels):
-        shape = tuple((s + 1) // 2 for s in source.shape)
-        target = create_level(group, f"s{level}", shape, dtype)
-        write_downsampled_level(source, target, num_workers)
-        print(f"s{level}: wrote shape {shape}")
-        source = target
 
-    if voxel_size is None:
-        print("The voxel size is unknown, the scales are in pixel. Set it with '--voxel_size' once it is known.")
+def rebuild_pyramid(zarr_path, num_workers):
+    """Rewrite the levels above s0 of the raw and of every label image, and their metadata."""
+    zarr.config.set({"threading.max_workers": num_workers, "async.concurrency": 4 * num_workers})
+    root = zarr.open_group(zarr_path, mode="a", zarr_format=3)
+    t0 = time.time()
+    write_raw_pyramid(root, num_workers)
+    print(f"Raw pyramid: {time.time() - t0:.0f} s", flush=True)
+    if "labels" in root:
+        for name in root["labels"].attrs["ome"]["labels"]:
+            t0 = time.time()
+            write_label_pyramid(root["labels"][name], name)
+            print(f"labels/{name} pyramid: {time.time() - t0:.0f} s", flush=True)
 
 
 def segment_image(image, model_type, engine, ndim=2, tile_shape=None, halo=None):
@@ -240,11 +305,11 @@ def get_level_crops(level, shape):
 
     A crop is cut to the slice where the slice is smaller than the crop, and a crop that repeats another is dropped.
     """
-    factor = 2 ** level
+    factor = get_level_factor(level)
     crops = []
     for start in CROPS:
-        z = start[0] // factor
-        center = [(st + CROP_SIZE // 2) // factor for st in start[1:]]
+        z = start[0] // factor[0]
+        center = [(st + CROP_SIZE // 2) // f for st, f in zip(start[1:], factor[1:])]
         y, x = [min(max(c - CROP_SIZE // 2, 0), max(s - CROP_SIZE, 0)) for c, s in zip(center, shape[1:])]
         if (z, y, x) not in crops:
             crops.append((z, y, x))
@@ -325,6 +390,65 @@ def save_predictions(zarr_path, output_dir, level):
                 if key not in f:
                     f.create_dataset(key, data=predict_image(image, model_type), chunks=True, compression="gzip")
         print(f"s{level} {get_crop_name(start)}: saved the predictions")
+
+
+def get_volume_prediction_path(level, target):
+    return os.path.join(VOLUME_PREDICTION_DIR, f"{target}_s{level}_predictions.zarr")
+
+
+def predict_volume(zarr_path, level, target, z_range=None, slab_size=VOLUME_SLAB_SIZE, batch_size=1):
+    """Save the 3d decoder outputs of a whole scale level, one z slab at a time, as one zarr array per channel.
+
+    The decoder runs as in the 3d segmentation (VOLUME_TILE_SHAPE with VOLUME_HALO). The volume is too large for the
+    memory as float32, so it is predicted in slabs of slab_size slices. Each slab is read with the z halo of the tile
+    grid on both sides and starts on the z grid, so its tiles are the tiles of the whole volume and the result is the
+    same. A slab that is written is recorded in the attributes, so a run that stops can be continued.
+    """
+    raw = zarr.open_array(os.path.join(zarr_path, f"s{level}"), mode="r")
+    shape = raw.shape
+    z_tile, z_halo = VOLUME_TILE_SHAPE[0], VOLUME_HALO[0]
+    assert slab_size % z_tile == 0
+    # The context of a slab: whole z tiles that cover the halo of its first and last tile.
+    context = z_tile * ((z_halo + z_tile - 1) // z_tile)
+    out = zarr.open_group(get_volume_prediction_path(level, target), mode="a", zarr_format=3)
+    out.attrs.update({
+        "model_type": MODELS[target], "scale_level": level, "voxel_size": list(get_level_voxel_size(level)),
+        "tile_shape": list(VOLUME_TILE_SHAPE), "halo": list(VOLUME_HALO), "slab_size": slab_size,
+    })
+    compressor = BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle")
+    arrays = {
+        name: out.require_array(
+            name, shape=shape, dtype="float16", shards=(slab_size, 512, 512),
+            chunks=(math.gcd(32, slab_size), 128, 128),
+            compressors=compressor, fill_value=0, dimension_names=["z", "y", "x"],
+        ) for name in PREDICTION_CHANNELS
+    }
+    _, segmenter = get_predictor_and_segmenter(
+        model_type=MODELS[target], segmentation_mode="ais", ndim=3, is_tiled=True,
+    )
+    z_begin, z_end = (0, shape[0]) if z_range is None else z_range
+    assert z_begin % slab_size == 0
+    done = set(out.attrs.get("done_slabs", []))
+    for z0 in range(z_begin, z_end, slab_size):
+        z1 = min(z0 + slab_size, shape[0])
+        if z0 in done:
+            continue
+        t0 = time.time()
+        r0, r1 = max(z0 - context, 0), min(z1 + context, shape[0])
+        segmenter.initialize(
+            raw[r0:r1], ndim=3, tile_shape=VOLUME_TILE_SHAPE, halo=VOLUME_HALO, batch_size=batch_size,
+        )
+        prediction = segmenter.get_state()["prediction"][:, z0 - r0:z1 - r0]
+        t_predict = time.time() - t0
+        for name, channel in zip(PREDICTION_CHANNELS, prediction):
+            arrays[name][z0:z1] = channel.astype("float16")
+        segmenter.clear_state()
+        done.add(z0)
+        out.attrs["done_slabs"] = sorted(done)
+        print(
+            f"s{level} {target}: z {z0} - {z1} of {shape[0]}, {r1 - r0} slices predicted in {t_predict:.0f} s, "
+            f"written in {time.time() - t0 - t_predict:.0f} s", flush=True,
+        )
 
 
 def plot_predictions(zarr_path, output_dir, level, target, plot_path):
@@ -659,38 +783,50 @@ def stitch_full_blocks(shape):
     return stitched
 
 
-def downsample_labels(labels):
-    return labels[::2, ::2, ::2]
+def downsample_labels(labels, factor):
+    return labels[::factor[0], ::factor[1], ::factor[2]]
+
+
+def create_label_level(group, name, data):
+    # Labels compress best with byte shuffle, the ids are piecewise constant.
+    compressor = BloscCodec(cname="zstd", clevel=5, shuffle="shuffle")
+    array = group.create_array(
+        name, shape=data.shape, dtype=data.dtype, shards=SHARD_SHAPE, chunks=CHUNK_SHAPE, compressors=compressor,
+        fill_value=0, dimension_names=["z", "y", "x"],
+    )
+    array[:] = data
+
+
+def write_label_pyramid(group, name, segmentation=None):
+    """Write s1, s2, ... of a label image with DOWNSCALE_FACTORS, from segmentation or from its s0, replacing the
+    levels that exist already, and its metadata. The labels are taken at the first voxel of each block."""
+    level_data = group["s0"][:] if segmentation is None else segmentation
+    for level, factor in enumerate(DOWNSCALE_FACTORS, 1):
+        if f"s{level}" in group:
+            del group[f"s{level}"]
+        level_data = downsample_labels(level_data, factor)
+        create_label_level(group, f"s{level}", level_data)
+    level_names = {f"s{level}" for level in range(len(DOWNSCALE_FACTORS) + 1)}
+    for key in list(group.array_keys()):
+        if key not in level_names:
+            del group[key]
+    multiscale = get_multiscale(name, len(DOWNSCALE_FACTORS) + 1, "nearest")
+    image_label = {"version": "0.5", "source": {"image": "../../"}}
+    group.attrs["ome"] = {"version": "0.5", "multiscales": [multiscale], "image-label": image_label}
 
 
 def add_nuclei_labels(zarr_path, segmentation, name="nuclei"):
     """Add the segmentation as an OME-Zarr label image with the same pyramid as the raw, under 'labels/<name>'."""
     root = zarr.open_group(zarr_path, mode="a", zarr_format=3)
     assert root["s0"].shape == segmentation.shape
-    num_levels = len(root.attrs["ome"]["multiscales"][0]["datasets"])
     if segmentation.max() < np.iinfo("uint16").max:
         segmentation = segmentation.astype("uint16")
     labels = root.require_group("labels")
     if name in labels:
         del labels[name]
     group = labels.create_group(name)
-    # Labels compress best with byte shuffle, the ids are piecewise constant.
-    compressor = BloscCodec(cname="zstd", clevel=5, shuffle="shuffle")
-    level_data = segmentation
-    for level in range(num_levels):
-        if level > 0:
-            level_data = downsample_labels(level_data)
-        array = group.create_array(
-            f"s{level}", shape=level_data.shape, dtype=level_data.dtype, shards=SHARD_SHAPE, chunks=CHUNK_SHAPE,
-            compressors=compressor, fill_value=0, dimension_names=["z", "y", "x"],
-        )
-        array[:] = level_data
-    # The raw metadata gives the same scales, the labels are taken at the first voxel of each 2x2x2 block.
-    multiscale = dict(root.attrs["ome"]["multiscales"][0], name=name, type="nearest")
-    for dataset in multiscale["datasets"]:
-        dataset["coordinateTransformations"] = dataset["coordinateTransformations"][:1]
-    image_label = {"version": "0.5", "source": {"image": "../../"}}
-    group.attrs["ome"] = {"version": "0.5", "multiscales": [multiscale], "image-label": image_label}
+    create_label_level(group, "s0", segmentation)
+    write_label_pyramid(group, name, segmentation)
     label_names = [label for label in labels.attrs.get("ome", {}).get("labels", []) if label != name] + [name]
     labels.attrs["ome"] = {"version": "0.5", "labels": label_names}
     print(f"Saved {zarr_path}/labels/{name}")
@@ -856,14 +992,15 @@ def find_section_slice(zarr_path, out_path, z_range=(200, 700), z_step=16, min_a
 
     The 2d nucleus model segments each candidate slice at s0 (AIS, in 768 px tiles like the crops it does well on).
     A 2d nucleus of at least min_area pixels counts as missed when the 3d labels cover less than min_covered of it.
-    The candidates are multiples of 4 (the s2 grid).
+    The candidates are on the z grid of RENDER_LEVEL.
     """
     import json
     root = zarr.open_group(zarr_path, mode="r")
     raw, labels = root["s0"], root["labels/nuclei_clean/s0"]
+    z_grid = get_level_factor(RENDER_LEVEL)[0]
     results = []
     for z in range(z_range[0], z_range[1] + 1, z_step):
-        z = z - z % 4
+        z = z - z % z_grid
         nuclei_2d = segment_image(raw[z], MODELS["nuclei"], "ais", tile_shape=(768, 768), halo=(128, 128))
         nuclei_3d = labels[z] > 0
         ids, areas = np.unique(nuclei_2d[nuclei_2d > 0], return_counts=True)
@@ -911,7 +1048,7 @@ def render_section(zarr_path, out_dir, s0_z, height=12):
     bounds = (0, nx, 0, ny, 0, nz * RENDER_Z_SCALE)
 
     # The plane in the flipped slices of RENDER_LEVEL, and the nuclei that cross it.
-    z_mid = nz - 1 - s0_z // 2 ** RENDER_LEVEL
+    z_mid = nz - 1 - s0_z // get_level_factor(RENDER_LEVEL)[0]
     plane_ids = np.unique(labels[z_mid])
     plane_ids = plane_ids[plane_ids > 0]
     z_plane = z_mid * RENDER_Z_SCALE
@@ -937,15 +1074,15 @@ def render_section(zarr_path, out_dir, s0_z, height=12):
     plotter.close()
     print("Saved the studio", flush=True)
 
-    # The raw plane of s1 (twice the resolution of s2), with the y axis of the labels.
+    # The raw plane of the level below (twice the resolution in y and x), with the y axis of the labels.
     raw_level = RENDER_LEVEL - 1
-    factor = 2 ** (RENDER_LEVEL - raw_level)
+    factor = DOWNSCALE_FACTORS[raw_level][1]
     plane = root[f"s{raw_level}"][
-        s0_z // 2 ** raw_level, y0 * factor:y1 * factor, x0 * factor:x1 * factor
+        s0_z // get_level_factor(raw_level)[0], y0 * factor:y1 * factor, x0 * factor:x1 * factor
     ].astype("float32")
     low, high = np.percentile(plane, [1, 99.5])
     gray = np.clip((plane - low) / (high - low), 0, 1)
-    step = 2.0 ** (raw_level - RENDER_LEVEL)
+    step = 1.0 / factor
 
     def add_plane(rgb):
         def add(plotter):
@@ -1021,9 +1158,11 @@ def main():
     convert = subparsers.add_parser("convert", help="Convert the tif to a multiscale OME-Zarr.")
     convert.add_argument("--input_path", default=INPUT_PATH)
     convert.add_argument("--output_path", default=OUTPUT_PATH)
-    convert.add_argument("--voxel_size", type=float, nargs=3, default=None, help="z, y, x in nanometer.")
-    convert.add_argument("--num_levels", type=int, default=4, help="The number of scale levels, s0 included.")
     convert.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
+
+    rebuild = subparsers.add_parser("rebuild_pyramid", help="Rewrite the levels above s0 of the raw and the labels.")
+    rebuild.add_argument("--zarr_path", default=OUTPUT_PATH)
+    rebuild.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
 
     crops = subparsers.add_parser("segment_crops", help="Segment the 768 x 768 crops in 2d and plot them.")
     crops.add_argument("--zarr_path", default=OUTPUT_PATH)
@@ -1032,6 +1171,14 @@ def main():
     predictions = subparsers.add_parser("predictions", help="Save and plot the decoder outputs on the crops.")
     predictions.add_argument("--zarr_path", default=OUTPUT_PATH)
     predictions.add_argument("--level", type=int, default=0, help="The scale level of the crops.")
+
+    volume = subparsers.add_parser("predict_volume", help="Save the 3d decoder outputs of a whole scale level.")
+    volume.add_argument("--zarr_path", default=OUTPUT_PATH)
+    volume.add_argument("--level", type=int, default=1)
+    volume.add_argument("--target", default="nuclei", choices=list(MODELS))
+    volume.add_argument("--z_range", type=int, nargs=2, default=None, help="Predict only these slices.")
+    volume.add_argument("--slab_size", type=int, default=VOLUME_SLAB_SIZE)
+    volume.add_argument("--batch_size", type=int, default=1)
 
     seg3d = subparsers.add_parser("segment_3d", help="Segment the cells at s2 and the nuclei of an s0 block in 3d.")
     seg3d.add_argument("--zarr_path", default=OUTPUT_PATH)
@@ -1067,7 +1214,9 @@ def main():
 
     args = parser.parse_args()
     if args.task == "convert":
-        convert_to_ome_zarr(args.input_path, args.output_path, args.voxel_size, args.num_levels, args.num_workers)
+        convert_to_ome_zarr(args.input_path, args.output_path, args.num_workers)
+    elif args.task == "rebuild_pyramid":
+        rebuild_pyramid(args.zarr_path, args.num_workers)
     elif args.task == "segment_crops":
         output_dir = os.path.join(CROP_DIR, f"s{args.level}")
         segment_crops(args.zarr_path, output_dir, args.level)
@@ -1078,6 +1227,10 @@ def main():
         for target in MODELS:
             plot_path = f"beghin_em_crops768_s{args.level}_{target}_predictions.png"
             plot_predictions(args.zarr_path, output_dir, args.level, target, plot_path)
+    elif args.task == "predict_volume":
+        predict_volume(
+            args.zarr_path, args.level, args.target, args.z_range, args.slab_size, args.batch_size,
+        )
     elif args.task == "segment_3d":
         segment_3d(args.zarr_path, SEGMENT_3D_DIR, args.runs)
         for name in args.runs:
