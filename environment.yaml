@@ -5,6 +5,7 @@ dependencies:
     - bioimage-cpp >=0.7
     - bioimage-py >=0.2.2
     - bioimageio.core >=0.11
+    - clearscale >=0.9,<0.10
     - click
     - imagecodecs
     - magicgui

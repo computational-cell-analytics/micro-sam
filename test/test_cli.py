@@ -292,6 +292,39 @@ def test_inference_segmentation_ome_zarr_output(monkeypatch, tmp_path, container
         _resolve_output_paths([path, path], output_path)
 
 
+def _fail_to_load_model(*args, **kwargs):
+    raise AssertionError("The model must not be loaded if all results exist.")
+
+
+def test_inference_segmentation_skips_existing_outputs_before_loading_the_model(monkeypatch, tmp_path):
+    from click.testing import CliRunner
+
+    from micro_sam._cli import cli
+    import micro_sam.v2.automatic_segmentation as automatic_segmentation
+
+    monkeypatch.setattr(automatic_segmentation, "get_predictor_and_segmenter", _fail_to_load_model)
+    image_path, output_path = str(tmp_path / "image.tif"), str(tmp_path / "seg.tif")
+    imageio.imwrite(image_path, binary_blobs(32, rng=0).astype("uint8"))
+    imageio.imwrite(output_path, binary_blobs(32, rng=1).astype("uint8"))
+
+    result = CliRunner().invoke(cli, ["inference", "segmentation", "-i", image_path, "-o", output_path])
+    assert result.exit_code == 0, result.output
+    assert "already stored" in result.output
+
+
+def test_v1_automatic_segmentation_skips_existing_outputs_before_loading_the_model(monkeypatch, tmp_path, capsys):
+    import micro_sam.v1.automatic_segmentation as automatic_segmentation
+
+    monkeypatch.setattr(automatic_segmentation, "get_sam_model", _fail_to_load_model)
+    monkeypatch.setattr(automatic_segmentation, "get_predictor_and_segmenter", _fail_to_load_model)
+    image_path, output_path = str(tmp_path / "image.tif"), str(tmp_path / "seg.tif")
+    imageio.imwrite(image_path, binary_blobs(32, rng=0).astype("uint8"))
+    imageio.imwrite(output_path, binary_blobs(32, rng=1).astype("uint8"))
+
+    automatic_segmentation.main(["-i", image_path, "-o", output_path])
+    assert "already stored" in capsys.readouterr().out
+
+
 def test_inference_pixel_classification_skips_existing_outputs(monkeypatch, tmp_path, container_folder):
     from click.testing import CliRunner
 
@@ -304,7 +337,13 @@ def test_inference_pixel_classification_skips_existing_outputs(monkeypatch, tmp_
         calls.append(kwargs["images"])
         return [util.load_image_data(path, key=kwargs["image_key"]) for path in kwargs["images"]]
 
-    monkeypatch.setattr(micro_sam_cli, "_classifier_predictor", lambda *args: (None, None, None, "hvit_t", None, None))
+    loaded = []
+
+    def _load_model(*args):
+        loaded.append(args)
+        return None, None, None, "hvit_t", None, None
+
+    monkeypatch.setattr(micro_sam_cli, "_classifier_predictor", _load_model)
     monkeypatch.setattr(pixel_classification, "run_prediction_with_pixel_classifier", _predict)
 
     out = tmp_path / "out"
@@ -320,10 +359,10 @@ def test_inference_pixel_classification_skips_existing_outputs(monkeypatch, tmp_
     assert calls == [[str(container_folder / name) for name in ("b.ome.zarr", "c.tif")]]
     assert "already stored" in result.output
 
-    # All results exist now, so nothing is computed.
+    # All results exist now, so nothing is computed and the model is not loaded.
     result = runner.invoke(micro_sam_cli.cli, args)
     assert result.exit_code == 0, result.output
-    assert len(calls) == 1
+    assert len(calls) == 1 and len(loaded) == 1
 
     result = runner.invoke(micro_sam_cli.cli, args + ["--overwrite"])
     assert result.exit_code == 0, result.output

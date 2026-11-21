@@ -152,6 +152,15 @@ def test_ome_zarr_collection(tmp_path, raw):
     np.testing.assert_array_equal(load_image_data(path, key="1"), raw)
 
 
+def test_ome_zarr_invalid_metadata(tmp_path, raw):
+    path = str(tmp_path / "invalid.ome.zarr")
+    root = zarr.open_group(path, mode="w")
+    root.create_array("0", data=raw)
+    root.attrs["ome"] = {"version": "0.5", "multiscales": [{"axes": [{"name": "y", "type": "space"}], "datasets": []}]}
+    with pytest.raises(ValueError, match="invalid ome-zarr metadata"):
+        load_image_data(path)
+
+
 # Input paths and names.
 
 
@@ -180,11 +189,10 @@ def test_input_paths_and_names(tmp_path, raw):
 # Outputs.
 
 
-def _label_attrs(path, name, version="0.5"):
+def _ome_attrs(path, key=""):
     group = zarr.open_group(path, mode="r")
-    if version == "0.5":
-        return group["labels"].attrs["ome"], group[f"labels/{name}"].attrs["ome"]
-    return dict(group["labels"].attrs), dict(group[f"labels/{name}"].attrs)
+    attrs = dict((group[key] if key else group).attrs)
+    return attrs.get("ome", attrs)
 
 
 def test_output_path():
@@ -195,40 +203,66 @@ def test_output_path():
 
 
 def test_write_new_ome_zarr(tmp_path, labels):
+    # A new file stores the segmentation as the root image, marked as a label image.
     path = str(tmp_path / "new" / "out.ome.zarr")
     write_segmentation(path, labels, label_name="cells")
 
     assert zarr.open_group(path, mode="r").metadata.zarr_format == 3
-    labels_attrs, label_attrs = _label_attrs(path, "cells")
-    assert labels_attrs["labels"] == ["cells"]
-    assert label_attrs["image-label"] == {"version": "0.5"}
-    multiscale = label_attrs["multiscales"][0]
+    attrs = _ome_attrs(path)
+    assert attrs["version"] == "0.5"
+    assert attrs["image-label"] == {"version": "0.5"}
+    multiscale = attrs["multiscales"][0]
+    assert multiscale["name"] == "cells"
     assert [axis["name"] for axis in multiscale["axes"]] == ["y", "x"]
-    assert multiscale["datasets"][0]["path"] == "0"
+    assert [dataset["path"] for dataset in multiscale["datasets"]] == ["s0"]
+    np.testing.assert_array_equal(load_image_data(path), labels)
     np.testing.assert_array_equal(load_image_data(path, is_segmentation=True), labels)
     np.testing.assert_array_equal(load_output(path, "cells"), labels)
 
 
 @pytest.mark.parametrize("version", ["0.4", "0.5"])
-def test_write_into_input_ome_zarr(tmp_path, raw, labels, version):
+def test_write_into_ome_zarr_image(tmp_path, raw, labels, version):
     path = str(tmp_path / "image.ome.zarr")
     write_ome_zarr(path, raw, labels, version=version, n_scales=2)
-    segmentation = labels[::2, ::2] + 1
+    scale_keys = ["s0", "s1"] if version == "0.5" else ["0", "1"]
+    segmentation = labels.astype("uint32") + 1
     write_segmentation(path, segmentation, label_name="result")
 
     assert zarr.open_group(path, mode="r").metadata.zarr_format == (3 if version == "0.5" else 2)
-    labels_attrs, label_attrs = _label_attrs(path, "result", version)
-    assert labels_attrs["labels"] == ["cells", "result"]
-    assert label_attrs["image-label"] == {"version": version}
-    # The result has the shape of the second scale, so it gets the scale of this level.
-    transforms = label_attrs["multiscales"][0]["datasets"][0]["coordinateTransformations"]
-    assert transforms == [{"type": "scale", "scale": [2.0, 2.0]}]
+    assert _ome_attrs(path, "labels")["labels"] == ["cells", "result"]
+    attrs = _ome_attrs(path, "labels/result")
+    assert attrs["image-label"] == {"version": version, "source": {"image": "../../"}}
+
+    # The label image has the scale levels of the image, with the same scales.
+    datasets = attrs["multiscales"][0]["datasets"]
+    assert [dataset["path"] for dataset in datasets] == scale_keys
+    assert datasets[1]["coordinateTransformations"] == [{"type": "scale", "scale": [2.0, 2.0]}]
+    group = zarr.open_group(path, mode="r")
+    np.testing.assert_array_equal(group[f"labels/result/{scale_keys[0]}"][:], segmentation)
+    np.testing.assert_array_equal(group[f"labels/result/{scale_keys[1]}"][:], segmentation[::2, ::2])
+
     np.testing.assert_array_equal(load_image_data(path, key="labels/cells"), labels)
     np.testing.assert_array_equal(load_image_data(path, key="labels/result"), segmentation)
     np.testing.assert_array_equal(load_image_data(path), raw)
 
 
-def test_write_ome_zarr_drops_the_channel_axis(tmp_path, labels):
+def test_write_into_ome_zarr_image_from_lower_level(tmp_path, raw, labels):
+    path = str(tmp_path / "image.ome.zarr")
+    write_ome_zarr(path, raw, n_scales=2)
+    segmentation = labels[::2, ::2].astype("uint32")
+    write_segmentation(path, segmentation, label_name="result")
+
+    group = zarr.open_group(path, mode="r")
+    np.testing.assert_array_equal(group["labels/result/s1"][:], segmentation)
+    upsampled = group["labels/result/s0"][:]
+    assert upsampled.shape == SHAPE
+    np.testing.assert_array_equal(upsampled[::2, ::2], segmentation)
+
+    with pytest.raises(ValueError, match="shapes"):
+        write_segmentation(path, labels[:10], label_name="other")
+
+
+def test_write_into_ome_zarr_image_drops_the_channel_axis(tmp_path, labels):
     path = str(tmp_path / "image.ome.zarr")
     root = zarr.open_group(path, mode="w")
     root.create_array("0", data=np.zeros((3,) + SHAPE, dtype="uint8"))
@@ -238,11 +272,32 @@ def test_write_ome_zarr_drops_the_channel_axis(tmp_path, labels):
     root.attrs["ome"] = {"version": "0.5", "multiscales": [{"axes": axes, "datasets": datasets}]}
 
     write_segmentation(path, labels, label_name="cells")
-    multiscale = _label_attrs(path, "cells")[1]["multiscales"][0]
+    multiscale = _ome_attrs(path, "labels/cells")["multiscales"][0]
     assert multiscale["axes"] == axes[1:]
     assert multiscale["datasets"][0]["coordinateTransformations"] == [
-        {"type": "scale", "scale": [0.5, 0.25]}, {"type": "translation", "translation": [1, 2]}
+        {"type": "scale", "scale": [0.5, 0.25]}, {"type": "translation", "translation": [1.0, 2.0]}
     ]
+    np.testing.assert_array_equal(load_image_data(path, is_segmentation=True), labels)
+
+
+def test_invalid_ome_zarr_outputs(tmp_path, raw, labels):
+    path = str(tmp_path / "plain.ome.zarr")
+    zarr.open_group(path, mode="w").create_array("raw", data=raw)
+    with pytest.raises(ValueError, match="does not contain an ome-zarr image"):
+        skip_existing_output(path, "cells", overwrite=False)
+
+    path = str(tmp_path / "collection.ome.zarr")
+    root = zarr.open_group(path, mode="w")
+    root.attrs["ome"] = {"version": "0.5", "bioformats2raw.layout": 3}
+    write_ome_zarr(os.path.join(path, "0"), raw)
+    with pytest.raises(ValueError, match="does not contain an ome-zarr image"):
+        write_segmentation(path, labels, label_name="cells")
+
+    # A root label image only takes a result with its own name.
+    path = str(tmp_path / "out.ome.zarr")
+    write_segmentation(path, labels, label_name="cells")
+    with pytest.raises(ValueError, match="root image is the label image 'cells'"):
+        skip_existing_output(path, "nuclei", overwrite=False)
 
 
 def test_label_name(tmp_path, raw):
@@ -262,21 +317,24 @@ def test_label_name(tmp_path, raw):
         get_label_name(path, label_name="a/b")
 
 
-@pytest.mark.parametrize("extension", [".tif", ".ome.zarr"])
-def test_skip_and_overwrite_output(tmp_path, labels, extension, capsys):
-    path = str(tmp_path / f"out{extension}")
+@pytest.mark.parametrize("output", ["out.tif", "out.ome.zarr", "image.ome.zarr"])
+def test_skip_and_overwrite_output(tmp_path, raw, labels, output, capsys):
+    path = str(tmp_path / output)
+    if output == "image.ome.zarr":
+        write_ome_zarr(path, raw, n_scales=2)
     assert not skip_existing_output(path, "cells", overwrite=False)
     write_segmentation(path, labels, label_name="cells")
 
     assert skip_existing_output(path, "cells", overwrite=False)
     assert "already stored" in capsys.readouterr().out
     assert not skip_existing_output(path, "cells", overwrite=True)
-    if extension == ".ome.zarr":
+    if output == "image.ome.zarr":
         assert not skip_existing_output(path, "nuclei", overwrite=False)
 
     with pytest.raises(FileExistsError):
         write_segmentation(path, labels, label_name="cells")
     write_segmentation(path, labels + 1, label_name="cells", overwrite=True)
     np.testing.assert_array_equal(load_output(path, "cells"), labels + 1)
-    if extension == ".ome.zarr":
-        assert _label_attrs(path, "cells")[0]["labels"] == ["cells"]
+    if output == "image.ome.zarr":
+        assert _ome_attrs(path, "labels")["labels"] == ["cells"]
+        np.testing.assert_array_equal(load_image_data(path, key="labels/cells/s1"), (labels + 1)[::2, ::2])

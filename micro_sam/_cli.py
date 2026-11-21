@@ -47,8 +47,9 @@ INPUTS_HELP = (
     "image files, container files (e.g. hdf5, zarr, ome-zarr, n5) or folders, together with '--pattern'"
 )
 OUTPUT_HELP = (
-    "The filepath to store the results. For a single input use a tif file, or an ome-zarr file ('*.ome.zarr'), "
-    "which stores the result as 'labels/<label_name>'. The ome-zarr file can be the input itself. "
+    "The filepath to store the results. For a single input use a tif file, or an ome-zarr file ('*.ome.zarr'). "
+    "An existing ome-zarr image, e.g. the input itself, stores the result as 'labels/<label_name>' with the "
+    "scale levels of the image. A new ome-zarr file stores the result as a label image at its root. "
     "For multiple inputs use a folder, which stores a tif file per input."
 )
 LABEL_NAME_HELP = (
@@ -624,10 +625,16 @@ def inference_segmentation(
             "so the shell does not expand it, e.g. --pattern '*.tif'."
         )
 
+    has_one_input = len(input_paths) == 1
+    # Check the existing results before the model is loaded.
+    outputs = _outputs_to_compute(input_paths, output_path, key, label_name, overwrite)
+    if not outputs:
+        return
+
     # Only APG builds a different segmenter per dimensionality, and it is built before any input is read.
     segmenter_ndim = ndim or 2
     if engine == "apg" and ndim is None:
-        segmenter_ndim = load_image_data(input_paths[0], key=key, lazy_loading=True).ndim
+        segmenter_ndim = load_image_data(input_paths[outputs[0][0]], key=key, lazy_loading=True).ndim
 
     # Only an initial guess: 'automatic_instance_segmentation' swaps in the tiling variant that
     # matches the image it reads, rebuilding it from the already loaded model and decoder.
@@ -639,10 +646,8 @@ def inference_segmentation(
     except NoDecoderError as e:
         raise click.ClickException(str(e))
 
-    has_one_input = len(input_paths) == 1
-    output_paths = _resolve_output_paths(input_paths, output_path)
-
-    for path, output_fpath in zip(tqdm(input_paths, desc="Run automatic segmentation"), output_paths):
+    for i, output_fpath, name in tqdm(outputs, desc="Run automatic segmentation"):
+        path = input_paths[i]
         if has_one_input or embedding_path is None:
             embedding_fpath = embedding_path
         else:
@@ -667,7 +672,7 @@ def inference_segmentation(
             batch_size=batch_size,
             devices=devices,
             verbose=verbose,
-            label_name=label_name,
+            label_name=name,
             overwrite=overwrite,
             **generate_kwargs,
         )
@@ -850,11 +855,6 @@ def inference_pixel_classification(
     from ._io import get_input_paths, write_segmentation
     from .pixel_classification import run_prediction_with_pixel_classifier
 
-    tile_shape, halo = _parse_shape(tile_shape), _parse_shape(halo)
-    predictor, upsampler, classical_features, model_type, tile_shape, halo = _classifier_predictor(
-        rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
-    )
-
     input_paths = get_input_paths(list(input_path), pattern)
     if len(input_paths) == 0:
         raise click.UsageError("'micro_sam' could not find any image data (quote '--pattern' for folders).")
@@ -862,6 +862,11 @@ def inference_pixel_classification(
     if not outputs:
         return
     input_paths = [input_paths[i] for i, _, _ in outputs]
+
+    tile_shape, halo = _parse_shape(tile_shape), _parse_shape(halo)
+    predictor, upsampler, classical_features, model_type, tile_shape, halo = _classifier_predictor(
+        rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
+    )
 
     predictions = run_prediction_with_pixel_classifier(
         images=input_paths, predictor=predictor, rf_path=rf_path, image_key=key, ndim=ndim,
@@ -890,11 +895,6 @@ def inference_object_classification(
     from ._io import get_input_paths, write_segmentation
     from .object_classification import run_prediction_with_object_classifier
 
-    tile_shape, halo = _parse_shape(tile_shape), _parse_shape(halo)
-    predictor, upsampler, classical_features, model_type, tile_shape, halo = _classifier_predictor(
-        rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
-    )
-
     input_paths = get_input_paths(list(input_path), pattern)
     segmentation_paths = get_input_paths(list(segmentation_path), segmentation_pattern)
     if len(input_paths) == 0:
@@ -908,6 +908,11 @@ def inference_object_classification(
         return
     input_paths = [input_paths[i] for i, _, _ in outputs]
     segmentation_paths = [segmentation_paths[i] for i, _, _ in outputs]
+
+    tile_shape, halo = _parse_shape(tile_shape), _parse_shape(halo)
+    predictor, upsampler, classical_features, model_type, tile_shape, halo = _classifier_predictor(
+        rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
+    )
 
     predictions = run_prediction_with_object_classifier(
         images=input_paths, segmentations=segmentation_paths, predictor=predictor, rf_path=rf_path,

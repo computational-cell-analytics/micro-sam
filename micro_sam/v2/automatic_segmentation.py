@@ -185,9 +185,10 @@ def automatic_instance_segmentation(
             use it to precompute the image embeddings.
         segmenter: The automatic instance segmentation generator (see `get_predictor_and_segmenter`).
         input_path: The input image, either a filepath (e.g. tif or a container with `key`) or an array.
-        output_path: Optional path to save the segmentation. A path that ends with '.ome.zarr' saves it as
-            'labels/<label_name>' in this ome-zarr file, which can be the input itself. Any other path saves it
-            as an image file, by default a tif. If the result exists already, the function loads and returns it
+        output_path: Optional path to save the segmentation. A path that ends with '.ome.zarr' saves it as an
+            ome-zarr label image: as 'labels/<label_name>' with the scale levels of an existing ome-zarr image,
+            which can be the input itself, or at the root of a new file. Any other path saves it as an image file,
+            by default a tif. If the result exists already, the function loads and returns it
             instead of a new computation, unless `overwrite` is True.
         embedding_path: The optional path to cache the image embeddings. The function saves the
             embeddings there, and it uses them again in a later call. The decoder-based engines always
@@ -366,7 +367,7 @@ def automatic_instance_segmentation(
     if output_path is not None:
         write_segmentation(output_path, segmentation, label_name=label_name, overwrite=overwrite)
         if verbose:
-            print(f"The automatic segmentation results are stored at {describe_output(output_path, label_name)}.")
+            print(f"The automatic segmentation results are stored in {describe_output(output_path, label_name)}.")
 
     return segmentation
 

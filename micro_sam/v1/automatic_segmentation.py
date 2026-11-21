@@ -200,7 +200,8 @@ def automatic_instance_segmentation(
         input_path: input_path: The input image file(s). Can either be a single image file (e.g. tif or png),
             or a container file (e.g. hdf5 or zarr).
         output_path: The output path where the instance segmentations will be saved. A path that ends with
-            '.ome.zarr' saves them as 'labels/<label_name>' in this ome-zarr file, which can be the input itself.
+            '.ome.zarr' saves them as an ome-zarr label image: as 'labels/<label_name>' with the scale levels of
+            an existing ome-zarr image, which can be the input itself, or at the root of a new file.
             Any other path saves them as an image file, by default a tif. If the result exists already,
             the function loads and returns it instead of a new computation, unless `overwrite` is True.
         embedding_path: The path where the embeddings are cached already / will be saved.
@@ -307,7 +308,7 @@ def automatic_instance_segmentation(
         # The automatic result is only an intermediate result if we annotate, so we replace it.
         write_segmentation(_output_path, instances, label_name=_label_name, overwrite=overwrite or annotate)
         if verbose:
-            print(f"The automatic segmentation results are stored at {describe_output(_output_path, _label_name)}.")
+            print(f"The automatic segmentation results are stored in {describe_output(_output_path, _label_name)}.")
 
     # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
     if annotate:
@@ -337,7 +338,7 @@ def automatic_instance_segmentation(
         if output_path is not None:
             write_segmentation(output_path, instances, label_name=label_name, overwrite=overwrite)
             if verbose:
-                print(f"The final segmentation results are stored at {describe_output(output_path, label_name)}.")
+                print(f"The final segmentation results are stored in {describe_output(output_path, label_name)}.")
 
     if return_embeddings:
         return instances, image_embeddings
@@ -376,7 +377,8 @@ def main(argv=None):
         "-o", "--output_path", required=True, type=str,
         help="The filepath to store the results. If multiple inputs are provied, "
         "this should be a folder. For a single image, you should provide the path to a tif file for the output segmentation, "  # noqa
-        "or to an ome-zarr file ('*.ome.zarr'), which stores it as 'labels/<label_name>'. "
+        "or to an ome-zarr file ('*.ome.zarr'). An existing ome-zarr image stores it as 'labels/<label_name>', "
+        "a new ome-zarr file as a label image at its root. "
         "NOTE: Segmentation results are stored as tif files or in ome-zarr, tracking results in the CTC file format."
     )
     parser.add_argument(
@@ -460,43 +462,6 @@ def main(argv=None):
         parameter_args[i].lstrip("--"): _convert_argval(parameter_args[i + 1]) for i in range(0, len(parameter_args), 2)
     }
 
-    # Separate extra arguments as per where they should be passed in the automatic segmentation class.
-    # This is done to ensure the extra arguments are allocated to the desired location.
-    # eg. for AMG, 'points_per_side' is expected by '__init__',
-    # and 'stability_score_thresh' is expected in 'generate' method.
-    mode = args.mode
-    if mode in ("auto", None):
-        # We have to load the state to see if we have a decoder in this case.
-        device = util.get_device(device=args.device)
-        predictor, state = get_sam_model(
-            model_type=args.model_type, device=device, checkpoint_path=args.checkpoint, return_state=True
-        )
-        mode = DEFAULT_SEGMENTATION_MODE_WITH_DECODER if "decoder_state" in state else "amg"
-    else:
-        predictor, state = None, None
-
-    if mode.lower() == "amg":
-        segmenter_class = AutomaticMaskGenerator if args.tile_shape is None else TiledAutomaticMaskGenerator
-    elif mode.lower() == "ais":
-        segmenter_class = InstanceSegmentationWithDecoder if args.tile_shape is None else\
-            TiledInstanceSegmentationWithDecoder
-    elif mode.lower() == "apg":
-        segmenter_class = AutomaticPromptGenerator if args.tile_shape is None else TiledAutomaticPromptGenerator
-    else:
-        raise ValueError(f"Invalid segmentation_mode: {mode}. Choose one of 'amg', 'ais', or 'apg'.")
-    init_kwargs, generate_kwargs = split_kwargs(segmenter_class, **extra_kwargs)
-
-    predictor, segmenter = get_predictor_and_segmenter(
-        model_type=args.model_type,
-        checkpoint=args.checkpoint,
-        device=args.device,
-        segmentation_mode=mode,
-        is_tiled=args.tile_shape is not None,
-        predictor=predictor,
-        state=state,
-        **init_kwargs,
-    )
-
     # Get the filepaths to input images (and other paths to store stuff, eg. segmentations and embeddings)
     # Check whether the inputs are as expected, otherwise assort them.
     input_paths = get_input_paths(args.input_path, args.pattern)
@@ -511,12 +476,9 @@ def main(argv=None):
             "Pass a folder for multiple inputs."
         )
 
-    instance_seg_function = automatic_tracking if args.tracking else partial(
-        automatic_instance_segmentation, ndim=args.ndim, label_name=args.label_name, overwrite=args.overwrite,
-    )
-
-    # Run automatic segmentation per image.
-    for input_path in tqdm(input_paths, desc="Run automatic " + ("tracking" if args.tracking else "segmentation")):
+    # Resolve the output and embedding paths per input, and skip the inputs with existing results.
+    jobs = []
+    for input_path in input_paths:
         if has_one_input:  # When we have only one image / volume.
             _embedding_fpath = embedding_path  # Either folder or zarr file, would work for both.
 
@@ -560,6 +522,63 @@ def main(argv=None):
             else:  # Otherwise, store each result inside a folder.
                 _output_fpath = os.path.join(output_folder, f"{input_name}.tif")
 
+        if not args.tracking and skip_existing_output(
+            get_output_path(_output_fpath),
+            get_label_name(input_path, key=args.key, label_name=args.label_name),
+            args.overwrite,
+        ):
+            continue
+        jobs.append((input_path, _output_fpath, _embedding_fpath))
+
+    # Load the model only if there is something to compute.
+    if not jobs:
+        return
+
+    # Separate extra arguments as per where they should be passed in the automatic segmentation class.
+    # This is done to ensure the extra arguments are allocated to the desired location.
+    # eg. for AMG, 'points_per_side' is expected by '__init__',
+    # and 'stability_score_thresh' is expected in 'generate' method.
+    mode = args.mode
+    if mode in ("auto", None):
+        # We have to load the state to see if we have a decoder in this case.
+        device = util.get_device(device=args.device)
+        predictor, state = get_sam_model(
+            model_type=args.model_type, device=device, checkpoint_path=args.checkpoint, return_state=True
+        )
+        mode = DEFAULT_SEGMENTATION_MODE_WITH_DECODER if "decoder_state" in state else "amg"
+    else:
+        predictor, state = None, None
+
+    if mode.lower() == "amg":
+        segmenter_class = AutomaticMaskGenerator if args.tile_shape is None else TiledAutomaticMaskGenerator
+    elif mode.lower() == "ais":
+        segmenter_class = InstanceSegmentationWithDecoder if args.tile_shape is None else\
+            TiledInstanceSegmentationWithDecoder
+    elif mode.lower() == "apg":
+        segmenter_class = AutomaticPromptGenerator if args.tile_shape is None else TiledAutomaticPromptGenerator
+    else:
+        raise ValueError(f"Invalid segmentation_mode: {mode}. Choose one of 'amg', 'ais', or 'apg'.")
+    init_kwargs, generate_kwargs = split_kwargs(segmenter_class, **extra_kwargs)
+
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=args.model_type,
+        checkpoint=args.checkpoint,
+        device=args.device,
+        segmentation_mode=mode,
+        is_tiled=args.tile_shape is not None,
+        predictor=predictor,
+        state=state,
+        **init_kwargs,
+    )
+
+    instance_seg_function = automatic_tracking if args.tracking else partial(
+        automatic_instance_segmentation, ndim=args.ndim, label_name=args.label_name, overwrite=args.overwrite,
+    )
+
+    # Run automatic segmentation per image.
+    for input_path, _output_fpath, _embedding_fpath in tqdm(
+        jobs, desc="Run automatic " + ("tracking" if args.tracking else "segmentation")
+    ):
         instance_seg_function(
             predictor=predictor,
             segmenter=segmenter,

@@ -32,7 +32,10 @@ The key is optional for zarr, OME-Zarr and n5 files:
 
 The commands `micro_sam inference segmentation`, `pixel-classification` and `object-classification` write these outputs with `-o` / `--output`:
 - A tif file for a single input. A path without an extension also writes a tif file.
-- An OME-Zarr file (`*.ome.zarr`) for a single input. The command writes the result as the label image `labels/<name>`. The file can be new, or it can exist already, for example the input itself. Use `--label_name` to give the name. By default, the name is the name of the image for an OME-Zarr input, and the file name for other inputs.
+- An OME-Zarr file (`*.ome.zarr`) for a single input. The command writes the result as an OME-Zarr label image:
+    - If the file is an OME-Zarr image, for example the input itself, the command writes the label image `labels/<name>`. The label image has the same scale levels as the image.
+    - If the file does not exist, the command creates it and writes the label image at its root.
+    - Use `--label_name` to give the name. By default, the name is the name of the image for an OME-Zarr input, and the file name for other inputs.
 - A folder with a tif file for each input, if there are multiple inputs.
 
 If a result exists already (the tif file, or the label image in the OME-Zarr file), the command skips this input and shows an info. Use `--overwrite` to replace the result.

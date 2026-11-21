@@ -1,12 +1,17 @@
 """Resolve, open and write data, including folder containers (zarr, n5 and ome-zarr).
 
 A folder container is a directory that holds zarr or n5 data. Without a key, these rules select the array:
-- ome-zarr: the highest resolution of the image at the root. For a segmentation, the single label image in 'labels/'.
+- ome-zarr: the highest resolution of the image at the root. For a segmentation, the single label image in 'labels/',
+  or the root image if it is a label image.
 - zarr and n5: the single array in the container.
 In all other cases, the caller must give a key.
 
-An output path that ends with '.ome.zarr' stores a result as the label image 'labels/<name>' in that container.
+An output path that ends with '.ome.zarr' stores a result as an ome-zarr label image:
+- In an existing ome-zarr image, as 'labels/<name>', with the same scale levels as the image.
+- In a new file, as the root image, with a single scale level.
 Any other output path stores a result as an image file, by default a tif.
+
+clearscale reads and writes the ome-zarr metadata. z5py writes the data.
 """
 
 import os
@@ -16,6 +21,7 @@ from glob import glob
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple, Union
 
+import clearscale as cs
 import numpy as np
 import z5py
 import zarr
@@ -24,12 +30,8 @@ from elf.io import open_file
 
 CONTAINER_EXTENSIONS = (".ome.zarr", ".zarr", ".zr", ".n5")
 ZARR_METADATA_FILES = ("zarr.json", ".zgroup", ".zarray")
-# Root attributes of ome-zarr collections (bioformats2raw, HCS) that have no image at the root.
-OME_COLLECTION_ATTRIBUTES = ("bioformats2raw.layout", "plate", "well")
 MAX_LISTED_KEYS = 10
 DEFAULT_LABEL_NAME = "segmentation"
-# The array of the single resolution level of a label image that we write.
-LABEL_SCALE_PATH = "0"
 
 PathLike = Union[str, os.PathLike]
 
@@ -87,17 +89,6 @@ def _join(prefix: str, name: str) -> str:
     return f"{prefix}/{name}" if prefix else name
 
 
-def _ome_attrs(node) -> dict:
-    """The ome-zarr metadata of a group: under 'ome' for version 0.5, at the top level for version 0.4."""
-    attrs = dict(node.attrs)
-    return attrs.get("ome", attrs)
-
-
-def _is_ome(node) -> bool:
-    attrs = dict(node.attrs)
-    return "ome" in attrs or any(name in attrs for name in ("multiscales", "labels") + OME_COLLECTION_ATTRIBUTES)
-
-
 def _list_arrays(group, prefix: str) -> List[str]:
     keys = []
     for name in sorted(group.keys()):
@@ -115,11 +106,22 @@ def _format_keys(keys: Sequence[str]) -> str:
 
 
 def _resolve_group(path, group, prefix: str, resolve_labels: bool) -> str:
-    attrs = _ome_attrs(group)
     location = f"'{path}'" if not prefix else f"'{prefix}' in '{path}'"
+    ome = cs.OmeZarrGroup.from_group(group)
 
-    if "labels" in attrs:  # A 'labels' group, which lists its label images.
-        names = attrs["labels"]
+    if ome.kind is None:  # A zarr or n5 group without ome-zarr metadata.
+        keys = _list_arrays(group, prefix)
+        if len(keys) != 1:
+            found = f"{len(keys)} arrays ({_format_keys(keys)})" if keys else "no arrays"
+            raise ValueError(f"{location} contains {found}. Pass the key of the array you want to load.")
+        return keys[0]
+
+    if ome.kind is cs.GroupKind.INVALID:
+        reasons = "; ".join(obj.error for obj in ome.invalid_objects)
+        raise ValueError(f"{location} has invalid ome-zarr metadata: {reasons}")
+
+    if ome.kind is cs.GroupKind.LABELS:
+        names = [child.path for child in ome.children]
         if len(names) != 1:
             raise ValueError(
                 f"{location} contains {len(names)} label images ({_format_keys(names)}). "
@@ -127,34 +129,29 @@ def _resolve_group(path, group, prefix: str, resolve_labels: bool) -> str:
             )
         return _resolve_group(path, group[names[0]], _join(prefix, names[0]), resolve_labels=False)
 
-    if resolve_labels and _is_ome(group):
-        if "labels" not in group:
-            raise ValueError(f"{location} has no 'labels' group. Pass the key of the segmentation you want to load.")
-        return _resolve_group(path, group["labels"], _join(prefix, "labels"), resolve_labels=False)
+    if ome.kind is cs.GroupKind.MULTISCALE:
+        multiscale = ome.multiscales[0]
+        if resolve_labels and multiscale.ome.image_label is None:
+            if "labels" not in group:
+                raise ValueError(
+                    f"{location} has no 'labels' group. Pass the key of the segmentation you want to load."
+                )
+            return _resolve_group(path, group["labels"], _join(prefix, "labels"), resolve_labels=False)
+        # The ome-zarr specification orders the scale levels from the highest to the lowest resolution.
+        return _join(prefix, next(iter(multiscale)))
 
-    multiscales = attrs.get("multiscales")
-    if multiscales:
-        if len(multiscales) != 1:
-            names = [ms.get("name", str(i)) for i, ms in enumerate(multiscales)]
-            raise ValueError(
-                f"{location} contains {len(multiscales)} multiscale images ({_format_keys(names)}). "
-                "Pass the key of the scale you want to load."
-            )
-        # The ome-zarr specification orders the datasets from the highest to the lowest resolution.
-        return _join(prefix, multiscales[0]["datasets"][0]["path"])
-
-    if _is_ome(group):
-        children = sorted(group.keys())
+    if len(ome.multiscales) > 1:
+        names = [ms.ome.name or str(i) for i, ms in enumerate(ome.multiscales)]
         raise ValueError(
-            f"{location} is an ome-zarr file without an image at this location "
-            f"(it contains: {_format_keys(children)}). Pass the key of the image you want to load."
+            f"{location} contains {len(ome.multiscales)} multiscale images ({_format_keys(names)}). "
+            "Pass the key of the scale you want to load."
         )
 
-    keys = _list_arrays(group, prefix)
-    if len(keys) != 1:
-        found = f"{len(keys)} arrays ({_format_keys(keys)})" if keys else "no arrays"
-        raise ValueError(f"{location} contains {found}. Pass the key of the array you want to load.")
-    return keys[0]
+    children = sorted(group.keys())
+    raise ValueError(
+        f"{location} is an ome-zarr file without an image at this location "
+        f"(it contains: {_format_keys(children)}). Pass the key of the image you want to load."
+    )
 
 
 def resolve_container_key(path: PathLike, key: Optional[str] = None, is_segmentation: bool = False) -> Optional[str]:
@@ -296,14 +293,12 @@ def _normalize_name(name: Optional[str]) -> str:
 
 def _get_image_name(path: PathLike, key: Optional[str]) -> Optional[str]:
     root = open_container(path)
-    if not _is_ome(root):
+    if _is_array(root) or cs.OmeZarrGroup.from_group(root).kind is None:
         return None
     array_key = resolve_container_key(path, key)
-    if array_key is None:
-        return None
     group_key = array_key.rpartition("/")[0]
-    multiscales = _ome_attrs(root[group_key] if group_key else root).get("multiscales")
-    return multiscales[0].get("name") if multiscales else None
+    multiscales = cs.OmeZarrGroup.from_group(root[group_key] if group_key else root).multiscales
+    return multiscales[0].ome.name if multiscales else None
 
 
 def get_label_name(
@@ -346,7 +341,42 @@ def describe_output(output_path: PathLike, label_name: str) -> str:
         The description.
     """
     path = os.path.abspath(str(output_path))
-    return f"'labels/{label_name}' in '{path}'" if is_ome_zarr_path(output_path) else f"'{path}'"
+    return f"the label image '{label_name}' in '{path}'" if is_ome_zarr_path(output_path) else f"'{path}'"
+
+
+def _get_ome_zarr_target(output_path: str, label_name: str) -> Tuple[str, Optional[cs.OmeZarrGroup]]:
+    """Find where to store a label image in an ome-zarr output.
+
+    Returns:
+        The target and the ome-zarr metadata of the root. The target is 'new' for a file that does not exist,
+        'labels' for 'labels/<label_name>' in an image, or 'root' for a root label image with this name.
+    """
+    if not os.path.exists(output_path):
+        return "new", None
+    try:
+        root = cs.OmeZarrGroup.from_group(open_container(output_path))
+    except zarr.errors.BaseZarrError as e:
+        raise ValueError(f"Cannot store the result in '{output_path}': it is not a zarr file ({e}).")
+
+    if root.kind is not cs.GroupKind.MULTISCALE:
+        raise ValueError(
+            f"Cannot store the result in '{output_path}': it exists, but it does not contain an ome-zarr image "
+            "at the root. Use an ome-zarr image or a new file as output."
+        )
+    if root.version not in cs.ome_zarr.SUPPORTED_VERSIONS_WRITE:
+        raise ValueError(
+            f"Cannot store the result in '{output_path}': ome-zarr version {root.version} is not supported."
+        )
+
+    multiscale = root.multiscales[0]
+    if multiscale.ome.image_label is None:
+        return "labels", root
+    if multiscale.ome.name == label_name:
+        return "root", root
+    raise ValueError(
+        f"Cannot store the label image '{label_name}' in '{output_path}': its root image is the label image "
+        f"'{multiscale.ome.name}'. Use another output path, or the label name '{multiscale.ome.name}'."
+    )
 
 
 def output_exists(output_path: PathLike, label_name: str) -> bool:
@@ -358,12 +388,16 @@ def output_exists(output_path: PathLike, label_name: str) -> bool:
 
     Returns:
         Whether the output file exists, or the label image exists in the ome-zarr output.
+
+    Raises:
+        ValueError: If the ome-zarr output exists, but cannot store the label image.
     """
     if not is_ome_zarr_path(output_path):
         return os.path.exists(output_path)
-    if not os.path.isdir(output_path):
-        return False
-    return f"labels/{label_name}" in zarr.open_group(str(output_path), mode="r")
+    target, _ = _get_ome_zarr_target(str(output_path), label_name)
+    if target == "labels":
+        return f"labels/{label_name}" in open_container(output_path)
+    return target == "root"
 
 
 def skip_existing_output(output_path: PathLike, label_name: str, overwrite: bool) -> bool:
@@ -380,7 +414,7 @@ def skip_existing_output(output_path: PathLike, label_name: str, overwrite: bool
     if overwrite or not output_exists(output_path, label_name):
         return False
     print(
-        f"The result is already stored at {describe_output(output_path, label_name)}. Skipping it. "
+        f"The result is already stored in {describe_output(output_path, label_name)}. Skipping it. "
         "Pass 'overwrite=True' (python) or '--overwrite' (CLI) to replace it."
     )
     return True
@@ -396,87 +430,93 @@ def load_output(output_path: PathLike, label_name: str) -> np.ndarray:
     Returns:
         The result.
     """
-    if is_ome_zarr_path(output_path):
-        return load_container_data(output_path, key=f"labels/{label_name}")
-    return imageio.imread(output_path)
+    if not is_ome_zarr_path(output_path):
+        return imageio.imread(output_path)
+    target, _ = _get_ome_zarr_target(str(output_path), label_name)
+    return load_container_data(output_path, key=f"labels/{label_name}" if target == "labels" else None)
 
 
-def _select_axes(transform: dict, axes: Sequence[int]) -> Optional[dict]:
-    values = transform.get(transform.get("type"))
-    if not isinstance(values, list):
-        return None
-    return {**transform, transform["type"]: [values[axis] for axis in axes]}
-
-
-def _label_multiscale(root, shape: Tuple[int, ...]) -> dict:
-    """The axes and the scale of a label image, taken from the image of the container if they match."""
+def _default_chunks(shape: Tuple[int, ...]) -> Tuple[int, ...]:
     ndim = len(shape)
-    names = "tzyx"[-ndim:] if ndim <= 4 else [f"dim_{axis}" for axis in range(ndim)]
-    axes = [{"name": name, "type": "time" if name == "t" else "space"} for name in names]
-    transforms = [{"type": "scale", "scale": [1.0] * ndim}]
-
-    multiscales = _ome_attrs(root).get("multiscales")
-    if not multiscales:
-        return {"axes": axes, "transforms": transforms}
-
-    image_axes = multiscales[0].get("axes", [])
-    if not all(isinstance(axis, dict) for axis in image_axes):  # Versions before 0.4 give the axes as strings.
-        return {"axes": axes, "transforms": transforms}
-    keep = list(range(len(image_axes)))
-    if len(keep) != ndim:
-        keep = [i for i, axis in enumerate(image_axes) if axis.get("type") != "channel"]
-    if len(keep) != ndim:
-        return {"axes": axes, "transforms": transforms}
-    axes = [image_axes[i] for i in keep]
-
-    # The segmentation can be computed for any scale of the image, so we use the scale with the same shape.
-    for dataset in multiscales[0]["datasets"]:
-        if dataset["path"] not in root:
-            continue
-        image_shape = root[dataset["path"]].shape
-        if len(image_shape) == len(image_axes) and tuple(image_shape[i] for i in keep) == tuple(shape):
-            selected = [_select_axes(transform, keep) for transform in dataset.get("coordinateTransformations", [])]
-            if selected and all(transform is not None for transform in selected):
-                transforms = selected
-            break
-    return {"axes": axes, "transforms": transforms}
+    return tuple(min(size, 256 if axis >= ndim - 2 else 32) for axis, size in enumerate(shape))
 
 
-def _write_ome_zarr_labels(path: str, segmentation: np.ndarray, label_name: str) -> None:
+def _spatial_axes(multiscale: cs.Multiscale, ndim: int) -> List[str]:
+    """The axes of an image that a segmentation with `ndim` dimensions keeps: no channel axis and no singleton axes."""
+    scale = multiscale.first_value
+    axes = [axis for axis in multiscale.axes if scale.ome_zarr_axes[axis].type != "channel"]
+    if len(axes) > ndim:
+        axes = [axis for axis in axes if scale.shape[axis] != 1]
+    if len(axes) != ndim:
+        raise ValueError(
+            f"The segmentation has {ndim} dimensions, but the image has the axes {list(multiscale.axes)}."
+        )
+    return axes
+
+
+def _write_root_label_image(
+    path: str, root: Optional[cs.OmeZarrGroup], segmentation: np.ndarray, label_name: str
+) -> None:
     # A new file uses ome-zarr 0.5 (zarr v3). An existing file keeps its version.
-    is_new = not os.path.exists(path)
-    root = zarr.open_group(path, mode="a", zarr_format=3 if is_new else None)
-    version = "0.5" if root.metadata.zarr_format == 3 else "0.4"
+    if root is None:
+        f, version = z5py.File(path, mode="a", zarr_format=3), "0.5"
+    else:
+        f, version = z5py.File(path, mode="a"), root.version
+        for key in root.multiscales[0]:
+            del f[key]
 
-    def _update_ome_attrs(group, attrs):
-        if version == "0.5":
-            group.attrs["ome"] = {**group.attrs.get("ome", {}), "version": version, **attrs}
-        else:
-            group.attrs.update(attrs)
+    if segmentation.ndim not in (2, 3, 4):
+        raise ValueError(f"Cannot store a segmentation with {segmentation.ndim} dimensions in ome-zarr.")
+    axes = "tzyx"[-segmentation.ndim:]
+    multiscale = cs.Multiscale.from_single(cs.Scale(dict(zip(axes, segmentation.shape))), scale_key="s0")
+    multiscale.ome.name = label_name
+    multiscale.ome.image_label = cs.ome_zarr.ImageLabel()
 
-    if is_new:
-        _update_ome_attrs(root, {})
+    f.create_dataset("s0", data=segmentation, chunks=_default_chunks(segmentation.shape))
+    cs.OmeZarrGroup.from_single(multiscale).update_attrs(f, version=version)
 
-    labels = root.require_group("labels")
+
+def _write_labels_image(
+    path: str, image: cs.OmeZarrGroup, segmentation: np.ndarray, label_name: str, num_workers: int
+) -> None:
+    from bioimage_py import copy
+    from bioimage_py.wrapper import ResizedSource
+
+    multiscale = image.multiscales[0]
+    axes = _spatial_axes(multiscale, segmentation.ndim)
+    shapes = {key: tuple(scale.shape[axis] for axis in axes) for key, scale in multiscale.items()}
+    if segmentation.shape not in shapes.values():
+        raise ValueError(
+            f"The segmentation has the shape {segmentation.shape}, but the scale levels of the image in '{path}' "
+            f"have the shapes {list(shapes.values())} for the axes {axes}."
+        )
+
+    # The spec requires the same scale levels for a label image as for its image.
+    label_multiscale = cs.Multiscale({key: scale.with_axes(axes) for key, scale in multiscale.items()})
+    label_multiscale.ome.name = label_name
+    label_multiscale.ome.image_label = cs.ome_zarr.ImageLabel(source="../../")
+
+    f = z5py.File(path, mode="a")
+    labels = f.require_group("labels")
     if label_name in labels:
         del labels[label_name]
-
     group = labels.create_group(label_name)
-    group.create_array(LABEL_SCALE_PATH, data=segmentation)
 
-    metadata = _label_multiscale(root, segmentation.shape)
-    multiscale = {
-        "name": label_name,
-        "axes": metadata["axes"],
-        "datasets": [{"path": LABEL_SCALE_PATH, "coordinateTransformations": metadata["transforms"]}],
-    }
-    if version == "0.4":
-        multiscale["version"] = version
-    _update_ome_attrs(group, {"multiscales": [multiscale], "image-label": {"version": version}})
+    axis_indices = [multiscale.axes.index(axis) for axis in axes]
+    for key, shape in shapes.items():
+        image_chunks = f[key].chunks
+        chunks = tuple(min(image_chunks[index], size) for index, size in zip(axis_indices, shape))
+        dataset = group.create_dataset(key, shape=shape, chunks=chunks, dtype=segmentation.dtype)
+        # Nearest neighbor resizing keeps the label ids.
+        source = segmentation if shape == segmentation.shape else ResizedSource(segmentation, shape, order=0)
+        copy(source, output=dataset, block_shape=chunks, num_workers=num_workers)
+    cs.OmeZarrGroup.from_single(label_multiscale).update_attrs(group, version=image.version)
 
-    names = list(_ome_attrs(labels).get("labels", []))
-    if label_name not in names:
-        _update_ome_attrs(labels, {"labels": names + [label_name]})
+    # Add the label image to the list after its data is written.
+    children = cs.OmeZarrGroup.from_group(labels).children
+    if label_name not in [child.path for child in children]:
+        children += (cs.ChildRef("label_multiscale", label_name),)
+    cs.OmeZarrGroup(children=children).update_attrs(labels, version=image.version)
 
 
 def write_segmentation(
@@ -484,11 +524,15 @@ def write_segmentation(
     segmentation: np.ndarray,
     label_name: str = DEFAULT_LABEL_NAME,
     overwrite: bool = False,
+    num_workers: Optional[int] = None,
 ) -> None:
     """Store a segmentation as an image file or as a label image in an ome-zarr file.
 
-    An output path that ends with '.ome.zarr' stores the segmentation as 'labels/<label_name>'.
-    The ome-zarr file can exist already, for example the input image. A new file uses ome-zarr version 0.5.
+    An output path that ends with '.ome.zarr' stores the segmentation as an ome-zarr label image:
+    - In an existing ome-zarr image, for example the input image, as 'labels/<label_name>'. The label image has the
+      same scale levels as the image: the segmentation must have the shape of one level without the channel axis,
+      and the other levels are computed with nearest neighbor resizing.
+    - In a new file, as the root image, with a single scale level and ome-zarr version 0.5.
     Any other output path stores the segmentation with imageio, a tif with zlib compression.
 
     Args:
@@ -496,6 +540,8 @@ def write_segmentation(
         segmentation: The segmentation.
         label_name: The name of the label image for an ome-zarr output, see `get_label_name`.
         overwrite: Whether to replace a stored result.
+        num_workers: The number of threads to compute the scale levels of an ome-zarr label image.
+            By default the number of CPUs.
     """
     output_path = str(output_path)
     if output_exists(output_path, label_name) and not overwrite:
@@ -505,7 +551,13 @@ def write_segmentation(
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-    if is_ome_zarr_path(output_path):
-        _write_ome_zarr_labels(output_path, np.asarray(segmentation), label_name)
-    else:
+    if not is_ome_zarr_path(output_path):
         imageio.imwrite(output_path, segmentation, compression="zlib")
+        return
+
+    segmentation = np.asarray(segmentation)
+    target, root = _get_ome_zarr_target(output_path, label_name)
+    if target == "labels":
+        _write_labels_image(output_path, root, segmentation, label_name, num_workers or os.cpu_count() or 1)
+    else:
+        _write_root_label_image(output_path, root, segmentation, label_name)
