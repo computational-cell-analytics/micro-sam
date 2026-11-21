@@ -3,11 +3,15 @@ import os
 import re
 
 import numpy as np
+import pooch
 import pytest
 
 from micro_sam._provenance import (
     CONVENTION, IMAGE, image_reference, local_reference, make_step, registry_reference, timestamp,
 )
+
+# The sha256 checksum of the schema at CONVENTION["schema_url"]. Update it together with the convention version.
+SCHEMA_HASH = "1d240d05cb5bf090a8a2aa57725d03d03fa8f8f3e0c8a7c40dc8c1bb6063a2c8"
 
 
 def test_references(tmp_path):
@@ -43,7 +47,7 @@ def test_image_reference(tmp_path):
 
 def test_step_matches_the_schema(tmp_path):
     jsonschema = pytest.importorskip("jsonschema")
-    with open(os.path.join(os.path.dirname(__file__), "provenance_schema_v0.2.0.json")) as f:
+    with open(pooch.retrieve(CONVENTION["schema_url"], known_hash=SCHEMA_HASH)) as f:
         schema = json.load(f)
 
     image = str(tmp_path / "image.ome.zarr")
