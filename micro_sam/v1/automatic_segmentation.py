@@ -6,12 +6,14 @@ from typing import Dict, List, Optional, Union, Tuple, Literal
 
 import numpy as np
 from tqdm import tqdm
-import imageio.v3 as imageio
 
 from torch_em.data.datasets.util import split_kwargs
 
 from .. import util
-from .._io import get_input_name, get_input_paths
+from .._io import (
+    describe_output, get_input_name, get_input_paths, get_label_name, get_output_path, is_ome_zarr_path,
+    load_output, skip_existing_output, write_segmentation,
+)
 from ..util import AutoSegBase
 from .util import get_sam_model, precompute_image_embeddings, get_model_names
 from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
@@ -186,6 +188,8 @@ def automatic_instance_segmentation(
     return_embeddings: bool = False,
     annotate: bool = False,
     batch_size: int = 1,
+    label_name: Optional[str] = None,
+    overwrite: bool = False,
     **generate_kwargs
 ) -> np.ndarray:
     """Run automatic segmentation for the input image.
@@ -195,7 +199,10 @@ def automatic_instance_segmentation(
         segmenter: The automatic instance segmentation class.
         input_path: input_path: The input image file(s). Can either be a single image file (e.g. tif or png),
             or a container file (e.g. hdf5 or zarr).
-        output_path: The output path where the instance segmentations will be saved.
+        output_path: The output path where the instance segmentations will be saved. A path that ends with
+            '.ome.zarr' saves them as 'labels/<label_name>' in this ome-zarr file, which can be the input itself.
+            Any other path saves them as an image file, by default a tif. If the result exists already,
+            the function loads and returns it instead of a new computation, unless `overwrite` is True.
         embedding_path: The path where the embeddings are cached already / will be saved.
         mask_path: The path to an optional foreground mask. Areas outside of the foreground will not be processed.
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
@@ -212,17 +219,21 @@ def automatic_instance_segmentation(
             By default, does not activate the annotator.
         batch_size: The batch size to compute image embeddings over tiles / z-planes.
             By default, does it sequentially, i.e. one after the other.
+        label_name: The name of the label image for an ome-zarr output. By default the name of the input image
+            for an ome-zarr input, otherwise the normalized name of the input file.
+        overwrite: Whether to replace a result that exists already at `output_path`.
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
     Returns:
-        The segmentation result.
+        The segmentation result. If `return_embeddings` is True, also the image embeddings,
+            which are None if the result exists already.
     """
-    # Avoid overwriting already stored segmentations.
     if output_path is not None:
-        output_path = Path(output_path).with_suffix(".tif")
-        if os.path.exists(output_path):
-            print(f"The segmentation results are already stored at '{os.path.abspath(output_path)}'.")
-            return
+        output_path = get_output_path(output_path)
+        label_name = get_label_name(input_path, key=key, label_name=label_name)
+        if skip_existing_output(output_path, label_name, overwrite):
+            instances = load_output(output_path, label_name)
+            return (instances, None) if return_embeddings else instances
 
     # We assume that it has to be read from file if it is a str or pathlike.
     # Otherwise we assume it is a numpy array like object.
@@ -288,10 +299,15 @@ def automatic_instance_segmentation(
 
     # Before starting to annotate, if at all desired, store the automatic segmentations in the first stage.
     if output_path is not None:
-        _output_path = _add_suffix_to_output_path(output_path, "_automatic") if annotate else output_path
-        imageio.imwrite(_output_path, instances, compression="zlib")
+        _output_path, _label_name = output_path, label_name
+        if annotate and is_ome_zarr_path(output_path):
+            _label_name = f"{label_name}_automatic"
+        elif annotate:
+            _output_path = _add_suffix_to_output_path(output_path, "_automatic")
+        # The automatic result is only an intermediate result if we annotate, so we replace it.
+        write_segmentation(_output_path, instances, label_name=_label_name, overwrite=overwrite or annotate)
         if verbose:
-            print(f"The automatic segmentation results are stored at '{os.path.abspath(_output_path)}'.")
+            print(f"The automatic segmentation results are stored at {describe_output(_output_path, _label_name)}.")
 
     # Allow opening the automatic segmentation in the annotator for further annotation, if desired.
     if annotate:
@@ -319,9 +335,9 @@ def automatic_instance_segmentation(
 
         # Save the instance segmentation, if 'output_path' provided.
         if output_path is not None:
-            imageio.imwrite(output_path, instances, compression="zlib")
+            write_segmentation(output_path, instances, label_name=label_name, overwrite=overwrite)
             if verbose:
-                print(f"The final segmentation results are stored at '{os.path.abspath(output_path)}'.")
+                print(f"The final segmentation results are stored at {describe_output(output_path, label_name)}.")
 
     if return_embeddings:
         return instances, image_embeddings
@@ -359,8 +375,18 @@ def main(argv=None):
     parser.add_argument(
         "-o", "--output_path", required=True, type=str,
         help="The filepath to store the results. If multiple inputs are provied, "
-        "this should be a folder. For a single image, you should provide the path to a tif file for the output segmentation."  # noqa
-        "NOTE: Segmentation results are stored as tif files, tracking results in the CTC fil format ."
+        "this should be a folder. For a single image, you should provide the path to a tif file for the output segmentation, "  # noqa
+        "or to an ome-zarr file ('*.ome.zarr'), which stores it as 'labels/<label_name>'. "
+        "NOTE: Segmentation results are stored as tif files or in ome-zarr, tracking results in the CTC file format."
+    )
+    parser.add_argument(
+        "--label_name", default=None, type=str,
+        help="The name of the label image for an ome-zarr output. By default the name of the input image "
+        "for an ome-zarr input, otherwise the name of the input file."
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true",
+        help="Whether to replace existing results. By default, the inputs with existing results are skipped."
     )
     parser.add_argument(
         "-e", "--embedding_path", default=None, type=str,
@@ -479,9 +505,14 @@ def main(argv=None):
     output_path = args.output_path
     embedding_path = args.embedding_path
     has_one_input = len(input_paths) == 1
+    if is_ome_zarr_path(output_path) and (args.tracking or not has_one_input):
+        raise ValueError(
+            f"The ome-zarr output '{output_path}' is only supported for segmentation of a single input. "
+            "Pass a folder for multiple inputs."
+        )
 
     instance_seg_function = automatic_tracking if args.tracking else partial(
-        automatic_instance_segmentation, ndim=args.ndim
+        automatic_instance_segmentation, ndim=args.ndim, label_name=args.label_name, overwrite=args.overwrite,
     )
 
     # Run automatic segmentation per image.
@@ -490,7 +521,8 @@ def main(argv=None):
             _embedding_fpath = embedding_path  # Either folder or zarr file, would work for both.
 
             output_fdir = os.path.splitext(output_path)[0]
-            os.makedirs(output_fdir, exist_ok=True)
+            if not is_ome_zarr_path(output_path):
+                os.makedirs(output_fdir, exist_ok=True)
 
             # For tracking, we ensure that the output path is a folder,
             # i.e. does not have an extension. We throw a warning if the user provided an extension.
@@ -501,6 +533,8 @@ def main(argv=None):
                         "We remove it and treat it as a folder to store tracking outputs in CTC format."
                     )
                 _output_fpath = output_fdir
+            elif is_ome_zarr_path(output_path):
+                _output_fpath = output_path
             else:  # Otherwise, we can store outputs for user directly in the provided filepath, ensuring extension .tif
                 _output_fpath = f"{output_fdir}.tif"
 

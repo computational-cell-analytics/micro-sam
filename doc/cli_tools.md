@@ -30,6 +30,13 @@ The key is optional for zarr, OME-Zarr and n5 files:
 - For a zarr or n5 file, the commands use the single array in the file.
 - If a file has more than one image or array, the command shows an error that lists them. Then give the key, for example `-k labels/nuclei`.
 
+The commands `micro_sam inference segmentation`, `pixel-classification` and `object-classification` write these outputs with `-o` / `--output`:
+- A tif file for a single input. A path without an extension also writes a tif file.
+- An OME-Zarr file (`*.ome.zarr`) for a single input. The command writes the result as the label image `labels/<name>`. The file can be new, or it can exist already, for example the input itself. Use `--label_name` to give the name. By default, the name is the name of the image for an OME-Zarr input, and the file name for other inputs.
+- A folder with a tif file for each input, if there are multiple inputs.
+
+If a result exists already (the tif file, or the label image in the OME-Zarr file), the command skips this input and shows an info. Use `--overwrite` to replace the result.
+
 The automatic segmentation uses the best post-processing parameters for the chosen model by default.
 You can change a parameter by passing it to `micro_sam inference segmentation` as `--<PARAMETER_NAME> <VALUE>`, for example `--min_size 100` to remove smaller objects.
 The defaults are listed by `micro_sam.v2.postprocessing.default_postprocessing` (AIS) and `micro_sam.v2.automatic_prompt_generation.default_prompt_generation` (APG).
@@ -44,6 +51,9 @@ micro_sam inference segmentation -i image.tif -o segmentation.tif -m hvit_b_cell
 
 # Automatic segmentation of all OME-Zarr images in a folder, without a key.
 micro_sam inference segmentation -i images/ -o segmentations/ --pattern '*.ome.zarr'
+
+# Automatic segmentation of an OME-Zarr image. The result is written to 'labels/<name>' of the same file.
+micro_sam inference segmentation -i image.ome.zarr -o image.ome.zarr --label_name cells
 
 # Automatic tracking of a timeseries, saved in the Cell Tracking Challenge format.
 micro_sam inference tracking -i timeseries.tif -o tracking_result/

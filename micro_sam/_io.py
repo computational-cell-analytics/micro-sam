@@ -1,17 +1,22 @@
-"""Resolve and open input data, including folder containers (zarr, n5 and ome-zarr).
+"""Resolve, open and write data, including folder containers (zarr, n5 and ome-zarr).
 
 A folder container is a directory that holds zarr or n5 data. Without a key, these rules select the array:
 - ome-zarr: the highest resolution of the image at the root. For a segmentation, the single label image in 'labels/'.
 - zarr and n5: the single array in the container.
 In all other cases, the caller must give a key.
+
+An output path that ends with '.ome.zarr' stores a result as the label image 'labels/<name>' in that container.
+Any other output path stores a result as an image file, by default a tif.
 """
 
 import os
+import re
 import json
 from glob import glob
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple, Union
 
+import numpy as np
 import z5py
 import zarr
 import imageio.v3 as imageio
@@ -22,6 +27,9 @@ ZARR_METADATA_FILES = ("zarr.json", ".zgroup", ".zarray")
 # Root attributes of ome-zarr collections (bioformats2raw, HCS) that have no image at the root.
 OME_COLLECTION_ATTRIBUTES = ("bioformats2raw.layout", "plate", "well")
 MAX_LISTED_KEYS = 10
+DEFAULT_LABEL_NAME = "segmentation"
+# The array of the single resolution level of a label image that we write.
+LABEL_SCALE_PATH = "0"
 
 PathLike = Union[str, os.PathLike]
 
@@ -253,3 +261,251 @@ def get_input_name(path: PathLike) -> str:
         if name.lower().endswith(extension):
             return name[:-len(extension)]
     return Path(name).stem
+
+
+def is_ome_zarr_path(path: PathLike) -> bool:
+    """Check if a path has the ome-zarr extension '.ome.zarr'.
+
+    Args:
+        path: The path to check. It does not have to exist.
+
+    Returns:
+        Whether the path has the ome-zarr extension.
+    """
+    return str(path).rstrip("/").lower().endswith(".ome.zarr")
+
+
+def get_output_path(path: PathLike) -> str:
+    """Get the path to store a result: add the extension '.tif' to a path without an extension.
+
+    Args:
+        path: The output path.
+
+    Returns:
+        The output path with an extension.
+    """
+    path = str(path)
+    if is_ome_zarr_path(path) or os.path.splitext(path)[1]:
+        return path
+    return f"{path}.tif"
+
+
+def _normalize_name(name: Optional[str]) -> str:
+    return re.sub(r"[^\w.-]+", "_", name or "").strip("_")
+
+
+def _get_image_name(path: PathLike, key: Optional[str]) -> Optional[str]:
+    root = open_container(path)
+    if not _is_ome(root):
+        return None
+    array_key = resolve_container_key(path, key)
+    if array_key is None:
+        return None
+    group_key = array_key.rpartition("/")[0]
+    multiscales = _ome_attrs(root[group_key] if group_key else root).get("multiscales")
+    return multiscales[0].get("name") if multiscales else None
+
+
+def get_label_name(
+    input_path: Union[PathLike, np.ndarray], key: Optional[str] = None, label_name: Optional[str] = None,
+) -> str:
+    """Get the name of the label image for an ome-zarr output.
+
+    Args:
+        input_path: The input path or array.
+        key: The key of the input data, see `resolve_container_key`.
+        label_name: The name given by the user. If None, the name is derived from the input:
+            the name of the image for an ome-zarr input, otherwise the normalized name of the input file.
+
+    Returns:
+        The name of the label image.
+    """
+    if label_name is not None:
+        if not label_name or "/" in label_name:
+            raise ValueError(f"Invalid label name '{label_name}': it must not be empty or contain a '/'.")
+        return label_name
+    if not isinstance(input_path, (str, os.PathLike)):
+        return DEFAULT_LABEL_NAME
+
+    image_name = _get_image_name(input_path, key) if is_container(input_path) else None
+    for name in (image_name, get_input_name(input_path)):
+        name = _normalize_name(name)
+        if name:
+            return name
+    return DEFAULT_LABEL_NAME
+
+
+def describe_output(output_path: PathLike, label_name: str) -> str:
+    """Describe where a result is stored, for messages to the user.
+
+    Args:
+        output_path: The output path.
+        label_name: The name of the label image for an ome-zarr output.
+
+    Returns:
+        The description.
+    """
+    path = os.path.abspath(str(output_path))
+    return f"'labels/{label_name}' in '{path}'" if is_ome_zarr_path(output_path) else f"'{path}'"
+
+
+def output_exists(output_path: PathLike, label_name: str) -> bool:
+    """Check if a result is already stored.
+
+    Args:
+        output_path: The output path.
+        label_name: The name of the label image for an ome-zarr output.
+
+    Returns:
+        Whether the output file exists, or the label image exists in the ome-zarr output.
+    """
+    if not is_ome_zarr_path(output_path):
+        return os.path.exists(output_path)
+    if not os.path.isdir(output_path):
+        return False
+    return f"labels/{label_name}" in zarr.open_group(str(output_path), mode="r")
+
+
+def skip_existing_output(output_path: PathLike, label_name: str, overwrite: bool) -> bool:
+    """Check if a result is already stored and must not be replaced. Print an info in this case.
+
+    Args:
+        output_path: The output path.
+        label_name: The name of the label image for an ome-zarr output.
+        overwrite: Whether to replace a stored result.
+
+    Returns:
+        Whether to skip the computation of this result.
+    """
+    if overwrite or not output_exists(output_path, label_name):
+        return False
+    print(
+        f"The result is already stored at {describe_output(output_path, label_name)}. Skipping it. "
+        "Pass 'overwrite=True' (python) or '--overwrite' (CLI) to replace it."
+    )
+    return True
+
+
+def load_output(output_path: PathLike, label_name: str) -> np.ndarray:
+    """Load a stored result.
+
+    Args:
+        output_path: The output path.
+        label_name: The name of the label image for an ome-zarr output.
+
+    Returns:
+        The result.
+    """
+    if is_ome_zarr_path(output_path):
+        return load_container_data(output_path, key=f"labels/{label_name}")
+    return imageio.imread(output_path)
+
+
+def _select_axes(transform: dict, axes: Sequence[int]) -> Optional[dict]:
+    values = transform.get(transform.get("type"))
+    if not isinstance(values, list):
+        return None
+    return {**transform, transform["type"]: [values[axis] for axis in axes]}
+
+
+def _label_multiscale(root, shape: Tuple[int, ...]) -> dict:
+    """The axes and the scale of a label image, taken from the image of the container if they match."""
+    ndim = len(shape)
+    names = "tzyx"[-ndim:] if ndim <= 4 else [f"dim_{axis}" for axis in range(ndim)]
+    axes = [{"name": name, "type": "time" if name == "t" else "space"} for name in names]
+    transforms = [{"type": "scale", "scale": [1.0] * ndim}]
+
+    multiscales = _ome_attrs(root).get("multiscales")
+    if not multiscales:
+        return {"axes": axes, "transforms": transforms}
+
+    image_axes = multiscales[0].get("axes", [])
+    if not all(isinstance(axis, dict) for axis in image_axes):  # Versions before 0.4 give the axes as strings.
+        return {"axes": axes, "transforms": transforms}
+    keep = list(range(len(image_axes)))
+    if len(keep) != ndim:
+        keep = [i for i, axis in enumerate(image_axes) if axis.get("type") != "channel"]
+    if len(keep) != ndim:
+        return {"axes": axes, "transforms": transforms}
+    axes = [image_axes[i] for i in keep]
+
+    # The segmentation can be computed for any scale of the image, so we use the scale with the same shape.
+    for dataset in multiscales[0]["datasets"]:
+        if dataset["path"] not in root:
+            continue
+        image_shape = root[dataset["path"]].shape
+        if len(image_shape) == len(image_axes) and tuple(image_shape[i] for i in keep) == tuple(shape):
+            selected = [_select_axes(transform, keep) for transform in dataset.get("coordinateTransformations", [])]
+            if selected and all(transform is not None for transform in selected):
+                transforms = selected
+            break
+    return {"axes": axes, "transforms": transforms}
+
+
+def _write_ome_zarr_labels(path: str, segmentation: np.ndarray, label_name: str) -> None:
+    # A new file uses ome-zarr 0.5 (zarr v3). An existing file keeps its version.
+    is_new = not os.path.exists(path)
+    root = zarr.open_group(path, mode="a", zarr_format=3 if is_new else None)
+    version = "0.5" if root.metadata.zarr_format == 3 else "0.4"
+
+    def _update_ome_attrs(group, attrs):
+        if version == "0.5":
+            group.attrs["ome"] = {**group.attrs.get("ome", {}), "version": version, **attrs}
+        else:
+            group.attrs.update(attrs)
+
+    if is_new:
+        _update_ome_attrs(root, {})
+
+    labels = root.require_group("labels")
+    if label_name in labels:
+        del labels[label_name]
+
+    group = labels.create_group(label_name)
+    group.create_array(LABEL_SCALE_PATH, data=segmentation)
+
+    metadata = _label_multiscale(root, segmentation.shape)
+    multiscale = {
+        "name": label_name,
+        "axes": metadata["axes"],
+        "datasets": [{"path": LABEL_SCALE_PATH, "coordinateTransformations": metadata["transforms"]}],
+    }
+    if version == "0.4":
+        multiscale["version"] = version
+    _update_ome_attrs(group, {"multiscales": [multiscale], "image-label": {"version": version}})
+
+    names = list(_ome_attrs(labels).get("labels", []))
+    if label_name not in names:
+        _update_ome_attrs(labels, {"labels": names + [label_name]})
+
+
+def write_segmentation(
+    output_path: PathLike,
+    segmentation: np.ndarray,
+    label_name: str = DEFAULT_LABEL_NAME,
+    overwrite: bool = False,
+) -> None:
+    """Store a segmentation as an image file or as a label image in an ome-zarr file.
+
+    An output path that ends with '.ome.zarr' stores the segmentation as 'labels/<label_name>'.
+    The ome-zarr file can exist already, for example the input image. A new file uses ome-zarr version 0.5.
+    Any other output path stores the segmentation with imageio, a tif with zlib compression.
+
+    Args:
+        output_path: The output path.
+        segmentation: The segmentation.
+        label_name: The name of the label image for an ome-zarr output, see `get_label_name`.
+        overwrite: Whether to replace a stored result.
+    """
+    output_path = str(output_path)
+    if output_exists(output_path, label_name) and not overwrite:
+        raise FileExistsError(f"{describe_output(output_path, label_name)} exists already. Pass overwrite=True.")
+
+    output_dir = os.path.dirname(output_path.rstrip("/"))
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    if is_ome_zarr_path(output_path):
+        _write_ome_zarr_labels(output_path, np.asarray(segmentation), label_name)
+    else:
+        imageio.imwrite(output_path, segmentation, compression="zlib")

@@ -174,6 +174,8 @@ def automatic_instance_segmentation(
     num_prefetch_workers: int = 4,
     num_write_workers: int = 2,
     norm_bounds: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+    label_name: Optional[str] = None,
+    overwrite: bool = False,
     **generate_kwargs,
 ) -> np.ndarray:
     """Run automatic instance segmentation for a single input and save the result.
@@ -183,7 +185,10 @@ def automatic_instance_segmentation(
             use it to precompute the image embeddings.
         segmenter: The automatic instance segmentation generator (see `get_predictor_and_segmenter`).
         input_path: The input image, either a filepath (e.g. tif or a container with `key`) or an array.
-        output_path: Optional path to save the segmentation as a tif file.
+        output_path: Optional path to save the segmentation. A path that ends with '.ome.zarr' saves it as
+            'labels/<label_name>' in this ome-zarr file, which can be the input itself. Any other path saves it
+            as an image file, by default a tif. If the result exists already, the function loads and returns it
+            instead of a new computation, unless `overwrite` is True.
         embedding_path: The optional path to cache the image embeddings. The function saves the
             embeddings there, and it uses them again in a later call. The decoder-based engines always
             precompute the embeddings. Without this path, they keep the embeddings in memory (untiled
@@ -216,6 +221,9 @@ def automatic_instance_segmentation(
             `batched_inference._volume_normalization_bounds`), computed from the input when not given.
             Pass the bounds of the whole volume when the input is only one block of it, so that a
             block of mostly background is not stretched to its own bounds.
+        label_name: The name of the label image for an ome-zarr output. By default the name of the input image
+            for an ome-zarr input, otherwise the normalized name of the input file.
+        overwrite: Whether to replace a result that exists already at `output_path`.
         generate_kwargs: Additional post-processing parameters forwarded to the segmenter's `generate`.
 
     Returns:
@@ -224,9 +232,18 @@ def automatic_instance_segmentation(
     import shutil
     import warnings
 
+    from .._io import (
+        describe_output, get_label_name, get_output_path, load_output, skip_existing_output, write_segmentation,
+    )
     from ..util import load_image_data, make_temp_embedding_path, prepare_annotation_image
     from .util import precompute_image_embeddings
     from .instance_segmentation import amg_3d_segmentation, retile_instance_segmentation_generator
+
+    if output_path is not None:
+        output_path = get_output_path(output_path)
+        label_name = get_label_name(input_path, key=key, label_name=label_name)
+        if skip_existing_output(output_path, label_name, overwrite):
+            return load_output(output_path, label_name)
 
     raw = input_path if isinstance(input_path, np.ndarray) else load_image_data(input_path, key=key)
     # Normalize the input the same way the annotation tools do: squeeze singleton axes and move a
@@ -347,10 +364,9 @@ def automatic_instance_segmentation(
         segmentation = segmenter.generate(**generate_kwargs)
 
     if output_path is not None:
-        import imageio.v3 as imageio
-        imageio.imwrite(output_path, segmentation, compression="zlib")
+        write_segmentation(output_path, segmentation, label_name=label_name, overwrite=overwrite)
         if verbose:
-            print(f"The automatic segmentation results are stored at '{os.path.abspath(str(output_path))}'.")
+            print(f"The automatic segmentation results are stored at {describe_output(output_path, label_name)}.")
 
     return segmentation
 

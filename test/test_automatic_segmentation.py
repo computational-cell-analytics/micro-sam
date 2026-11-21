@@ -208,3 +208,26 @@ class TestAutomaticSegmentation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize("extension", [".tif", ".ome.zarr"])
+def test_automatic_instance_segmentation_skips_existing_output(tmp_path, extension):
+    from micro_sam._io import write_segmentation
+    from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation
+
+    image = np.zeros((16, 16), dtype="uint8")
+    stored = np.arange(256, dtype="uint32").reshape(16, 16)
+    output_path = str(tmp_path / f"out{extension}")
+    write_segmentation(output_path, stored, label_name="cells")
+
+    # Without the model, the function can only return the stored result.
+    result = automatic_instance_segmentation(
+        predictor=None, segmenter=None, input_path=image, output_path=output_path, label_name="cells",
+    )
+    np.testing.assert_array_equal(result, stored)
+    result, embeddings = automatic_instance_segmentation(
+        predictor=None, segmenter=None, input_path=image, output_path=output_path, label_name="cells",
+        return_embeddings=True,
+    )
+    np.testing.assert_array_equal(result, stored)
+    assert embeddings is None

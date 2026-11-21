@@ -46,6 +46,16 @@ SEGMENTATION_KEY_HELP = (
 INPUTS_HELP = (
     "image files, container files (e.g. hdf5, zarr, ome-zarr, n5) or folders, together with '--pattern'"
 )
+OUTPUT_HELP = (
+    "The filepath to store the results. For a single input use a tif file, or an ome-zarr file ('*.ome.zarr'), "
+    "which stores the result as 'labels/<label_name>'. The ome-zarr file can be the input itself. "
+    "For multiple inputs use a folder, which stores a tif file per input."
+)
+LABEL_NAME_HELP = (
+    "The name of the label image for an ome-zarr output. By default the name of the input image "
+    "for an ome-zarr input, otherwise the name of the input file."
+)
+OVERWRITE_HELP = "Whether to replace existing results. By default, the inputs with existing results are skipped."
 
 
 @click.group(context_settings=dict(help_option_names=["-h", "--help"]), epilog=CLI_EPILOG)
@@ -472,9 +482,23 @@ def _parse_extra(tokens):
 
 
 def _resolve_output_paths(input_paths, output_path):
-    """Resolve per-input output tif paths. A single input maps to a tif, multiple inputs to a folder."""
+    """Resolve per-input output paths.
+
+    A single input maps to a tif or an ome-zarr file, multiple inputs to a folder of tifs.
+    """
     import os
-    from ._io import get_input_name
+    from ._io import get_input_name, is_ome_zarr_path
+
+    if is_ome_zarr_path(output_path):
+        if len(input_paths) != 1:
+            raise click.UsageError(
+                f"The ome-zarr output '{output_path}' is only supported for a single input, "
+                f"but there are {len(input_paths)} inputs. Pass a folder to store a tif file per input."
+            )
+        output_dir = os.path.dirname(output_path.rstrip("/"))
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        return [output_path]
 
     if len(input_paths) == 1:
         output_fpath = f"{os.path.splitext(output_path)[0]}.tif"
@@ -507,11 +531,9 @@ def _view_result(image_path, key, segmentation):
     "-i", "--input", "input_path", required=True, multiple=True,
     help=f"The image data: {INPUTS_HELP}."
 )
-@click.option(
-    "-o", "--output", "output_path", required=True,
-    help="The filepath to store the results. For multiple inputs use a folder. "
-    "For a single image use a tif file."
-)
+@click.option("-o", "--output", "output_path", required=True, help=OUTPUT_HELP)
+@click.option("--label_name", default=None, help=LABEL_NAME_HELP)
+@click.option("--overwrite", is_flag=True, default=False, help=OVERWRITE_HELP)
 @click.option("-e", "--embedding_path", default=None, help="Optional path where the embeddings will be cached.")
 @click.option(
     "--pattern", default=None,
@@ -567,7 +589,7 @@ def _view_result(image_path, key, segmentation):
 @click.option("-v", "--verbose", is_flag=True, default=False, help="Whether to print verbose output.")
 @click.pass_context
 def inference_segmentation(
-    ctx, input_path, output_path, embedding_path, pattern, key, model_type, checkpoint_path,
+    ctx, input_path, output_path, label_name, overwrite, embedding_path, pattern, key, model_type, checkpoint_path,
     tile_shape, halo, ndim, engine, mode, device, batch_size, devices, view, verbose,
 ):
     """Run automatic instance segmentation.
@@ -645,6 +667,8 @@ def inference_segmentation(
             batch_size=batch_size,
             devices=devices,
             verbose=verbose,
+            label_name=label_name,
+            overwrite=overwrite,
             **generate_kwargs,
         )
         if view:
@@ -778,10 +802,9 @@ def _classifier_common_options(f):
             "-i", "--input", "input_path", required=True, multiple=True,
             help=f"The image data: {INPUTS_HELP}."
         ),
-        click.option(
-            "-o", "--output", "output_path", required=True,
-            help="The filepath to store the results. For multiple inputs a folder; for a single image a tif file."
-        ),
+        click.option("-o", "--output", "output_path", required=True, help=OUTPUT_HELP),
+        click.option("--label_name", default=None, help=LABEL_NAME_HELP),
+        click.option("--overwrite", is_flag=True, default=False, help=OVERWRITE_HELP),
         click.option(
             "--classifier", "rf_path", required=True, help="The trained classifier (.joblib) to run prediction with."
         ),
@@ -805,15 +828,26 @@ def _classifier_common_options(f):
     return f
 
 
+def _outputs_to_compute(input_paths, output_path, key, label_name, overwrite):
+    """Get (input index, output path, label name) for the inputs whose result must be computed."""
+    from ._io import get_label_name, skip_existing_output
+
+    outputs = []
+    for i, (path, output_fpath) in enumerate(zip(input_paths, _resolve_output_paths(input_paths, output_path))):
+        name = get_label_name(path, key=key, label_name=label_name)
+        if not skip_existing_output(output_fpath, name, overwrite):
+            outputs.append((i, output_fpath, name))
+    return outputs
+
+
 @inference_group.command("pixel-classification")
 @_classifier_common_options
 def inference_pixel_classification(
-    input_path, output_path, rf_path, pattern, key, model_type, checkpoint_path, tile_shape, halo, ndim, device,
+    input_path, output_path, label_name, overwrite, rf_path, pattern, key, model_type, checkpoint_path,
+    tile_shape, halo, ndim, device,
 ):
     """Apply a trained pixel classifier."""
-    import imageio.v3 as imageio
-
-    from ._io import get_input_paths
+    from ._io import get_input_paths, write_segmentation
     from .pixel_classification import run_prediction_with_pixel_classifier
 
     tile_shape, halo = _parse_shape(tile_shape), _parse_shape(halo)
@@ -824,14 +858,17 @@ def inference_pixel_classification(
     input_paths = get_input_paths(list(input_path), pattern)
     if len(input_paths) == 0:
         raise click.UsageError("'micro_sam' could not find any image data (quote '--pattern' for folders).")
-    output_paths = _resolve_output_paths(input_paths, output_path)
+    outputs = _outputs_to_compute(input_paths, output_path, key, label_name, overwrite)
+    if not outputs:
+        return
+    input_paths = [input_paths[i] for i, _, _ in outputs]
 
     predictions = run_prediction_with_pixel_classifier(
         images=input_paths, predictor=predictor, rf_path=rf_path, image_key=key, ndim=ndim,
         upsampler=upsampler, model_type=model_type, classical_features=classical_features,
     )
-    for prediction, output_fpath in zip(predictions, output_paths):
-        imageio.imwrite(output_fpath, prediction, compression="zlib")
+    for prediction, (_, output_fpath, name) in zip(predictions, outputs):
+        write_segmentation(output_fpath, prediction, label_name=name, overwrite=overwrite)
 
 
 @inference_group.command("object-classification")
@@ -846,13 +883,11 @@ def inference_pixel_classification(
 )
 @_classifier_common_options
 def inference_object_classification(
-    input_path, output_path, rf_path, pattern, key, model_type, checkpoint_path, tile_shape, halo, ndim, device,
-    segmentation_path, segmentation_key, segmentation_pattern,
+    input_path, output_path, label_name, overwrite, rf_path, pattern, key, model_type, checkpoint_path,
+    tile_shape, halo, ndim, device, segmentation_path, segmentation_key, segmentation_pattern,
 ):
     """Apply a trained object classifier."""
-    import imageio.v3 as imageio
-
-    from ._io import get_input_paths
+    from ._io import get_input_paths, write_segmentation
     from .object_classification import run_prediction_with_object_classifier
 
     tile_shape, halo = _parse_shape(tile_shape), _parse_shape(halo)
@@ -868,15 +903,19 @@ def inference_object_classification(
         raise click.UsageError(
             f"The number of images ({len(input_paths)}) and segmentations ({len(segmentation_paths)}) must match."
         )
-    output_paths = _resolve_output_paths(input_paths, output_path)
+    outputs = _outputs_to_compute(input_paths, output_path, key, label_name, overwrite)
+    if not outputs:
+        return
+    input_paths = [input_paths[i] for i, _, _ in outputs]
+    segmentation_paths = [segmentation_paths[i] for i, _, _ in outputs]
 
     predictions = run_prediction_with_object_classifier(
         images=input_paths, segmentations=segmentation_paths, predictor=predictor, rf_path=rf_path,
         image_key=key, segmentation_key=segmentation_key, ndim=ndim, upsampler=upsampler, model_type=model_type,
         classical_features=classical_features,
     )
-    for prediction, output_fpath in zip(predictions, output_paths):
-        imageio.imwrite(output_fpath, prediction, compression="zlib")
+    for prediction, (_, output_fpath, name) in zip(predictions, outputs):
+        write_segmentation(output_fpath, prediction, label_name=name, overwrite=overwrite)
 
 
 @cli.command("precompute-embeddings")
