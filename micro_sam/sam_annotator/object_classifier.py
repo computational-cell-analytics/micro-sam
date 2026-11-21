@@ -2,7 +2,6 @@ from multiprocessing import cpu_count
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
-import imageio.v3 as imageio
 from skimage.measure import regionprops_table
 
 from sklearn.decomposition import PCA
@@ -306,9 +305,10 @@ class ObjectClassificationBatchTask(ClassificationBatchTask):
     aux_attr = "seg_ids"
     rf_attr = "object_rf"
 
-    def __init__(self, *, segmentations, **kwargs):
+    def __init__(self, *, segmentations, segmentation_key=None, **kwargs):
         super().__init__(**kwargs)
         self.segmentations = segmentations
+        self.segmentation_key = segmentation_key
         self.visited_segmentations = {}
 
     def on_leave_item(self, viewer, entry, index):
@@ -322,7 +322,7 @@ class ObjectClassificationBatchTask(ClassificationBatchTask):
         seg = None if self.segmentations is None else self.segmentations[index]
         seg = self.visited_segmentations.get(index, seg)
         if seg is not None and not isinstance(seg, np.ndarray):
-            seg = imageio.imread(seg)
+            seg = util.load_image_data(seg, key=self.segmentation_key, is_segmentation=True)
         if seg is not None:
             seg = util.match_image_shape(seg, AnnotatorState().image_shape)
         # Without a segmentation, an empty one, so the objects of the previous item are not carried over.
@@ -349,6 +349,8 @@ def batch_object_classifier(
     return_viewer: bool = False,
     skip_done: bool = False,
     batch_size: Optional[int] = 1,
+    key: Optional[str] = None,
+    segmentation_key: Optional[str] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Start the object classifier for a list of images and segmentations.
 
@@ -378,6 +380,8 @@ def batch_object_classifier(
             Only has an effect on a GPU. Pass None to select it per device from the free VRAM
             (SAM2 only). By default a single tile / slice is used.
         skip_done: Whether to skip images whose prediction already exists in `output_folder`.
+        key: The key for loading the images from files, see `micro_sam.util.load_image_data`.
+        segmentation_key: The key for loading the segmentations from files.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -389,14 +393,14 @@ def batch_object_classifier(
 
     have_inputs_as_arrays = isinstance(images[0], np.ndarray)
     if ndim is None:
-        ndim = load_batch_image(images[0])[1]
+        ndim = load_batch_image(images[0], key=key)[1]
 
     task = ObjectClassificationBatchTask(
-        segmentations=segmentations, ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,
-        tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path, device=device,
-        batch_size=batch_size,
+        segmentations=segmentations, segmentation_key=segmentation_key, ndim=ndim, model_type=model_type,
+        embedding_paths=embedding_paths, tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path,
+        device=device, batch_size=batch_size,
     )
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
-        viewer=viewer, return_viewer=return_viewer, skip_done=skip_done,
+        viewer=viewer, return_viewer=return_viewer, skip_done=skip_done, key=key,
     )

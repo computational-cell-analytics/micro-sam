@@ -23,6 +23,8 @@ from torch.utils.data import DataLoader, Dataset
 
 from elf.io import open_file
 
+from ..._io import is_container, resolve_container_key
+
 FilePath = Union[str, os.PathLike]
 
 TRAINING_MODES = ("interactive", "automatic", "joint", "semantic")
@@ -36,40 +38,22 @@ def _is_pattern(key: Optional[str]) -> bool:
     return key is not None and any(character in key for character in GLOB_CHARACTERS)
 
 
-def _ome_zarr_scale_key(path, key):
-    """The key of the first (full resolution) scale, if the key points to an ome-zarr image or label group."""
-    import zarr
-
-    if not os.path.isdir(path) or not str(path).rstrip("/").endswith(".zarr"):
-        return key
-    try:
-        node = zarr.open(path, mode="r") if not key else zarr.open(path, mode="r", path=key)
-    except Exception:
-        return key
-    if not isinstance(node, zarr.Group):
-        return key
-    attrs = node.attrs.asdict()
-    multiscales = attrs.get("ome", attrs).get("multiscales")
-    if not multiscales:
-        return key
-    scale = multiscales[0]["datasets"][0]["path"]
-    return scale if not key else f"{key.rstrip('/')}/{scale}"
-
-
 def resolve_data_paths(
-    paths: Union[FilePath, Sequence[FilePath], Sequence[np.ndarray]], key: Optional[str],
+    paths: Union[FilePath, Sequence[FilePath], Sequence[np.ndarray]], key: Optional[str], is_segmentation: bool = False,
 ) -> Tuple[list, Optional[str]]:
     """Resolve the image or label paths and key that a user passes to a list of inputs and a key.
 
     A folder with a glob pattern as key, e.g. ('images/', '*.tif'), is expanded to the sorted list of matching
     files, and the key becomes None. Each file is then one image (2d) or one volume (3d). A container file
-    (e.g. h5, zarr or n5) keeps its key, which selects the data inside the file. For an ome-zarr file, the
-    key can also be the image or label group, e.g. None for the image and 'labels/cells' for the labels:
-    it then selects the full resolution scale of that group.
+    (e.g. h5, zarr or n5) keeps its key, which selects the data inside the file. For zarr, ome-zarr and n5
+    files, the key is resolved with the first file, see `micro_sam.util.load_image_data`: e.g. an ome-zarr
+    image or label group selects its full resolution scale, and without a key the image (or the label image,
+    for `is_segmentation`) of an ome-zarr file or the single array of a zarr or n5 file is selected.
 
     Args:
         paths: A file path, a folder, or a list of either. A list of numpy arrays is returned as it is.
         key: The key of the data inside a container file, a glob pattern for a folder, or None for image files.
+        is_segmentation: Whether the paths point to segmentations (labels).
 
     Returns:
         The list of inputs, and the key for them.
@@ -84,7 +68,9 @@ def resolve_data_paths(
         return paths, None
     if not _is_pattern(key):
         paths = [str(path) for path in paths]
-        return paths, _ome_zarr_scale_key(paths[0], key) if paths else key
+        if paths and is_container(paths[0]):
+            key = resolve_container_key(paths[0], key, is_segmentation=is_segmentation)
+        return paths, key
 
     files = []
     for folder in paths:
@@ -216,7 +202,7 @@ def default_sam2_dataset(
         raise ValueError(f"Training in 3d needs a (z, y, x) patch shape, got {patch_shape}.")
 
     raw_paths, raw_key = resolve_data_paths(raw_paths, raw_key)
-    label_paths, label_key = resolve_data_paths(label_paths, label_key)
+    label_paths, label_key = resolve_data_paths(label_paths, label_key, is_segmentation=True)
     if len(raw_paths) != len(label_paths):
         raise ValueError(f"There are {len(raw_paths)} images, but {len(label_paths)} label images.")
     if len(raw_paths) == 0:

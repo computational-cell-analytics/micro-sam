@@ -694,13 +694,20 @@ def get_sam2_model(
     if input_type not in ("images", "videos"):
         raise ValueError(f"'{input_type}' is not a valid input type.")
 
+    from micro_sam._provenance import local_reference, registry_reference
+
     model_hash = None
     if checkpoint_path is None:
         checkpoint_path = _get_registry_checkpoint(model_type)
+        if model_type in FINETUNED_MODELS:
+            weights_reference = registry_reference(FINETUNED_URLS[model_type], FINETUNED_HASHES[model_type], "model")
+        else:
+            weights_reference = registry_reference(URLS[model_type], HASHES[model_type], "model")
     else:
         # The cached embeddings of other weights with the same model name must not be reused.
         from micro_sam.util import _compute_hash
         model_hash = _compute_hash(checkpoint_path)
+        weights_reference = {**local_reference(checkpoint_path, "model"), "checksum": model_hash}
 
     state, model_state, encoder_only = _read_sam2_checkpoint(checkpoint_path)
     backbone = detect_sam2_backbone(model_state)
@@ -730,6 +737,8 @@ def get_sam2_model(
     model.model_type = model_type
     model.model_name = model_type  # TODO: What is this exactly?
     model._hash = model_hash
+    # The source of the weights, for the provenance metadata of results.
+    model._weights_reference = weights_reference
 
     return model
 
@@ -830,7 +839,7 @@ def get_sam2_image_predictor(model, **kwargs):
     which the embedding cache writes to its signature and checks.
     """
     predictor = configure_image_predictor(_PrecisionImagePredictor(model, **kwargs))
-    for name in ("model_type", "model_name", "_hash"):
+    for name in ("model_type", "model_name", "_hash", "_weights_reference"):
         if hasattr(model, name):
             setattr(predictor, name, getattr(model, name))
     return predictor

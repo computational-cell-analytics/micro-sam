@@ -39,6 +39,7 @@ from bioimage_cpp.distance import distance_transform
 from bioimage_cpp.segmentation import label, relabel_sequential
 
 from .__version__ import __version__
+from ._io import is_container, load_container_data
 
 try:
     # Avoid import warnigns from mobile_sam
@@ -901,17 +902,27 @@ def get_centers_and_bounding_boxes(
     return center_coordinates, bbox_coordinates
 
 
-def load_image_data(path: str, key: Optional[str] = None, lazy_loading: bool = False) -> np.ndarray:
+def load_image_data(
+    path: str, key: Optional[str] = None, lazy_loading: bool = False, is_segmentation: bool = False,
+) -> np.ndarray:
     """Helper function to load image data from file.
 
     Args:
-        path: The filepath to the image data.
-        key: The internal filepath for complex data formats like hdf5.
+        path: The filepath to the image data. This can be an image file, e.g. a tif or png, a container file,
+            e.g. hdf5, zarr, ome-zarr or n5, or a folder of images that is loaded as a stack.
+        key: The internal filepath for container files, or a wildcard like '*.tif' for a folder of images.
+            It is optional for zarr, ome-zarr and n5 data: without a key, the highest resolution of the image of an
+            ome-zarr file, or the single array of a zarr or n5 file is loaded.
         lazy_loading: Whether to lazyly load data. Only supported for n5 and zarr data.
+        is_segmentation: Whether the data is a segmentation. Without a key, the single label image of an ome-zarr
+            file is then loaded instead of the image.
 
     Returns:
         The image data.
     """
+    if is_container(path):
+        return load_container_data(path, key, lazy_loading=lazy_loading, is_segmentation=is_segmentation)
+
     if key is None:
         image_data = imageio.imread(path)
     else:

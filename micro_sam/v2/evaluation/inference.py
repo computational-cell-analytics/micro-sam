@@ -11,14 +11,13 @@ from sam2.automatic_mask_generator import SAM2AutomaticMaskGenerator
 
 import torch
 
-from elf.io import open_file
-
 from torch_em.util.segmentation import size_filter
 
 from bioimage_cpp.segmentation import label as connected_components
 
 from micro_sam.v2.normalization import to_image
-from micro_sam.util import segmentation_to_one_hot, mask_data_to_segmentation
+from micro_sam._io import get_input_name
+from micro_sam.util import load_image_data, segmentation_to_one_hot, mask_data_to_segmentation
 from micro_sam.prompt_generators import CenterIterativePromptGenerator, IterativePromptGenerator
 from micro_sam.v1.evaluation.inference import (
     _get_batched_prompts, _get_batched_iterative_prompts, _save_segmentation,
@@ -84,17 +83,14 @@ def run_amg(
     os.makedirs(prediction_dir, exist_ok=True)
 
     for image_path in tqdm(image_paths, desc="Run inference for automatic mask generation"):
-        image_name = Path(os.path.basename(image_path)).with_suffix(".tif")
+        image_name = f"{get_input_name(image_path)}.tif"
 
         # We skip the images that are already segmented.
         prediction_path = os.path.join(prediction_dir, image_name)
         if os.path.exists(prediction_path):
             continue
 
-        if image_key is None:
-            image = imageio.imread(image_path)
-        else:
-            image = open_file(image_path)[image_key][:]
+        image = load_image_data(image_path, key=image_key)
 
         if ensure_8bit:
             image = to_image(image)
@@ -355,27 +351,21 @@ def run_interactive_segmentation_2d(
         assert os.path.exists(image_path), image_path
         assert os.path.exists(gt_path), gt_path
 
-        image_name = Path(os.path.basename(image_path)).with_suffix(".tif")
+        image_name = f"{get_input_name(image_path)}.tif"
 
         # We skip the images that have already been segmented
         prediction_paths = [os.path.join(prediction_dir, f"iteration{i:02}", image_name) for i in range(n_iterations)]
         if all(os.path.exists(prediction_path) for prediction_path in prediction_paths):
             continue
 
-        if image_key is None:
-            image = imageio.imread(image_path)
-        else:
-            image = open_file(image_path)[image_key][:]
+        image = load_image_data(image_path, key=image_key)
 
         if ensure_8bit:
             image = to_image(image)
         elif image.ndim == 2:
             image = np.stack([image] * 3, axis=-1)
 
-        if gt_key is None:
-            gt = imageio.imread(gt_path)
-        else:
-            gt = open_file(gt_path)[gt_key][:]
+        gt = load_image_data(gt_path, key=gt_key, is_segmentation=True)
 
         # Run connected components on labels
         gt = connected_components(gt).astype("uint32")

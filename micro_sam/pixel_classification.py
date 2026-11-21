@@ -509,7 +509,7 @@ def run_training_with_pixel_classifier(
         if isinstance(image, (str, os.PathLike)):
             image = util.load_image_data(image, key=image_key)
         if isinstance(annotation, (str, os.PathLike)):
-            annotation = util.load_image_data(annotation, key=annotation_key)
+            annotation = util.load_image_data(annotation, key=annotation_key, is_segmentation=True)
 
         # Prepared in the same way as in the annotator, so the features match those of the GUI.
         image, this_ndim, _ = util.prepare_annotation_image(image, ndim=ndim)

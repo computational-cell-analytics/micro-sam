@@ -17,6 +17,7 @@ from ._titles import get_dock_title
 from ._annotator import _AnnotatorBase
 from ..util import prepare_annotation_image
 from ._batch import BatchAnnotatorTask, run_batch
+from .._io import get_input_name
 from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
 
 # Cyan (track) and Magenta (division)
@@ -550,7 +551,7 @@ class TrackingBatchTask(BatchAnnotatorTask):
     def result_filename(self, entry, index):
         if self.have_inputs_as_arrays:
             return f"tracks_{index:05}.tif"
-        return os.path.splitext(os.path.basename(entry))[0] + "_tracks.tif"
+        return get_input_name(entry) + "_tracks.tif"
 
     def precompute(self, images):
         # The SAM2 video embeddings are computed lazily per video in start/advance. When an embedding
@@ -561,7 +562,7 @@ class TrackingBatchTask(BatchAnnotatorTask):
         if self.have_inputs_as_arrays:
             return [os.path.join(self.embedding_path, f"tracking_{i:05}.zarr") for i in range(len(images))]
         return [
-            os.path.join(self.embedding_path, os.path.splitext(os.path.basename(p))[0] + ".zarr") for p in images
+            os.path.join(self.embedding_path, get_input_name(p) + ".zarr") for p in images
         ]
 
     def _init_predictor(self, image, embedding_path, reuse):
@@ -634,6 +635,7 @@ def batch_tracking_annotator(
     return_viewer: bool = False,
     skip_done: bool = True,
     batch_size: Optional[int] = 1,
+    key: Optional[str] = None,
 ) -> Optional["napari.viewer.Viewer"]:
     """Run the tracking annotation tool for a batch of timeseries (each item is one TYX video).
 
@@ -659,6 +661,7 @@ def batch_tracking_annotator(
         batch_size: The number of tiles / slices per model call when computing the embeddings.
             Only has an effect on a GPU. Pass None to select it per device from the free VRAM
             (SAM2 only). By default a single tile / slice is used.
+        key: The key for loading the images from files, see `micro_sam.util.load_image_data`.
 
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
@@ -671,5 +674,5 @@ def batch_tracking_annotator(
     )
     return run_batch(
         images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
-        viewer=viewer, return_viewer=return_viewer, skip_done=skip_done,
+        viewer=viewer, return_viewer=return_viewer, skip_done=skip_done, key=key,
     )

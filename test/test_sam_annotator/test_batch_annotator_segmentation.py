@@ -195,6 +195,40 @@ def test_image_folder_annotator(make_napari_viewer_proxy):
         viewer.close()  # must close the viewer at the end of tests
 
 
+def test_load_batch_image_from_containers(tmp_path):
+    from micro_sam._test_util import write_container
+    from micro_sam.sam_annotator._batch import load_batch_image
+
+    raw = binary_blobs(64).astype("uint8")
+    path = str(tmp_path / "data.zarr")
+    write_container(path, raw, raw)
+    with pytest.raises(ValueError, match="2 arrays"):
+        load_batch_image(path)
+    image, ndim = load_batch_image(path, key="raw")
+    np.testing.assert_array_equal(image, raw)
+    assert ndim == 2
+
+
+@pytest.mark.gui
+@pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
+def test_image_folder_annotator_with_containers(make_napari_viewer_proxy, tmp_path):
+    """The images and initial segmentations are loaded from the image and label image of ome-zarr files."""
+    from micro_sam._test_util import write_ome_zarr
+
+    labels = (binary_blobs(512, rng=0)).astype("uint32")
+    for i in range(2):
+        write_ome_zarr(str(tmp_path / f"image-{i}.ome.zarr"), binary_blobs(512, rng=i).astype("uint8"), labels)
+
+    viewer = image_folder_annotator(
+        str(tmp_path), str(tmp_path / "segmentation_results"), pattern="*.ome.zarr",
+        initial_segmentation_folder=str(tmp_path), initial_segmentation_pattern="*.ome.zarr",
+        model_type=DEFAULT_MODEL, viewer=make_napari_viewer_proxy(), return_viewer=True,
+    )
+    assert viewer.layers["image"].data.shape == (512, 512)
+    np.testing.assert_array_equal(viewer.layers["committed_objects"].data != 0, labels != 0)
+    viewer.close()
+
+
 @pytest.mark.gui
 @pytest.mark.skipif(platform.system() in ("Windows",), reason="Gui test is not working on windows.")
 def test_batch_annotator_continue_or_restart(make_napari_viewer_proxy):

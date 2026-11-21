@@ -208,3 +208,56 @@ class TestAutomaticSegmentation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize("extension", [".tif", ".ome.zarr"])
+def test_automatic_instance_segmentation_skips_existing_output(tmp_path, extension):
+    from micro_sam._io import write_segmentation
+    from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation
+
+    image = np.zeros((16, 16), dtype="uint8")
+    stored = np.arange(256, dtype="uint32").reshape(16, 16)
+    output_path = str(tmp_path / f"out{extension}")
+    write_segmentation(output_path, stored, label_name="cells")
+
+    # Without the model, the function can only return the stored result.
+    result = automatic_instance_segmentation(
+        predictor=None, segmenter=None, input_path=image, output_path=output_path, label_name="cells",
+    )
+    np.testing.assert_array_equal(result, stored)
+    result, embeddings = automatic_instance_segmentation(
+        predictor=None, segmenter=None, input_path=image, output_path=output_path, label_name="cells",
+        return_embeddings=True,
+    )
+    np.testing.assert_array_equal(result, stored)
+    assert embeddings is None
+
+
+def test_provenance_step(tmp_path):
+    from types import SimpleNamespace
+
+    from micro_sam.v1.automatic_segmentation import _provenance_step
+
+    def generate(min_size=25, **kwargs):
+        pass
+
+    predictor = SimpleNamespace(
+        model_name="vit_b_lm",
+        _weights_reference={"uri": "https://a.org/model", "name": "model"},
+        _decoder_reference={"uri": "https://a.org/decoder", "name": "decoder"},
+    )
+    segmenter = SimpleNamespace(
+        generate=generate, _provenance={"segmentation_mode": "ais", "segmenter": {}},
+    )
+    path, mask_path = str(tmp_path / "image.ome.zarr"), str(tmp_path / "mask.tif")
+    step = _provenance_step(
+        predictor, segmenter, path, "s0", path, mask_path, None, ndim=2, tile_shape=(64, 64), halo=(8, 8),
+        generate_kwargs={"center_distance_threshold": 0.4}, started=None,
+    )
+    assert step["software"]["entry_point"].startswith("micro_sam.v1.automatic_segmentation")
+    assert [reference["name"] for reference in step["inputs"]] == ["image", "mask", "model", "decoder"]
+    assert step["inputs"][0]["path"] == "." and step["inputs"][1]["id"] == "mask.tif"
+    assert step["parameters"] == {
+        "model_type": "vit_b_lm", "segmentation_mode": "ais", "ndim": 2, "tile_shape": [64, 64], "halo": [8, 8],
+        "generate": {"min_size": 25, "center_distance_threshold": 0.4},
+    }

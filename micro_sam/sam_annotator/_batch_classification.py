@@ -19,6 +19,7 @@ from ._titles import PLUGIN_NAME
 from ._state import AnnotatorState
 from ._tooltips import get_tooltip
 from ._batch import BatchAnnotatorTask
+from .._io import get_input_name
 from ..v2.util import resolve_default_tiling
 from .util import _sync_embedding_widget, _sync_tiling_widget
 
@@ -53,7 +54,7 @@ class ClassificationBatchTask(BatchAnnotatorTask):
     def _item_filename(self, entry, index, suffix):
         if self.have_inputs_as_arrays:
             return f"{suffix}_{index:05}.tif"
-        return os.path.splitext(os.path.basename(entry))[0] + f"_{suffix}.tif"
+        return get_input_name(entry) + f"_{suffix}.tif"
 
     def result_filename(self, entry, index):
         return self._item_filename(entry, index, "prediction")
