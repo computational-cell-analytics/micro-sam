@@ -351,16 +351,33 @@ def test_decoder_autocast_follows_the_device_precision(monkeypatch):
     assert calls == [("cuda", torch.bfloat16)]
 
 
-@pytest.mark.parametrize("device_type", ("cpu", "mps"))
-def test_decoder_autocast_is_disabled_outside_cuda(device_type, monkeypatch):
+def test_decoder_autocast_is_disabled_on_cpu(monkeypatch):
     from micro_sam.v2.util import autocast
 
     def fail_autocast(*args, **kwargs):
-        pytest.fail(f"Decoder inference on {device_type} must not enable autocast.")
+        pytest.fail("Decoder inference on cpu must not enable autocast.")
 
     monkeypatch.setattr(torch, "autocast", fail_autocast)
-    with autocast(torch.device(device_type)):
+    with autocast(torch.device("cpu")):
         pass
+
+
+def test_inference_runs_in_fp16_on_mps(monkeypatch):
+    from micro_sam.v2.util import autocast, precision_name
+
+    calls = []
+
+    def fake_autocast(device_type, dtype):
+        calls.append((device_type, dtype))
+        return nullcontext()
+
+    monkeypatch.setattr(torch, "autocast", fake_autocast)
+    with autocast(torch.device("mps")):
+        pass
+
+    assert calls == [("mps", torch.float16)]
+    # The cache signature records the encoder precision.
+    assert precision_name(torch.device("mps")) == "fp16"
 
 
 def test_full_inference_uses_decoder_autocast(monkeypatch):

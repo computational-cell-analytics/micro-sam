@@ -174,10 +174,14 @@ def _release_model_replicas(model_devices: List[Tuple[torch.nn.Module, torch.dev
     Args:
         model_devices: The (model, device) pairs returned by `_prepare_models`. Cleared in place.
     """
+    device_types = {device.type for _, device in model_devices}
     model_devices.clear()
     gc.collect()
-    if torch.cuda.is_available():
+    if "cuda" in device_types:
         torch.cuda.empty_cache()
+    # MPS keeps the decoder activations cached otherwise, which pushes the following steps into swap.
+    if "mps" in device_types:
+        torch.mps.empty_cache()
 
 
 def _is_oom_error(exc: Exception) -> bool:
@@ -226,7 +230,7 @@ def _measure_batch_throughput(
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
             start = time.perf_counter()
-            with torch.no_grad():
+            with torch.inference_mode():
                 output = prediction_function(model, inputs)
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
@@ -489,7 +493,7 @@ def _run_batched_pipeline(
                     batch.append(item)
 
                 if batch:
-                    with torch.no_grad():
+                    with torch.inference_mode():
                         predictions, safe_batch_size = _predict_with_oom_backoff(
                             model, [item.data for item in batch], device, predict_fn,
                         )

@@ -247,7 +247,7 @@ def test_consolidation_waits_for_the_offloaded_masks(monkeypatch):
     assert events == ["stream", "consolidate"]
 
 
-def test_autocast_is_used_on_cuda_only(monkeypatch):
+def test_autocast_is_used_on_cuda_and_mps(monkeypatch):
     from micro_sam.v2.models._video_predictor import CustomVideoPredictor
 
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
@@ -256,7 +256,7 @@ def test_autocast_is_used_on_cuda_only(monkeypatch):
 
     assert predictor._autocasts({"device": "cuda:0"})
     assert not predictor._autocasts({"device": "cpu"})
-    assert not predictor._autocasts({"device": "mps"})
+    assert predictor._autocasts({"device": "mps"})
 
 
 @pytest.mark.parametrize(
@@ -297,15 +297,13 @@ def test_a_cuda_request_without_cuda_keeps_fp32(monkeypatch):
     assert not predictor._autocasts({"device": "cuda:0"})
 
 
-@pytest.mark.parametrize("macos_14", [True, False])
-def test_mps_keeps_fp32(monkeypatch, macos_14):
-    """MPS keeps fp32 regardless of whether the OS supports bfloat16 autocast."""
+def test_mps_propagates_in_fp16():
     from micro_sam.v2.models._video_predictor import CustomVideoPredictor
 
     predictor = CustomVideoPredictor.__new__(CustomVideoPredictor)
-    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
 
-    assert not predictor._autocasts({"device": "mps"})
+    assert predictor._autocasts({"device": "mps"})
+    assert predictor._autocast({"device": "mps"}).fast_dtype is torch.float16
 
 
 def test_memory_encoder_restores_the_model_dtype_without_autocast(monkeypatch):
