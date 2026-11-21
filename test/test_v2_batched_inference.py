@@ -501,6 +501,25 @@ class TestResolveDevices(unittest.TestCase):
             batched_inference._resolve_devices(model, ["cpu", "cpu"])
 
 
+class TestReleaseModelReplicas(unittest.TestCase):
+    def test_empties_the_mps_cache(self):
+        pairs = [(torch.nn.Linear(1, 1), torch.device("mps"))]
+        with mock.patch.object(torch.mps, "empty_cache") as mps_empty, \
+                mock.patch.object(torch.cuda, "empty_cache") as cuda_empty:
+            batched_inference._release_model_replicas(pairs)
+        self.assertEqual(pairs, [])
+        mps_empty.assert_called_once()
+        cuda_empty.assert_not_called()
+
+    def test_leaves_the_caches_alone_on_cpu(self):
+        pairs = [(torch.nn.Linear(1, 1), torch.device("cpu"))]
+        with mock.patch.object(torch.mps, "empty_cache") as mps_empty, \
+                mock.patch.object(torch.cuda, "empty_cache") as cuda_empty:
+            batched_inference._release_model_replicas(pairs)
+        mps_empty.assert_not_called()
+        cuda_empty.assert_not_called()
+
+
 class TestPrepareModels(unittest.TestCase):
     def test_reuses_original_for_source_device_and_leaves_it_in_place(self):
         model = torch.nn.Linear(2, 2)

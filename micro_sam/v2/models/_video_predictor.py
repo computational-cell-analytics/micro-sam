@@ -221,7 +221,7 @@ class CustomVideoPredictor(SAM2VideoPredictor):
         return autocast_dtype(inference_state["device"]) is not None
 
     def _autocast(self, inference_state):
-        """Run the propagation in the device precision, which is SAM2's own bfloat16 from Ampere on."""
+        """Run the propagation in the device precision: SAM2's own bfloat16 from Ampere on, fp16 on MPS."""
         from micro_sam.v2.util import autocast
 
         return autocast(inference_state["device"])
