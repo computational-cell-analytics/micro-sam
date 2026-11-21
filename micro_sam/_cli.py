@@ -845,6 +845,37 @@ def _outputs_to_compute(input_paths, output_path, key, label_name, overwrite):
     return outputs
 
 
+def _classifier_provenance(
+    name, category, entry_point, category_terms, rf_path, predictor, model_type, tile_shape, halo, ndim,
+    classical_features,
+):
+    """Get a function that returns the provenance step of a classifier result for its data inputs."""
+    from ._provenance import local_reference, make_step, timestamp
+
+    started = timestamp()
+    parameters = {
+        "model_type": model_type, "tile_shape": tile_shape, "halo": halo, "ndim": ndim,
+        "classical_features": classical_features,
+    }
+    model_inputs = []
+
+    def get_steps(output_path, *data_inputs):
+        from ._io import is_ome_zarr_path
+        if not is_ome_zarr_path(output_path):
+            return None
+        if not model_inputs:
+            model_inputs.extend([
+                getattr(predictor, "_weights_reference", None),
+                local_reference(rf_path, "classifier", with_checksum=True),
+            ])
+        return [make_step(
+            name=name, category=category, entry_point=entry_point, parameters=parameters,
+            inputs=[*data_inputs, *model_inputs], started=started, category_terms=category_terms,
+        )]
+
+    return get_steps
+
+
 @inference_group.command("pixel-classification")
 @_classifier_common_options
 def inference_pixel_classification(
@@ -853,6 +884,7 @@ def inference_pixel_classification(
 ):
     """Apply a trained pixel classifier."""
     from ._io import get_input_paths, write_segmentation
+    from ._provenance import IMAGE_ANALYSIS, IMAGE_SEGMENTATION, image_reference
     from .pixel_classification import run_prediction_with_pixel_classifier
 
     input_paths = get_input_paths(list(input_path), pattern)
@@ -868,12 +900,18 @@ def inference_pixel_classification(
         rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
     )
 
+    get_steps = _classifier_provenance(
+        "Pixel classification", "Segmentation", "micro_sam inference pixel-classification",
+        (IMAGE_ANALYSIS, IMAGE_SEGMENTATION), rf_path, predictor, model_type, tile_shape, halo, ndim,
+        classical_features,
+    )
     predictions = run_prediction_with_pixel_classifier(
         images=input_paths, predictor=predictor, rf_path=rf_path, image_key=key, ndim=ndim,
         upsampler=upsampler, model_type=model_type, classical_features=classical_features,
     )
-    for prediction, (_, output_fpath, name) in zip(predictions, outputs):
-        write_segmentation(output_fpath, prediction, label_name=name, overwrite=overwrite)
+    for prediction, input_fpath, (_, output_fpath, name) in zip(predictions, input_paths, outputs):
+        steps = get_steps(output_fpath, image_reference(input_fpath, key, output_fpath))
+        write_segmentation(output_fpath, prediction, label_name=name, overwrite=overwrite, provenance=steps)
 
 
 @inference_group.command("object-classification")
@@ -893,6 +931,7 @@ def inference_object_classification(
 ):
     """Apply a trained object classifier."""
     from ._io import get_input_paths, write_segmentation
+    from ._provenance import IMAGE_ANALYSIS, SEGMENTATION_MAP, image_reference
     from .object_classification import run_prediction_with_object_classifier
 
     input_paths = get_input_paths(list(input_path), pattern)
@@ -914,13 +953,26 @@ def inference_object_classification(
         rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
     )
 
+    get_steps = _classifier_provenance(
+        "Object classification", "Classification", "micro_sam inference object-classification",
+        (IMAGE_ANALYSIS,), rf_path, predictor, model_type, tile_shape, halo, ndim, classical_features,
+    )
     predictions = run_prediction_with_object_classifier(
         images=input_paths, segmentations=segmentation_paths, predictor=predictor, rf_path=rf_path,
         image_key=key, segmentation_key=segmentation_key, ndim=ndim, upsampler=upsampler, model_type=model_type,
         classical_features=classical_features,
     )
-    for prediction, (_, output_fpath, name) in zip(predictions, outputs):
-        write_segmentation(output_fpath, prediction, label_name=name, overwrite=overwrite)
+    for prediction, input_fpath, segmentation_fpath, (_, output_fpath, name) in zip(
+        predictions, input_paths, segmentation_paths, outputs
+    ):
+        steps = get_steps(
+            output_fpath,
+            image_reference(input_fpath, key, output_fpath),
+            image_reference(
+                segmentation_fpath, segmentation_key, output_fpath, name="segmentation", type=SEGMENTATION_MAP
+            ),
+        )
+        write_segmentation(output_fpath, prediction, label_name=name, overwrite=overwrite, provenance=steps)
 
 
 @cli.command("precompute-embeddings")

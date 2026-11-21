@@ -40,6 +40,14 @@ The commands `micro_sam inference segmentation`, `pixel-classification` and `obj
 
 If a result exists already (the tif file, or the label image in the OME-Zarr file), the command skips this input and shows an info. Use `--overwrite` to replace the result.
 
+An OME-Zarr label image also stores how the command made it. The commands write this metadata to the attributes of the label image, according to the [provenance zarr convention](https://github.com/BioImageTools/zarr-convention-provenance/blob/v0.2.0/README.md):
+- `provenance:steps` holds one step for the command. The python function `automatic_instance_segmentation` writes the same step.
+- `software` gives the `micro_sam` version and the function or command.
+- `parameters` gives the model, the segmentation mode, the tiling and the parameters of the segmentation, with the default values.
+- `inputs` gives the image, the model, and the decoder or classifier. A model from the model registry has its download URL and checksum. A local file has only its file name, and a local model or classifier also has its checksum. The metadata does not contain folder names.
+
+A tif file does not store this metadata.
+
 The automatic segmentation uses the best post-processing parameters for the chosen model by default.
 You can change a parameter by passing it to `micro_sam inference segmentation` as `--<PARAMETER_NAME> <VALUE>`, for example `--min_size 100` to remove smaller objects.
 The defaults are listed by `micro_sam.v2.postprocessing.default_postprocessing` (AIS) and `micro_sam.v2.automatic_prompt_generation.default_prompt_generation` (APG).

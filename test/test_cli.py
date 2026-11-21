@@ -369,10 +369,19 @@ def test_inference_pixel_classification_skips_existing_outputs(monkeypatch, tmp_
     assert len(calls) == 2 and len(calls[-1]) == 3
 
     path = str(container_folder / "a.ome.zarr")
-    args = ["inference", "pixel-classification", "-i", path, "-o", path, "--classifier", "rf.joblib"]
+    rf_path = tmp_path / "rf.joblib"
+    rf_path.write_bytes(b"classifier")
+    args = ["inference", "pixel-classification", "-i", path, "-o", path, "--classifier", str(rf_path)]
     result = runner.invoke(micro_sam_cli.cli, args)
     assert result.exit_code == 0, result.output
     np.testing.assert_array_equal(util.load_image_data(path, key="labels/a"), util.load_image_data(path))
+
+    step, = z5py.File(path, mode="r")["labels/a"].attrs["provenance:steps"]
+    assert step["name"] == "Pixel classification"
+    assert step["parameters"]["model_type"] == "hvit_t"
+    image, classifier = step["inputs"]
+    assert image["path"] == "." and image["name"] == "image"
+    assert classifier["id"] == "rf.joblib" and classifier["checksum"].startswith("xxh128:")
 
 
 def test_inference_object_classification_resolves_containers(monkeypatch, tmp_path, container_folder):

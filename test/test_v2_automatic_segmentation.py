@@ -1221,3 +1221,60 @@ def test_automatic_instance_segmentation_skips_existing_output(tmp_path, extensi
         predictor=None, segmenter=None, input_path=image, output_path=output_path, label_name="cells",
     )
     np.testing.assert_array_equal(result, stored)
+
+
+def _provenance_segmenter(engine, **config):
+    model = types.SimpleNamespace(
+        model_type="hvit_t_cells", _weights_reference={"uri": "https://a.org/model", "name": "model"}
+    )
+    decoder = None if engine == "amg" else types.SimpleNamespace(
+        _weights_reference={"uri": "https://a.org/decoder", "name": "decoder"}
+    )
+
+    def generate(mode="sparse", min_object_size=0, pbar_init=None, **kwargs):
+        pass
+
+    segmenter = types.SimpleNamespace(
+        generate=generate,
+        _generator_config=dict(model=model, decoder=decoder, segmentation_mode=engine, is_tiled=False, **config),
+    )
+    return model, segmenter
+
+
+def test_provenance_step(tmp_path):
+    from micro_sam.v2.automatic_segmentation import _provenance_step
+
+    path = str(tmp_path / "image.ome.zarr")
+    model, segmenter = _provenance_segmenter("ais")
+    step = _provenance_step(
+        model, segmenter, path, None, path, ndim=2, tile_shape=(64, 64), halo=(8, 8), mode="sparse",
+        norm_bounds=None, generate_kwargs={"min_object_size": 5}, started=None,
+    )
+    assert step["software"]["entry_point"].startswith("micro_sam.v2.automatic_segmentation")
+    assert [reference["name"] for reference in step["inputs"]] == ["image", "model", "decoder"]
+    assert step["inputs"][0]["path"] == "."
+    parameters = step["parameters"]
+    assert parameters["model_type"] == "hvit_t_cells" and parameters["segmentation_mode"] == "ais"
+    assert parameters["mode"] == "sparse" and parameters["tile_shape"] == [64, 64]
+    # The defaults of the model, updated with the parameters of the call.
+    defaults = default_postprocessing("hvit_t_cells", "sparse")
+    assert set(defaults) <= set(parameters["generate"])
+    assert parameters["generate"]["min_object_size"] == 5
+    assert "pbar_init" not in parameters["generate"] and "mode" not in parameters["generate"]
+
+    # A joint checkpoint is recorded once, and an array input is not recorded.
+    segmenter._generator_config["decoder"]._weights_reference = {**model._weights_reference, "name": "decoder"}
+    step = _provenance_step(
+        model, segmenter, np.zeros((4, 4)), None, path, ndim=2, tile_shape=None, halo=None, mode="dense",
+        norm_bounds=None, generate_kwargs={}, started=None,
+    )
+    assert [reference["name"] for reference in step["inputs"]] == ["model"]
+
+    model, segmenter = _provenance_segmenter("amg", points_per_side=8)
+    step = _provenance_step(
+        model, segmenter, path, None, path, ndim=3, tile_shape=None, halo=None, mode="sparse",
+        norm_bounds=None, generate_kwargs={}, started=None,
+    )
+    parameters = step["parameters"]
+    assert "mode" not in parameters and parameters["segmenter"] == {"points_per_side": 8}
+    assert parameters["generate"] == {"min_object_size": 0} and parameters["norm_bounds"] == "default"

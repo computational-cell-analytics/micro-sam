@@ -220,6 +220,43 @@ def test_write_new_ome_zarr(tmp_path, labels):
     np.testing.assert_array_equal(load_output(path, "cells"), labels)
 
 
+def _attrs(path, key=""):
+    group = zarr.open_group(path, mode="r")
+    return dict((group[key] if key else group).attrs)
+
+
+@pytest.mark.parametrize("version", ["0.4", "0.5"])
+def test_write_provenance(tmp_path, raw, labels, version):
+    from micro_sam._provenance import CONVENTION, make_step
+
+    steps = [make_step("Segment", "Segmentation", "micro_sam.test", {"tile_shape": (16, 16)}, [])]
+
+    # In an image, the label image holds the steps beside the ome-zarr metadata.
+    path = str(tmp_path / "image.ome.zarr")
+    write_ome_zarr(path, raw, version=version)
+    write_segmentation(path, labels, label_name="result", provenance=steps)
+    attrs = _attrs(path, "labels/result")
+    assert attrs["provenance:steps"] == steps
+    assert attrs["zarr_conventions"] == [CONVENTION]
+    assert _ome_attrs(path, "labels/result")["multiscales"][0]["name"] == "result"
+    assert "provenance:steps" not in _attrs(path)
+
+    # A result that replaces another result does not keep the steps of this result.
+    write_segmentation(path, labels, label_name="result", overwrite=True)
+    assert "provenance:steps" not in _attrs(path, "labels/result")
+
+    path = str(tmp_path / "new.ome.zarr")
+    write_segmentation(path, labels, provenance=steps)
+    assert _attrs(path)["provenance:steps"] == steps
+    write_segmentation(path, labels, overwrite=True)
+    attrs = _attrs(path)
+    assert "provenance:steps" not in attrs and "zarr_conventions" not in attrs
+    assert _ome_attrs(path)["multiscales"][0]["name"] == "segmentation"
+
+    # An image file does not store the steps.
+    write_segmentation(str(tmp_path / "out.tif"), labels, provenance=steps)
+
+
 @pytest.mark.parametrize("version", ["0.4", "0.5"])
 def test_write_into_ome_zarr_image(tmp_path, raw, labels, version):
     path = str(tmp_path / "image.ome.zarr")

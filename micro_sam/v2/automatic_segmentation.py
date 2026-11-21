@@ -101,6 +101,80 @@ def get_predictor_and_segmenter(
     return predictor, segmenter
 
 
+def _generate_parameters(segmenter, engine, model_type, mode, ndim, generate_kwargs):
+    """The parameters that `segmenter.generate` uses: its defaults, updated with `generate_kwargs`."""
+    import inspect
+
+    from .automatic_prompt_generation import default_prompt_generation
+    from .postprocessing import default_postprocessing
+
+    parameters = {
+        name: parameter.default for name, parameter in inspect.signature(segmenter.generate).parameters.items()
+        if parameter.default is not inspect.Parameter.empty and name != "mode" and not name.startswith("pbar")
+    }
+    try:
+        if engine == "ais":
+            parameters.update(default_postprocessing(model_type, mode, is_volume=ndim == 3))
+        elif engine == "apg":
+            parameters.update(default_prompt_generation(model_type, is_volume=ndim == 3))
+    except ValueError:  # A model type without default parameters.
+        pass
+    parameters.update(generate_kwargs)
+    return parameters
+
+
+def _provenance_step(
+    predictor, segmenter, input_path, key, output_path, ndim, tile_shape, halo, mode, norm_bounds,
+    generate_kwargs, started,
+):
+    """Get the provenance step for a result of `automatic_instance_segmentation`."""
+    from .._provenance import image_reference, make_step
+
+    config = getattr(segmenter, "_generator_config", None) or {}
+    model = config.get("model", getattr(predictor, "model", predictor))
+    decoder = config.get("decoder")
+    if "segmentation_mode" in config:
+        engine = config["segmentation_mode"]
+    elif not getattr(segmenter, "_is_decoder_based", False):
+        engine = "amg"
+    else:
+        engine = "ais" if getattr(segmenter, "_has_postprocessing_mode", True) else "apg"
+    model_type = getattr(model, "model_type", None) or getattr(predictor, "model_type", None)
+
+    parameters = {"model_type": model_type, "segmentation_mode": engine}
+    if engine == "ais":
+        parameters["mode"] = mode
+    parameters.update(ndim=ndim, tile_shape=tile_shape, halo=halo)
+    if ndim == 3:
+        # The bounds can be arrays with one entry per slice, so only their use is recorded.
+        parameters["norm_bounds"] = "default" if norm_bounds is None else "custom"
+    # The parameters of a segmenter from 'get_predictor_and_segmenter', for example for the point grid of AMG.
+    init_parameters = {
+        name: value for name, value in config.items()
+        if name not in ("model", "decoder", "is_tiled", "segmentation_mode", "device", "inference_device", "ndim")
+    }
+    if init_parameters:
+        parameters["segmenter"] = init_parameters
+    parameters["generate"] = _generate_parameters(segmenter, engine, model_type, mode, ndim, generate_kwargs)
+
+    model_reference = getattr(model, "_weights_reference", None)
+    decoder_reference = getattr(decoder, "_weights_reference", None)
+    # A joint checkpoint holds the model and the decoder. It is recorded once.
+    if model_reference is not None and decoder_reference is not None and all(
+        model_reference.get(field) == decoder_reference.get(field) for field in ("id", "uri", "checksum")
+    ):
+        decoder_reference = None
+
+    return make_step(
+        name="Automatic instance segmentation",
+        category="Segmentation",
+        entry_point="micro_sam.v2.automatic_segmentation.automatic_instance_segmentation",
+        parameters=parameters,
+        inputs=[image_reference(input_path, key, output_path), model_reference, decoder_reference],
+        started=started,
+    )
+
+
 def _resolve_tiling(spatial_shape, tile_shape, halo, with_z_axis, embedding_path=None):
     """Resolve the tiling for the headless entry points, in the axes their segmenter expects.
 
@@ -234,8 +308,10 @@ def automatic_instance_segmentation(
     import warnings
 
     from .._io import (
-        describe_output, get_label_name, get_output_path, load_output, skip_existing_output, write_segmentation,
+        describe_output, get_label_name, get_output_path, is_ome_zarr_path, load_output, skip_existing_output,
+        write_segmentation,
     )
+    from .._provenance import timestamp
     from ..util import load_image_data, make_temp_embedding_path, prepare_annotation_image
     from .util import precompute_image_embeddings
     from .instance_segmentation import amg_3d_segmentation, retile_instance_segmentation_generator
@@ -245,6 +321,7 @@ def automatic_instance_segmentation(
         label_name = get_label_name(input_path, key=key, label_name=label_name)
         if skip_existing_output(output_path, label_name, overwrite):
             return load_output(output_path, label_name)
+    started = timestamp()
 
     raw = input_path if isinstance(input_path, np.ndarray) else load_image_data(input_path, key=key)
     # Normalize the input the same way the annotation tools do: squeeze singleton axes and move a
@@ -365,7 +442,15 @@ def automatic_instance_segmentation(
         segmentation = segmenter.generate(**generate_kwargs)
 
     if output_path is not None:
-        write_segmentation(output_path, segmentation, label_name=label_name, overwrite=overwrite)
+        provenance = None
+        if is_ome_zarr_path(output_path):
+            provenance = [_provenance_step(
+                predictor, segmenter, input_path, key, output_path, ndim, tile_shape, halo, mode, norm_bounds,
+                generate_kwargs, started,
+            )]
+        write_segmentation(
+            output_path, segmentation, label_name=label_name, overwrite=overwrite, provenance=provenance,
+        )
         if verbose:
             print(f"The automatic segmentation results are stored in {describe_output(output_path, label_name)}.")
 

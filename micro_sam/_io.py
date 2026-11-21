@@ -19,7 +19,7 @@ import re
 import json
 from glob import glob
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 import clearscale as cs
 import numpy as np
@@ -27,6 +27,8 @@ import z5py
 import zarr
 import imageio.v3 as imageio
 from elf.io import open_file
+
+from ._provenance import write_provenance
 
 CONTAINER_EXTENSIONS = (".ome.zarr", ".zarr", ".zr", ".n5")
 ZARR_METADATA_FILES = ("zarr.json", ".zgroup", ".zarray")
@@ -456,7 +458,7 @@ def _spatial_axes(multiscale: cs.Multiscale, ndim: int) -> List[str]:
 
 def _write_root_label_image(
     path: str, root: Optional[cs.OmeZarrGroup], segmentation: np.ndarray, label_name: str
-) -> None:
+) -> z5py.Group:
     # A new file uses ome-zarr 0.5 (zarr v3). An existing file keeps its version.
     if root is None:
         f, version = z5py.File(path, mode="a", zarr_format=3), "0.5"
@@ -474,11 +476,12 @@ def _write_root_label_image(
 
     f.create_dataset("s0", data=segmentation, chunks=_default_chunks(segmentation.shape))
     cs.OmeZarrGroup.from_single(multiscale).update_attrs(f, version=version)
+    return f
 
 
 def _write_labels_image(
     path: str, image: cs.OmeZarrGroup, segmentation: np.ndarray, label_name: str, num_workers: int
-) -> None:
+) -> z5py.Group:
     from bioimage_py import copy
     from bioimage_py.wrapper import ResizedSource
 
@@ -517,6 +520,7 @@ def _write_labels_image(
     if label_name not in [child.path for child in children]:
         children += (cs.ChildRef("label_multiscale", label_name),)
     cs.OmeZarrGroup(children=children).update_attrs(labels, version=image.version)
+    return group
 
 
 def write_segmentation(
@@ -525,6 +529,7 @@ def write_segmentation(
     label_name: str = DEFAULT_LABEL_NAME,
     overwrite: bool = False,
     num_workers: Optional[int] = None,
+    provenance: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Store a segmentation as an image file or as a label image in an ome-zarr file.
 
@@ -542,6 +547,8 @@ def write_segmentation(
         overwrite: Whether to replace a stored result.
         num_workers: The number of threads to compute the scale levels of an ome-zarr label image.
             By default the number of CPUs.
+        provenance: The steps that produced the segmentation, see `micro_sam._provenance.make_step`.
+            They are stored in the attributes of an ome-zarr label image. Other outputs do not store them.
     """
     output_path = str(output_path)
     if output_exists(output_path, label_name) and not overwrite:
@@ -558,6 +565,8 @@ def write_segmentation(
     segmentation = np.asarray(segmentation)
     target, root = _get_ome_zarr_target(output_path, label_name)
     if target == "labels":
-        _write_labels_image(output_path, root, segmentation, label_name, num_workers or os.cpu_count() or 1)
+        group = _write_labels_image(output_path, root, segmentation, label_name, num_workers or os.cpu_count() or 1)
     else:
-        _write_root_label_image(output_path, root, segmentation, label_name)
+        group = _write_root_label_image(output_path, root, segmentation, label_name)
+    # This also removes the steps of a result that is replaced.
+    write_provenance(group, provenance)

@@ -1,4 +1,5 @@
 import os
+import inspect
 import warnings
 from pathlib import Path
 from functools import partial
@@ -14,6 +15,7 @@ from .._io import (
     describe_output, get_input_name, get_input_paths, get_label_name, get_output_path, is_ome_zarr_path,
     load_output, skip_existing_output, write_segmentation,
 )
+from .._provenance import IMAGE_ANALYSIS, image_reference, make_step, timestamp
 from ..util import AutoSegBase
 from .util import get_sam_model, precompute_image_embeddings, get_model_names
 from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
@@ -80,7 +82,51 @@ def get_predictor_and_segmenter(
     segmenter = get_instance_segmentation_generator(
         predictor=predictor, is_tiled=is_tiled, decoder=decoder, segmentation_mode=segmentation_mode, **kwargs
     )
+    # For the provenance metadata of results.
+    segmenter._provenance = {"segmentation_mode": segmentation_mode.lower(), "segmenter": kwargs}
     return predictor, segmenter
+
+
+def _segmentation_mode(segmenter) -> str:
+    if isinstance(segmenter, (AutomaticPromptGenerator, TiledAutomaticPromptGenerator)):
+        return "apg"
+    return "ais" if isinstance(segmenter, InstanceSegmentationWithDecoder) else "amg"
+
+
+def _provenance_step(
+    predictor, segmenter, input_path, key, output_path, mask_path, mask_key, ndim, tile_shape, halo,
+    generate_kwargs, started,
+):
+    """Get the provenance step for a result of `automatic_instance_segmentation`."""
+    recorded = getattr(segmenter, "_provenance", {})
+    parameters = {
+        "model_type": getattr(predictor, "model_name", None),
+        "segmentation_mode": recorded.get("segmentation_mode", _segmentation_mode(segmenter)),
+        "ndim": ndim, "tile_shape": tile_shape, "halo": halo,
+    }
+    if recorded.get("segmenter"):
+        parameters["segmenter"] = recorded["segmenter"]
+    # The defaults of the segmenter, updated with the parameters of this call.
+    parameters["generate"] = {
+        **{
+            name: parameter.default for name, parameter in inspect.signature(segmenter.generate).parameters.items()
+            if parameter.default is not inspect.Parameter.empty
+        },
+        **generate_kwargs,
+    }
+    return make_step(
+        name="Automatic instance segmentation",
+        category="Segmentation",
+        entry_point="micro_sam.v1.automatic_segmentation.automatic_instance_segmentation",
+        parameters=parameters,
+        inputs=[
+            image_reference(input_path, key, output_path),
+            image_reference(mask_path, mask_key, output_path, name="mask", type=None),
+            getattr(predictor, "_weights_reference", None),
+            getattr(predictor, "_decoder_reference", None),
+        ],
+        started=started,
+    )
 
 
 def _add_suffix_to_output_path(output_path: Union[str, os.PathLike], suffix: str) -> str:
@@ -235,6 +281,7 @@ def automatic_instance_segmentation(
         if skip_existing_output(output_path, label_name, overwrite):
             instances = load_output(output_path, label_name)
             return (instances, None) if return_embeddings else instances
+    started = timestamp()
 
     # We assume that it has to be read from file if it is a str or pathlike.
     # Otherwise we assume it is a numpy array like object.
@@ -305,8 +352,16 @@ def automatic_instance_segmentation(
             _label_name = f"{label_name}_automatic"
         elif annotate:
             _output_path = _add_suffix_to_output_path(output_path, "_automatic")
+        provenance = None
+        if is_ome_zarr_path(output_path):
+            provenance = [_provenance_step(
+                predictor, segmenter, input_path, key, output_path, mask_path, mask_key, ndim, tile_shape, halo,
+                generate_kwargs, started,
+            )]
         # The automatic result is only an intermediate result if we annotate, so we replace it.
-        write_segmentation(_output_path, instances, label_name=_label_name, overwrite=overwrite or annotate)
+        write_segmentation(
+            _output_path, instances, label_name=_label_name, overwrite=overwrite or annotate, provenance=provenance,
+        )
         if verbose:
             print(f"The automatic segmentation results are stored in {describe_output(_output_path, _label_name)}.")
 
@@ -314,6 +369,7 @@ def automatic_instance_segmentation(
     if annotate:
         from micro_sam.sam_annotator import annotator
 
+        annotation_started = timestamp()
         viewer = annotator(
             image=image_data,
             ndim=ndim,
@@ -336,7 +392,19 @@ def automatic_instance_segmentation(
 
         # Save the instance segmentation, if 'output_path' provided.
         if output_path is not None:
-            write_segmentation(output_path, instances, label_name=label_name, overwrite=overwrite)
+            if provenance is not None:
+                provenance.append(make_step(
+                    name="Interactive correction",
+                    category="Annotation",
+                    entry_point="micro_sam.sam_annotator.annotator",
+                    parameters={},
+                    inputs=[{"path": f"labels/{_label_name}", "name": "automatic segmentation"}],
+                    started=annotation_started,
+                    category_terms=(IMAGE_ANALYSIS,),
+                ))
+            write_segmentation(
+                output_path, instances, label_name=label_name, overwrite=overwrite, provenance=provenance,
+            )
             if verbose:
                 print(f"The final segmentation results are stored in {describe_output(output_path, label_name)}.")
 

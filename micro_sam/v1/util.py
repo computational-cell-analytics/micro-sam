@@ -16,6 +16,7 @@ import torch
 from bioimage_cpp.utils import Blocking
 
 from . import models as custom_models  # noqa
+from .._provenance import local_reference, registry_reference
 from ..util import (  # noqa
     ImageEmbeddings, SamPredictor, sam_model_registry, VIT_T_SUPPORT,
     DEFAULT_SAM1_MODEL, SAM1_MODEL_TYPES,
@@ -213,6 +214,7 @@ def get_sam_model(
     # checkpoint_path has not been passed, we download a known model and derive the correct
     # URL from the model_type. If the model_type is invalid pooch will raise an error.
     _provided_checkpoint_path = checkpoint_path is not None
+    _provided_decoder_path = decoder_path is not None
     if checkpoint_path is None:
         checkpoint_path, model_hash, downloaded_decoder_path = _download_sam_model(model_type, progress_bar_factory)
         if decoder_path is None:
@@ -294,6 +296,22 @@ def get_sam_model(
     predictor._hash = model_hash
     predictor.model_name = model_type
     predictor.checkpoint_path = checkpoint_path
+
+    # The sources of the weights, for the provenance metadata of results.
+    registry = models()
+    if _provided_checkpoint_path:
+        predictor._weights_reference = {**local_reference(checkpoint_path, "model"), "checksum": model_hash}
+    else:
+        predictor._weights_reference = registry_reference(registry.urls[model_type], model_hash, "model")
+    if decoder_path is None:
+        predictor._decoder_reference = None
+    elif _provided_decoder_path:
+        predictor._decoder_reference = local_reference(decoder_path, "decoder", with_checksum=True)
+    else:
+        decoder_name = f"{model_type}_decoder"
+        predictor._decoder_reference = registry_reference(
+            registry.urls[decoder_name], registry.registry[decoder_name], "decoder"
+        )
 
     # Add the decoder to the state if we have one and if the state is returned.
     if decoder_path is not None and return_state:
