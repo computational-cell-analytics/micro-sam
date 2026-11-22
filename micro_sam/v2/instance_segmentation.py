@@ -862,7 +862,10 @@ def get_decoder(model_type, checkpoint=None, device=None, encoder=None):
     Raises:
         NoDecoderError: If `checkpoint` has no decoder and there is no decoder file next to it.
     """
-    from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, _download_finetuned_sam2_model
+    from micro_sam._provenance import local_reference, registry_reference
+    from micro_sam.v2.util import (
+        FINETUNED_HASHES, FINETUNED_MODELS, FINETUNED_URLS, has_registered_decoder, _download_finetuned_sam2_model,
+    )
 
     # Without a prebuilt encoder, build on the base backbone name, e.g. 'hvit_t_cells' -> 'hvit_t'.
     if encoder is None:
@@ -889,6 +892,14 @@ def get_decoder(model_type, checkpoint=None, device=None, encoder=None):
         decoder = _load(decoder_source)
     # The defaults are looked up by the family of the full name.
     decoder.model_type = model_type
+    # The source of the weights, for the provenance metadata of results.
+    if checkpoint is None:
+        decoder_name = f"{model_type}_decoder"
+        decoder._weights_reference = registry_reference(
+            FINETUNED_URLS[decoder_name], FINETUNED_HASHES[decoder_name], "decoder"
+        )
+    else:
+        decoder._weights_reference = local_reference(decoder_source, "decoder", with_checksum=True)
     return decoder
 
 

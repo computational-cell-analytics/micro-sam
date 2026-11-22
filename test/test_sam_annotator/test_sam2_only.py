@@ -32,6 +32,7 @@ def test_batch_segmentation_rejects_sam1():
         SegmentationBatchTask(
             ndim=2, model_type="vit_b_lm", embedding_path=None, tile_shape=None, halo=None,
             precompute_autoseg_state=False, checkpoint_path=None, device=None, prefer_decoder=True,
+            initial_segmentations=None,
         )
 
 

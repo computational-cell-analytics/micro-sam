@@ -1,3 +1,4 @@
+import os
 import unittest
 
 import torch
@@ -208,3 +209,141 @@ class TestAutomaticSegmentation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize("extension", [".tif", ".ome.zarr"])
+def test_automatic_instance_segmentation_skips_existing_output(tmp_path, extension):
+    from micro_sam._io import write_segmentation
+    from micro_sam.v1.automatic_segmentation import automatic_instance_segmentation
+
+    image = np.zeros((16, 16), dtype="uint8")
+    stored = np.arange(256, dtype="uint32").reshape(16, 16)
+    output_path = str(tmp_path / f"out{extension}")
+    write_segmentation(output_path, stored, label_name="cells")
+
+    # Without the model, the function can only return the stored result.
+    result = automatic_instance_segmentation(
+        predictor=None, segmenter=None, input_path=image, output_path=output_path, label_name="cells",
+    )
+    np.testing.assert_array_equal(result, stored)
+    result, embeddings = automatic_instance_segmentation(
+        predictor=None, segmenter=None, input_path=image, output_path=output_path, label_name="cells",
+        return_embeddings=True,
+    )
+    np.testing.assert_array_equal(result, stored)
+    assert embeddings is None
+
+    # An output path that is not ome-zarr always gets the suffix '.tif'.
+    if extension == ".tif":
+        result = automatic_instance_segmentation(
+            predictor=None, segmenter=None, input_path=image, output_path=str(tmp_path / "out.png"),
+        )
+        np.testing.assert_array_equal(result, stored)
+
+
+def test_provenance_step(tmp_path):
+    from types import SimpleNamespace
+
+    from micro_sam._test_util import write_ome_zarr
+    from micro_sam.v1.automatic_segmentation import InstanceSegmentationWithDecoder, _provenance_step
+
+    def generate(min_size=25, **kwargs):
+        pass
+
+    predictor = SimpleNamespace(
+        model_name="vit_b_lm",
+        _weights_reference={"uri": "https://a.org/model", "name": "model"},
+        _decoder_reference={"uri": "https://a.org/decoder", "name": "decoder"},
+    )
+    # The segmentation mode comes from the class of the segmenter.
+    segmenter = InstanceSegmentationWithDecoder.__new__(InstanceSegmentationWithDecoder)
+    segmenter.generate, segmenter._init_parameters = generate, {}
+    path, mask_path = str(tmp_path / "image.ome.zarr"), str(tmp_path / "mask.tif")
+    write_ome_zarr(path, np.zeros((4, 4), dtype="uint8"))
+    step = _provenance_step(
+        predictor, segmenter, path, "s0", path, mask_path, None, ndim=2, tile_shape=(64, 64), halo=(8, 8),
+        generate_kwargs={"center_distance_threshold": 0.4}, started=None,
+    )
+    assert step["software"]["entry_point"].startswith("micro_sam.v1.automatic_segmentation")
+    assert [reference["name"] for reference in step["inputs"]] == ["image", "mask", "model", "decoder"]
+    assert step["inputs"][0]["path"] == "." and step["inputs"][1]["id"] == "mask.tif"
+    assert step["parameters"] == {
+        "model_type": "vit_b_lm", "segmentation_mode": "ais", "ndim": 2, "tile_shape": [64, 64], "halo": [8, 8],
+        "generate": {"min_size": 25, "center_distance_threshold": 0.4},
+    }
+
+
+def test_annotation_output_names(tmp_path):
+    from micro_sam._test_util import write_ome_zarr
+    from micro_sam.v1.automatic_segmentation import _add_suffix_to_output_path, _get_outputs
+
+    assert _add_suffix_to_output_path(tmp_path / "out.ome.zarr", "_x") == str(tmp_path / "out_x.ome.zarr")
+    assert _add_suffix_to_output_path(tmp_path / "out.tif", "_x") == str(tmp_path / "out_x.tif")
+
+    tif_path = str(tmp_path / "out.tif")
+    assert _get_outputs(tif_path, "cells", annotate=False) == [(tif_path, "cells")] * 2
+    assert [path for path, _ in _get_outputs(tif_path, "cells", annotate=True)] == [
+        str(tmp_path / "out_automatic.tif"), str(tmp_path / "out_corrected.tif")
+    ]
+
+    # A new ome-zarr file holds one label image, so each result has its own file.
+    path = str(tmp_path / "image.ome.zarr")
+    assert _get_outputs(path, "cells", annotate=True) == [
+        (str(tmp_path / "image_automatic.ome.zarr"), "cells_automatic"),
+        (str(tmp_path / "image_corrected.ome.zarr"), "cells_corrected"),
+    ]
+    # An ome-zarr image holds both results as label images.
+    write_ome_zarr(path, np.zeros((16, 16), dtype="uint8"))
+    assert _get_outputs(path, "cells", annotate=True) == [(path, "cells_automatic"), (path, "cells_corrected")]
+
+
+@pytest.mark.parametrize("output", ["out.tif", "out.ome.zarr", "image.ome.zarr"])
+def test_annotate_stores_the_automatic_and_the_corrected_result(tmp_path, monkeypatch, output):
+    from types import SimpleNamespace
+
+    import napari
+    import z5py
+    import micro_sam.sam_annotator
+    import micro_sam.v1.automatic_segmentation as automatic_segmentation
+    from micro_sam._test_util import write_ome_zarr
+
+    automatic = np.arange(256, dtype="uint32").reshape(16, 16)
+    corrected = automatic + 1
+    viewer = SimpleNamespace(layers={"committed_objects": SimpleNamespace(data=corrected)})
+    monkeypatch.setattr(automatic_segmentation, "precompute_image_embeddings", lambda **kwargs: None)
+    monkeypatch.setattr(micro_sam.sam_annotator, "annotator", lambda **kwargs: viewer)
+    monkeypatch.setattr(napari, "run", lambda: None)
+
+    image = np.zeros((16, 16), dtype="uint8")
+    output_path = str(tmp_path / output)
+    is_image = output == "image.ome.zarr"
+    if is_image:
+        write_ome_zarr(output_path, image)
+        image = output_path
+    kwargs = dict(
+        predictor=SimpleNamespace(model_name="vit_b"), input_path=image, output_path=output_path,
+        label_name="cells", annotate=True,
+    )
+    segmenter = SimpleNamespace(initialize=lambda **kwargs: None, generate=lambda **kwargs: automatic)
+    result = automatic_segmentation.automatic_instance_segmentation(segmenter=segmenter, **kwargs)
+    np.testing.assert_array_equal(result, corrected)
+
+    if is_image:
+        paths, keys = [output_path] * 2, ["labels/cells_automatic", "labels/cells_corrected"]
+    else:
+        extension = output[len("out"):]
+        paths, keys = [str(tmp_path / f"out_{name}{extension}") for name in ("automatic", "corrected")], [None] * 2
+        assert not os.path.exists(output_path)
+    np.testing.assert_array_equal(util.load_image_data(paths[0], key=keys[0]), automatic)
+    np.testing.assert_array_equal(util.load_image_data(paths[1], key=keys[1]), corrected)
+
+    if output != "out.tif":
+        group = z5py.File(paths[1], mode="r")
+        steps = (group[keys[1]] if is_image else group).attrs["provenance:steps"]
+        assert [step["name"] for step in steps] == ["Automatic instance segmentation", "Interactive correction"]
+        reference, = steps[1]["inputs"]
+        assert reference.get("path" if is_image else "id") == (keys[0] if is_image else "out_automatic.ome.zarr")
+
+    # The next call finds the corrected result. It does not need the segmenter.
+    result = automatic_segmentation.automatic_instance_segmentation(segmenter=None, **kwargs)
+    np.testing.assert_array_equal(result, corrected)

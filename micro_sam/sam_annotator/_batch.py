@@ -9,7 +9,6 @@ task-agnostic; everything task-specific lives in the concrete adapter.
 import os
 
 import numpy as np
-import imageio.v3 as imageio
 
 import napari
 from magicgui.widgets import Container, PushButton
@@ -20,10 +19,10 @@ from qtpy.QtCore import QEvent, QObject, Qt, QTimer
 from . import _widgets as widgets
 from ._state import AnnotatorState
 from ._titles import get_dock_title
-from ..util import prepare_annotation_image
+from ..util import load_image_data, prepare_annotation_image
 
 
-def load_batch_image(entry, ndim=None):
+def load_batch_image(entry, ndim=None, key=None):
     """Load one batch image and prepare it in the same way as the annotator does.
 
     Singleton axes are squeezed and a channel axis is mapped to a trailing RGB axis, with
@@ -32,11 +31,12 @@ def load_batch_image(entry, ndim=None):
     Args:
         entry: The image as an array, or the path to its file.
         ndim: The spatial dimensionality (2 or 3), or None to derive it from the image.
+        key: The key for loading the image from a file, see `micro_sam.util.load_image_data`.
 
     Returns:
         The prepared image and its spatial dimensionality.
     """
-    image = entry if isinstance(entry, np.ndarray) else imageio.imread(entry)
+    image = entry if isinstance(entry, np.ndarray) else load_image_data(entry, key=key)
     image, ndim, _ = prepare_annotation_image(image, ndim=ndim)
     return image, ndim
 
@@ -206,6 +206,7 @@ def run_batch(
     viewer=None,
     return_viewer: bool = False,
     skip_done: bool = True,
+    key=None,
 ):
     """Drive a batch annotation session for any task.
 
@@ -217,6 +218,7 @@ def run_batch(
         viewer: An optional pre-initialized napari viewer.
         return_viewer: Whether to return the viewer instead of starting the napari event loop.
         skip_done: Whether to skip items whose result already exists in `output_folder`.
+        key: The key for loading the images from files, see `micro_sam.util.load_image_data`.
 
     Returns:
         The napari viewer, only if `return_viewer=True`.
@@ -237,7 +239,7 @@ def run_batch(
         return os.path.exists(path)
 
     def _load_pixels(index):
-        return load_batch_image(images[index], ndim=task.ndim)[0]
+        return load_batch_image(images[index], ndim=task.ndim, key=key)[0]
 
     # Prepare the shared model and per-item embeddings (task-specific).
     embedding_paths = task.precompute(images)

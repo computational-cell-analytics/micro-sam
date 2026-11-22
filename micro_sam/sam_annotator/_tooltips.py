@@ -81,6 +81,8 @@ tooltips = {
         "output_folder": "Folder for the results.",
         "continue_annotation": "Start at the first image without a result. Clear to start at the first image.",
         "pattern": "File pattern, for example '*.tif'. Empty: all files.",
+        "key": "Key of the image in container files (zarr, n5, ome-zarr, hdf5). Empty: the single image.",
+        "segmentation_key": "Key of the segmentation in container files. Empty: the single segmentation.",
         "ndim": "2d or 3d data.",
         "task": "Segmentation, tracking, object classification or pixel classification.",
         "segmentation_folder": "Folder with one segmentation per image. Empty: segment in the tool.",

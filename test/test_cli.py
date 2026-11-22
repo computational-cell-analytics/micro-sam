@@ -7,6 +7,7 @@ from subprocess import run
 
 import z5py
 import pytest
+import numpy as np
 import imageio.v3 as imageio
 from skimage.data import binary_blobs
 
@@ -220,3 +221,283 @@ def test_v1_automatic_segmentation_forwards_the_tiling(monkeypatch):
     # The tile shape and the halo take exactly two values.
     result = runner.invoke(cli, [*command, "--tile_shape", "384"])
     assert result.exit_code != 0
+
+
+@pytest.fixture
+def container_folder(tmp_path):
+    from micro_sam._test_util import write_ome_zarr
+
+    data = binary_blobs(32, n_dim=2, rng=0).astype("uint8")
+    folder = tmp_path / "images"
+    folder.mkdir()
+    for name in ("a", "b"):
+        write_ome_zarr(str(folder / f"{name}.ome.zarr"), data, data)
+    imageio.imwrite(folder / "c.tif", data)
+    return folder
+
+
+def test_inference_segmentation_resolves_containers(monkeypatch, tmp_path, container_folder):
+    from click.testing import CliRunner
+
+    from micro_sam._cli import cli
+    import micro_sam.v2.automatic_segmentation as automatic_segmentation
+
+    calls = []
+    monkeypatch.setattr(automatic_segmentation, "get_predictor_and_segmenter", lambda **kwargs: (None, None))
+    monkeypatch.setattr(
+        automatic_segmentation, "automatic_instance_segmentation", lambda **kwargs: calls.append(kwargs)
+    )
+
+    runner = CliRunner()
+    out = str(tmp_path / "out")
+    command = ["inference", "segmentation", "-i", str(container_folder), "-o", out]
+    result = runner.invoke(cli, [*command, "--pattern", "*"])
+    assert result.exit_code == 0, result.output
+    assert [call["input_path"] for call in calls] == [
+        str(container_folder / name) for name in ("a.ome.zarr", "b.ome.zarr", "c.tif")
+    ]
+    assert [call["output_path"] for call in calls] == [os.path.join(out, f"{name}.tif") for name in "abc"]
+    assert [call["label_name"] for call in calls] == [f"{name}_segmentation" for name in "abc"]
+
+    # Without a pattern, a folder gives its image files, but not its containers.
+    calls.clear()
+    result = runner.invoke(cli, command)
+    assert result.exit_code == 0, result.output
+    assert [call["input_path"] for call in calls] == [str(container_folder / "c.tif")]
+
+    # Two inputs with the same name would get the same result file.
+    imageio.imwrite(container_folder / "a.tif", binary_blobs(32, rng=0).astype("uint8"))
+    result = runner.invoke(cli, [*command, "--pattern", "*"])
+    assert result.exit_code != 0 and "same name" in result.output
+    os.remove(container_folder / "a.tif")
+
+    calls.clear()
+    path = str(container_folder / "a.ome.zarr")
+    result = runner.invoke(cli, ["inference", "segmentation", "-i", path, "-o", out, "--pattern", "*.tif"])
+    assert result.exit_code == 0, result.output
+    assert [call["input_path"] for call in calls] == [path]
+
+
+def test_inference_segmentation_ome_zarr_output(monkeypatch, tmp_path, container_folder):
+    import click
+    from click.testing import CliRunner
+
+    from micro_sam._cli import cli, _resolve_output_paths
+    import micro_sam.v2.automatic_segmentation as automatic_segmentation
+
+    calls = []
+    monkeypatch.setattr(automatic_segmentation, "get_predictor_and_segmenter", lambda **kwargs: (None, None))
+    monkeypatch.setattr(
+        automatic_segmentation, "automatic_instance_segmentation", lambda **kwargs: calls.append(kwargs)
+    )
+
+    path = str(container_folder / "a.ome.zarr")
+    result = CliRunner().invoke(
+        cli, ["inference", "segmentation", "-i", path, "-o", path, "--label_name", "cells", "--overwrite"]
+    )
+    assert result.exit_code == 0, result.output
+    assert calls[0]["output_path"] == path
+    assert calls[0]["label_name"] == "cells" and calls[0]["overwrite"]
+
+    output_path = str(tmp_path / "out" / "result.ome.zarr")
+    assert _resolve_output_paths([path], output_path) == [output_path]
+    assert os.path.isdir(tmp_path / "out")
+    with pytest.raises(click.UsageError, match="single input"):
+        _resolve_output_paths([path, path], output_path)
+
+
+def _fail_to_load_model(*args, **kwargs):
+    raise AssertionError("The model must not be loaded if all results exist.")
+
+
+def test_inference_segmentation_skips_existing_outputs_before_loading_the_model(monkeypatch, tmp_path):
+    from click.testing import CliRunner
+
+    from micro_sam._cli import cli
+    import micro_sam.v2.automatic_segmentation as automatic_segmentation
+
+    monkeypatch.setattr(automatic_segmentation, "get_predictor_and_segmenter", _fail_to_load_model)
+    image_path, output_path = str(tmp_path / "image.tif"), str(tmp_path / "seg.tif")
+    imageio.imwrite(image_path, binary_blobs(32, rng=0).astype("uint8"))
+    imageio.imwrite(output_path, binary_blobs(32, rng=1).astype("uint8"))
+
+    result = CliRunner().invoke(cli, ["inference", "segmentation", "-i", image_path, "-o", output_path])
+    assert result.exit_code == 0, result.output
+    assert "already stored" in result.output
+
+
+def test_inference_segmentation_views_a_stored_result(monkeypatch, tmp_path):
+    from click.testing import CliRunner
+
+    import micro_sam._cli as micro_sam_cli
+    import micro_sam.v2.automatic_segmentation as automatic_segmentation
+
+    viewed = []
+    monkeypatch.setattr(automatic_segmentation, "get_predictor_and_segmenter", _fail_to_load_model)
+    monkeypatch.setattr(micro_sam_cli, "_view_result", lambda *args: viewed.append(args))
+    image_path, output_path = str(tmp_path / "image.tif"), str(tmp_path / "seg.tif")
+    stored = binary_blobs(32, rng=1).astype("uint8")
+    imageio.imwrite(image_path, binary_blobs(32, rng=0).astype("uint8"))
+    imageio.imwrite(output_path, stored)
+
+    result = CliRunner().invoke(
+        micro_sam_cli.cli, ["inference", "segmentation", "-i", image_path, "-o", output_path, "--view"]
+    )
+    assert result.exit_code == 0, result.output
+    (path, key, segmentation), = viewed
+    assert path == image_path and key is None
+    np.testing.assert_array_equal(segmentation, stored)
+
+
+def test_inference_segmentation_apg_reads_the_dimensionality_of_hdf5(monkeypatch, tmp_path):
+    import h5py
+    from click.testing import CliRunner
+
+    from micro_sam._cli import cli
+    import micro_sam.v2.automatic_segmentation as automatic_segmentation
+
+    built = []
+    monkeypatch.setattr(
+        automatic_segmentation, "get_predictor_and_segmenter", lambda **kwargs: built.append(kwargs) or (None, None)
+    )
+    monkeypatch.setattr(automatic_segmentation, "automatic_instance_segmentation", lambda **kwargs: None)
+    image_path = str(tmp_path / "volume.h5")
+    with h5py.File(image_path, "w") as f:
+        f.create_dataset("raw", data=np.zeros((4, 16, 16), dtype="uint8"))
+
+    result = CliRunner().invoke(cli, [
+        "inference", "segmentation", "-i", image_path, "-k", "raw", "-o", str(tmp_path / "seg.tif"), "--engine", "apg",
+    ])
+    assert result.exit_code == 0, result.output
+    assert built[0]["ndim"] == 3
+
+
+def test_v1_automatic_segmentation_skips_existing_outputs_before_loading_the_model(monkeypatch, tmp_path, capsys):
+    import micro_sam.v1.automatic_segmentation as automatic_segmentation
+
+    monkeypatch.setattr(automatic_segmentation, "get_sam_model", _fail_to_load_model)
+    monkeypatch.setattr(automatic_segmentation, "get_predictor_and_segmenter", _fail_to_load_model)
+    image_path, output_path = str(tmp_path / "image.tif"), str(tmp_path / "seg.tif")
+    imageio.imwrite(image_path, binary_blobs(32, rng=0).astype("uint8"))
+    imageio.imwrite(output_path, binary_blobs(32, rng=1).astype("uint8"))
+
+    automatic_segmentation.main(["-i", image_path, "-o", output_path])
+    assert "already stored" in capsys.readouterr().out
+
+
+def test_inference_pixel_classification_skips_existing_outputs(monkeypatch, tmp_path, container_folder):
+    from click.testing import CliRunner
+
+    import micro_sam._cli as micro_sam_cli
+    import micro_sam.pixel_classification as pixel_classification
+
+    calls = []
+
+    def _predict(**kwargs):
+        calls.append(kwargs["images"])
+        return [util.load_image_data(path, key=kwargs["image_key"]) for path in kwargs["images"]]
+
+    loaded = []
+
+    def _load_model(*args):
+        loaded.append(args)
+        return None, None, None, "hvit_t", None, None
+
+    monkeypatch.setattr(micro_sam_cli, "_classifier_predictor", _load_model)
+    monkeypatch.setattr(pixel_classification, "run_prediction_with_pixel_classifier", _predict)
+
+    out = tmp_path / "out"
+    out.mkdir()
+    imageio.imwrite(out / "a.tif", imageio.imread(container_folder / "c.tif"))
+    args = [
+        "inference", "pixel-classification", "-i", str(container_folder), "--pattern", "*", "-o", str(out),
+        "--classifier", "rf.joblib",
+    ]
+    runner = CliRunner()
+
+    result = runner.invoke(micro_sam_cli.cli, args)
+    assert result.exit_code == 0, result.output
+    assert calls == [[str(container_folder / name) for name in ("b.ome.zarr", "c.tif")]]
+    assert "already stored" in result.output
+
+    # All results exist now, so nothing is computed and the model is not loaded.
+    result = runner.invoke(micro_sam_cli.cli, args)
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1 and len(loaded) == 1
+
+    result = runner.invoke(micro_sam_cli.cli, args + ["--overwrite"])
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 2 and len(calls[-1]) == 3
+
+    path = str(container_folder / "a.ome.zarr")
+    rf_path = tmp_path / "rf.joblib"
+    rf_path.write_bytes(b"classifier")
+    args = ["inference", "pixel-classification", "-i", path, "-o", path, "--classifier", str(rf_path)]
+    result = runner.invoke(micro_sam_cli.cli, args)
+    assert result.exit_code == 0, result.output
+    # The default name has the postfix of the command, so it differs from the name of a segmentation.
+    label_key = "labels/a_pixel_classification"
+    np.testing.assert_array_equal(util.load_image_data(path, key=label_key), util.load_image_data(path))
+
+    step, = z5py.File(path, mode="r")[label_key].attrs["provenance:steps"]
+    assert step["name"] == "Pixel classification"
+    assert step["parameters"]["model_type"] == "hvit_t"
+    image, classifier = step["inputs"]
+    assert image["path"] == "." and image["name"] == "image"
+    assert classifier["id"] == "rf.joblib" and classifier["checksum"].startswith("xxh128:")
+
+
+def test_inference_object_classification_resolves_containers(monkeypatch, tmp_path, container_folder):
+    from click.testing import CliRunner
+
+    import micro_sam._cli as micro_sam_cli
+    import micro_sam.object_classification as object_classification
+
+    calls = []
+
+    def _predict(**kwargs):
+        calls.append(kwargs)
+        return [util.load_image_data(path, key=kwargs["segmentation_key"], is_segmentation=True)
+                for path in kwargs["segmentations"]]
+
+    monkeypatch.setattr(micro_sam_cli, "_classifier_predictor", lambda *args: (None, None, None, "hvit_t", None, None))
+    monkeypatch.setattr(object_classification, "run_prediction_with_object_classifier", _predict)
+
+    out = str(tmp_path / "out")
+    result = CliRunner().invoke(micro_sam_cli.cli, [
+        "inference", "object-classification", "-i", str(container_folder), "--pattern", "*.zarr",
+        "-s", str(container_folder), "--segmentation_pattern", "*.zarr", "-o", out, "--classifier", "rf.joblib",
+    ])
+    assert result.exit_code == 0, result.output
+    expected = [str(container_folder / name) for name in ("a.ome.zarr", "b.ome.zarr")]
+    assert calls[0]["images"] == expected and calls[0]["segmentations"] == expected
+    assert sorted(os.listdir(out)) == ["a.tif", "b.tif"]
+
+
+def test_annotator_batch_forwards_the_keys(monkeypatch, tmp_path, container_folder):
+    from click.testing import CliRunner
+
+    import importlib
+    from micro_sam._cli import cli
+
+    # The package exports functions with the same names as these modules.
+    batch_annotator = importlib.import_module("micro_sam.sam_annotator.batch_annotator")
+    object_classifier = importlib.import_module("micro_sam.sam_annotator.object_classifier")
+
+    calls = []
+    monkeypatch.setattr(batch_annotator, "image_folder_annotator", lambda *args, **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(object_classifier, "batch_object_classifier", lambda *args, **kwargs: calls.append(args))
+
+    runner = CliRunner()
+    command = ["annotator", "batch", "-i", str(container_folder), "-o", str(tmp_path / "out")]
+    result = runner.invoke(cli, [*command, "-k", "s0", "--segmentation_key", "labels/cells"])
+    assert result.exit_code == 0, result.output
+    assert (calls[-1]["key"], calls[-1]["segmentation_key"]) == ("s0", "labels/cells")
+
+    result = runner.invoke(cli, [
+        *command, "--task", "object-classification", "-p", "*.zarr",
+        "--initial_segmentation_folder", str(container_folder), "--initial_segmentation_pattern", "*.zarr",
+    ])
+    assert result.exit_code == 0, result.output
+    expected = [str(container_folder / name) for name in ("a.ome.zarr", "b.ome.zarr")]
+    assert list(calls[-1][:2]) == [expected, expected]
