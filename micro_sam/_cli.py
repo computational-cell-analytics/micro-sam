@@ -41,10 +41,15 @@ KEY_HELP = (
 )
 SEGMENTATION_KEY_HELP = (
     "The key of the segmentation in container files. Without a key, an ome-zarr file loads the highest "
-    "resolution of its single label image, and a zarr / n5 file loads its single array."
+    "resolution of its single label image, or of its image if it has no 'labels' group, "
+    "and a zarr / n5 file loads its single array."
 )
 INPUTS_HELP = (
     "image files, container files (e.g. hdf5, zarr, ome-zarr, n5) or folders, together with '--pattern'"
+)
+PATTERN_HELP = (
+    "Glob pattern to select files in a folder, e.g. '*.tif' or '*.ome.zarr'. "
+    "Without a pattern, all image files are selected, but no container files."
 )
 OUTPUT_HELP = (
     "The filepath to store the results. For a single input use a tif file, or an ome-zarr file ('*.ome.zarr'). "
@@ -54,7 +59,8 @@ OUTPUT_HELP = (
 )
 LABEL_NAME_HELP = (
     "The name of the label image for an ome-zarr output. By default the name of the input image "
-    "for an ome-zarr input, otherwise the name of the input file."
+    "for an ome-zarr input, otherwise the name of the input file, with a postfix for the kind of result, "
+    "e.g. '<name>_segmentation'."
 )
 OVERWRITE_HELP = "Whether to replace existing results. By default, the inputs with existing results are skipped."
 
@@ -94,9 +100,7 @@ def _model_options(f):
         ),
         click.option(
             "-k", "--key", default=None,
-            help="The key for opening data with elf.io.open_file, e.g. the internal path for hdf5 / zarr / n5, "
-            "a wildcard like '*.png' for an image stack, or 'data' for mrc. Without a key, an ome-zarr file "
-            "loads the highest resolution of its image, and a zarr / n5 file loads its single array."
+            help=f"{KEY_HELP} A wildcard like '*.png' loads an image stack, and 'data' loads an mrc file."
         ),
         click.option(
             "-e", "--embedding_path", default=None,
@@ -488,7 +492,7 @@ def _resolve_output_paths(input_paths, output_path):
     A single input maps to a tif or an ome-zarr file, multiple inputs to a folder of tifs.
     """
     import os
-    from ._io import get_input_name, is_ome_zarr_path
+    from ._io import check_unique_input_names, get_input_name, is_ome_zarr_path
 
     if is_ome_zarr_path(output_path):
         if len(input_paths) != 1:
@@ -508,6 +512,10 @@ def _resolve_output_paths(input_paths, output_path):
             os.makedirs(output_dir, exist_ok=True)
         return [output_fpath]
 
+    try:
+        check_unique_input_names(input_paths)
+    except ValueError as e:
+        raise click.UsageError(str(e))
     output_folder = os.path.splitext(output_path)[0]
     os.makedirs(output_folder, exist_ok=True)
     return [os.path.join(output_folder, f"{get_input_name(p)}.tif") for p in input_paths]
@@ -537,8 +545,7 @@ def _view_result(image_path, key, segmentation):
 @click.option("--overwrite", is_flag=True, default=False, help=OVERWRITE_HELP)
 @click.option("-e", "--embedding_path", default=None, help="Optional path where the embeddings will be cached.")
 @click.option(
-    "--pattern", default=None,
-    help="Glob pattern to select files in a folder, e.g. '*.tif'. Quote it so the shell does not expand it first."
+    "--pattern", default=None, help=f"{PATTERN_HELP} Quote it so the shell does not expand it first."
 )
 @click.option("-k", "--key", default=None, help=KEY_HELP)
 @click.option(
@@ -605,10 +612,9 @@ def inference_segmentation(
 
     from tqdm import tqdm
 
-    from .util import load_image_data
     from .v2.util import DEFAULT_MODEL
     from .v2.instance_segmentation import NoDecoderError
-    from ._io import get_input_name, get_input_paths
+    from ._io import get_image_shape, get_input_name, get_input_paths, load_output
     from .v2.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
     model_type = model_type or DEFAULT_MODEL
@@ -627,14 +633,17 @@ def inference_segmentation(
 
     has_one_input = len(input_paths) == 1
     # Check the existing results before the model is loaded.
-    outputs = _outputs_to_compute(input_paths, output_path, key, label_name, overwrite)
+    outputs, stored = _outputs_to_compute(input_paths, output_path, key, label_name, overwrite)
+    if view:
+        for i, output_fpath, name in stored:
+            _view_result(input_paths[i], key, load_output(output_fpath, name, input_paths[i], key))
     if not outputs:
         return
 
     # Only APG builds a different segmenter per dimensionality, and it is built before any input is read.
     segmenter_ndim = ndim or 2
     if engine == "apg" and ndim is None:
-        segmenter_ndim = load_image_data(input_paths[outputs[0][0]], key=key, lazy_loading=True).ndim
+        segmenter_ndim = len(get_image_shape(input_paths[outputs[0][0]], key=key))
 
     # Only an initial guess: 'automatic_instance_segmentation' swaps in the tiling variant that
     # matches the image it reads, rebuilding it from the already loaded model and decoder.
@@ -813,7 +822,7 @@ def _classifier_common_options(f):
         click.option(
             "--classifier", "rf_path", required=True, help="The trained classifier (.joblib) to run prediction with."
         ),
-        click.option("--pattern", default=None, help="Glob pattern to select files in a folder, e.g. '*.tif'."),
+        click.option("--pattern", default=None, help=PATTERN_HELP),
         click.option("-k", "--key", default=None, help=KEY_HELP),
         click.option(
             "-m", "--model_type", default=None,
@@ -833,47 +842,33 @@ def _classifier_common_options(f):
     return f
 
 
-def _outputs_to_compute(input_paths, output_path, key, label_name, overwrite):
-    """Get (input index, output path, label name) for the inputs whose result must be computed."""
+def _outputs_to_compute(input_paths, output_path, key, label_name, overwrite, suffix="segmentation"):
+    """Get (input index, output path, label name) for the results to compute, and for the stored results."""
     from ._io import get_label_name, skip_existing_output
 
-    outputs = []
+    outputs, stored = [], []
     for i, (path, output_fpath) in enumerate(zip(input_paths, _resolve_output_paths(input_paths, output_path))):
-        name = get_label_name(path, key=key, label_name=label_name)
-        if not skip_existing_output(output_fpath, name, overwrite):
-            outputs.append((i, output_fpath, name))
-    return outputs
+        name = get_label_name(path, key=key, label_name=label_name, suffix=suffix)
+        (stored if skip_existing_output(output_fpath, name, overwrite) else outputs).append((i, output_fpath, name))
+    return outputs, stored
 
 
 def _classifier_provenance(
-    name, category, entry_point, category_terms, rf_path, predictor, model_type, tile_shape, halo, ndim,
-    classical_features,
+    output_path, started, name, category, entry_point, category_terms, rf_path, predictor, data_inputs, **parameters,
 ):
-    """Get a function that returns the provenance step of a classifier result for its data inputs."""
-    from ._provenance import local_reference, make_step, timestamp
+    """Get the provenance steps of a classifier result. Only an ome-zarr output stores them."""
+    from ._io import is_ome_zarr_path
+    from ._provenance import local_reference, make_step
 
-    started = timestamp()
-    parameters = {
-        "model_type": model_type, "tile_shape": tile_shape, "halo": halo, "ndim": ndim,
-        "classical_features": classical_features,
-    }
-    model_inputs = []
-
-    def get_steps(output_path, *data_inputs):
-        from ._io import is_ome_zarr_path
-        if not is_ome_zarr_path(output_path):
-            return None
-        if not model_inputs:
-            model_inputs.extend([
-                getattr(predictor, "_weights_reference", None),
-                local_reference(rf_path, "classifier", with_checksum=True),
-            ])
-        return [make_step(
-            name=name, category=category, entry_point=entry_point, parameters=parameters,
-            inputs=[*data_inputs, *model_inputs], started=started, category_terms=category_terms,
-        )]
-
-    return get_steps
+    if not is_ome_zarr_path(output_path):
+        return None
+    model_inputs = [
+        getattr(predictor, "_weights_reference", None), local_reference(rf_path, "classifier", with_checksum=True),
+    ]
+    return [make_step(
+        name=name, category=category, entry_point=entry_point, parameters=parameters,
+        inputs=[*data_inputs, *model_inputs], started=started, category_terms=category_terms,
+    )]
 
 
 @inference_group.command("pixel-classification")
@@ -884,13 +879,15 @@ def inference_pixel_classification(
 ):
     """Apply a trained pixel classifier."""
     from ._io import get_input_paths, write_segmentation
-    from ._provenance import IMAGE_ANALYSIS, IMAGE_SEGMENTATION, image_reference
+    from ._provenance import IMAGE_ANALYSIS, IMAGE_SEGMENTATION, image_reference, timestamp
     from .pixel_classification import run_prediction_with_pixel_classifier
 
     input_paths = get_input_paths(list(input_path), pattern)
     if len(input_paths) == 0:
         raise click.UsageError("'micro_sam' could not find any image data (quote '--pattern' for folders).")
-    outputs = _outputs_to_compute(input_paths, output_path, key, label_name, overwrite)
+    outputs, _ = _outputs_to_compute(
+        input_paths, output_path, key, label_name, overwrite, suffix="pixel_classification"
+    )
     if not outputs:
         return
     input_paths = [input_paths[i] for i, _, _ in outputs]
@@ -900,17 +897,18 @@ def inference_pixel_classification(
         rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
     )
 
-    get_steps = _classifier_provenance(
-        "Pixel classification", "Segmentation", "micro_sam inference pixel-classification",
-        (IMAGE_ANALYSIS, IMAGE_SEGMENTATION), rf_path, predictor, model_type, tile_shape, halo, ndim,
-        classical_features,
-    )
+    started = timestamp()
     predictions = run_prediction_with_pixel_classifier(
         images=input_paths, predictor=predictor, rf_path=rf_path, image_key=key, ndim=ndim,
         upsampler=upsampler, model_type=model_type, classical_features=classical_features,
     )
     for prediction, input_fpath, (_, output_fpath, name) in zip(predictions, input_paths, outputs):
-        steps = get_steps(output_fpath, image_reference(input_fpath, key, output_fpath))
+        steps = _classifier_provenance(
+            output_fpath, started, "Pixel classification", "Segmentation",
+            "micro_sam inference pixel-classification", (IMAGE_ANALYSIS, IMAGE_SEGMENTATION), rf_path, predictor,
+            [image_reference(input_fpath, key, output_fpath)],
+            model_type=model_type, tile_shape=tile_shape, halo=halo, ndim=ndim, classical_features=classical_features,
+        )
         write_segmentation(output_fpath, prediction, label_name=name, overwrite=overwrite, provenance=steps)
 
 
@@ -931,7 +929,7 @@ def inference_object_classification(
 ):
     """Apply a trained object classifier."""
     from ._io import get_input_paths, write_segmentation
-    from ._provenance import IMAGE_ANALYSIS, SEGMENTATION_MAP, image_reference
+    from ._provenance import IMAGE_ANALYSIS, SEGMENTATION_MAP, image_reference, timestamp
     from .object_classification import run_prediction_with_object_classifier
 
     input_paths = get_input_paths(list(input_path), pattern)
@@ -942,7 +940,9 @@ def inference_object_classification(
         raise click.UsageError(
             f"The number of images ({len(input_paths)}) and segmentations ({len(segmentation_paths)}) must match."
         )
-    outputs = _outputs_to_compute(input_paths, output_path, key, label_name, overwrite)
+    outputs, _ = _outputs_to_compute(
+        input_paths, output_path, key, label_name, overwrite, suffix="object_classification"
+    )
     if not outputs:
         return
     input_paths = [input_paths[i] for i, _, _ in outputs]
@@ -953,10 +953,7 @@ def inference_object_classification(
         rf_path, model_type, checkpoint_path, tile_shape, halo, ndim, device,
     )
 
-    get_steps = _classifier_provenance(
-        "Object classification", "Classification", "micro_sam inference object-classification",
-        (IMAGE_ANALYSIS,), rf_path, predictor, model_type, tile_shape, halo, ndim, classical_features,
-    )
+    started = timestamp()
     predictions = run_prediction_with_object_classifier(
         images=input_paths, segmentations=segmentation_paths, predictor=predictor, rf_path=rf_path,
         image_key=key, segmentation_key=segmentation_key, ndim=ndim, upsampler=upsampler, model_type=model_type,
@@ -965,12 +962,17 @@ def inference_object_classification(
     for prediction, input_fpath, segmentation_fpath, (_, output_fpath, name) in zip(
         predictions, input_paths, segmentation_paths, outputs
     ):
-        steps = get_steps(
-            output_fpath,
+        data_inputs = [
             image_reference(input_fpath, key, output_fpath),
             image_reference(
-                segmentation_fpath, segmentation_key, output_fpath, name="segmentation", type=SEGMENTATION_MAP
+                segmentation_fpath, segmentation_key, output_fpath, name="segmentation", type=SEGMENTATION_MAP,
+                is_segmentation=True,
             ),
+        ]
+        steps = _classifier_provenance(
+            output_fpath, started, "Object classification", "Classification",
+            "micro_sam inference object-classification", (IMAGE_ANALYSIS,), rf_path, predictor, data_inputs,
+            model_type=model_type, tile_shape=tile_shape, halo=halo, ndim=ndim, classical_features=classical_features,
         )
         write_segmentation(output_fpath, prediction, label_name=name, overwrite=overwrite, provenance=steps)
 

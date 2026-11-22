@@ -103,19 +103,20 @@ def get_predictor_and_segmenter(
 
 def _generate_parameters(segmenter, engine, model_type, mode, ndim, generate_kwargs):
     """The parameters that `segmenter.generate` uses: its defaults, updated with `generate_kwargs`."""
-    import inspect
-
+    from .._provenance import default_parameters
     from .automatic_prompt_generation import default_prompt_generation
     from .postprocessing import default_postprocessing
 
     parameters = {
-        name: parameter.default for name, parameter in inspect.signature(segmenter.generate).parameters.items()
-        if parameter.default is not inspect.Parameter.empty and name != "mode" and not name.startswith("pbar")
+        name: value for name, value in default_parameters(segmenter.generate).items()
+        if name != "mode" and not name.startswith("pbar")
     }
+    # A model that was not loaded by micro_sam has no model type, and no default parameters.
+    has_defaults = model_type is not None
     try:
-        if engine == "ais":
+        if has_defaults and engine == "ais":
             parameters.update(default_postprocessing(model_type, mode, is_volume=ndim == 3))
-        elif engine == "apg":
+        elif has_defaults and engine == "apg":
             parameters.update(default_prompt_generation(model_type, is_volume=ndim == 3))
     except ValueError:  # A model type without default parameters.
         pass
@@ -296,8 +297,8 @@ def automatic_instance_segmentation(
             `batched_inference._volume_normalization_bounds`), computed from the input when not given.
             Pass the bounds of the whole volume when the input is only one block of it, so that a
             block of mostly background is not stretched to its own bounds.
-        label_name: The name of the label image for an ome-zarr output. By default the name of the input image
-            for an ome-zarr input, otherwise the normalized name of the input file.
+        label_name: The name of the label image for an ome-zarr output. By default '<name>_segmentation',
+            with the name of the input image for an ome-zarr input, otherwise the normalized name of the input file.
         overwrite: Whether to replace a result that exists already at `output_path`.
         generate_kwargs: Additional post-processing parameters forwarded to the segmenter's `generate`.
 
@@ -320,7 +321,7 @@ def automatic_instance_segmentation(
         output_path = get_output_path(output_path)
         label_name = get_label_name(input_path, key=key, label_name=label_name)
         if skip_existing_output(output_path, label_name, overwrite):
-            return load_output(output_path, label_name)
+            return load_output(output_path, label_name, input_path, key)
     started = timestamp()
 
     raw = input_path if isinstance(input_path, np.ndarray) else load_image_data(input_path, key=key)

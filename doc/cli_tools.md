@@ -23,22 +23,22 @@ The subcommands are:
 The commands read these input data:
 - Image files, for example tif or png.
 - Container files: hdf5, zarr, OME-Zarr or n5. Use `-k` / `--key` to select the data in the file.
-- Folders with image or container files. Use `--pattern` to select the files, for example `--pattern '*.ome.zarr'`.
+- Folders with image or container files. Use `--pattern` to select the files, for example `--pattern '*.ome.zarr'`. Without a pattern, the commands use all image files in the folder, but no container files.
 
 The key is optional for zarr, OME-Zarr and n5 files:
-- For an OME-Zarr file, the commands use the highest resolution of the image. For a segmentation input, for example `--segmentation_key`, they use the single label image in `labels/`.
+- For an OME-Zarr file, the commands use the highest resolution of the image. For a segmentation input, for example `--segmentation_key`, they use the single label image in `labels/`, or the image if the file has no `labels/` group.
 - For a zarr or n5 file, the commands use the single array in the file.
 - If a file has more than one image or array, the command shows an error that lists them. Then give the key, for example `-k labels/nuclei`.
 
 The commands `micro_sam inference segmentation`, `pixel-classification` and `object-classification` write these outputs with `-o` / `--output`:
 - A tif file for a single input. A path without an extension also writes a tif file.
 - An OME-Zarr file (`*.ome.zarr`) for a single input. The command writes the result as an OME-Zarr label image:
-    - If the file is an OME-Zarr image, for example the input itself, the command writes the label image `labels/<name>`. The label image has the same scale levels as the image.
+    - If the file is an OME-Zarr image, for example the input itself, the command writes the label image `labels/<name>`. The label image has the same scale levels, chunks and shards as the image.
     - If the file does not exist, the command creates it and writes the label image at its root.
-    - Use `--label_name` to give the name. By default, the name is the name of the image for an OME-Zarr input, and the file name for other inputs.
+    - Use `--label_name` to give the name. By default, the name is the name of the image for an OME-Zarr input, and the file name for other inputs, with a postfix for the command: `<name>_segmentation`, `<name>_pixel_classification` or `<name>_object_classification`.
 - A folder with a tif file for each input, if there are multiple inputs.
 
-If a result exists already (the tif file, or the label image in the OME-Zarr file), the command skips this input and shows an info. Use `--overwrite` to replace the result.
+If a result exists already (the tif file, or the label image in the OME-Zarr file), the command skips this input and shows an info. Use `--overwrite` to replace the result. The command always replaces the incomplete label image of a write that failed.
 
 An OME-Zarr label image also stores how the command made it. The commands write this metadata to the attributes of the label image, according to the [provenance zarr convention](https://github.com/BioImageTools/zarr-convention-provenance/blob/v0.2.0/README.md):
 - `provenance:steps` holds one step for the command. The python function `automatic_instance_segmentation` writes the same step.

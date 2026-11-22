@@ -7,8 +7,9 @@ A local file is recorded by its file name and not by its path, so that no direct
 """
 
 import os
+import inspect
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -44,6 +45,16 @@ def timestamp() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _add_key_and_type(
+    reference: Dict[str, Any], key: Optional[str], type: Optional[Dict[str, str]]
+) -> Dict[str, Any]:
+    if key is not None:
+        reference[KEY_FIELD] = key
+    if type is not None:
+        reference["type"] = type
+    return reference
+
+
 def local_reference(
     path: os.PathLike, name: str, key: Optional[str] = None, with_checksum: bool = False,
     type: Optional[Dict[str, str]] = None,
@@ -60,11 +71,7 @@ def local_reference(
     Returns:
         The data reference.
     """
-    reference = {"id": os.path.basename(os.path.normpath(str(path))), "name": name}
-    if key is not None:
-        reference[KEY_FIELD] = key
-    if type is not None:
-        reference["type"] = type
+    reference = _add_key_and_type({"id": os.path.basename(os.path.normpath(str(path))), "name": name}, key, type)
     if with_checksum:
         from .util import _compute_hash
         reference["checksum"] = _compute_hash(path)
@@ -90,16 +97,18 @@ def registry_reference(url: str, known_hash: Optional[str], name: str) -> Dict[s
 
 def image_reference(
     input_path: Any, key: Optional[str], output_path: os.PathLike,
-    name: str = "image", type: Optional[Dict[str, str]] = IMAGE,
+    name: str = "image", type: Optional[Dict[str, str]] = IMAGE, is_segmentation: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Get the data reference for the input data of a result.
 
     Args:
         input_path: The input path. Any other object, for example a numpy array, has no reference.
         key: The key of the array in a container file.
-        output_path: The output path. An input in the output zarr file is recorded by its path in this file.
+        output_path: The output path. An input in the output zarr file is recorded by the path of its group
+            and the key of its array in this file.
         name: The role of the input.
         type: The ontology term for the kind of data.
+        is_segmentation: Whether the input is a segmentation, see `micro_sam._io.resolve_container_key`.
 
     Returns:
         The data reference, or None if the input is not a file.
@@ -108,14 +117,12 @@ def image_reference(
         return None
     if os.path.realpath(str(input_path)) != os.path.realpath(str(output_path)):
         return local_reference(input_path, name, key=key, type=type)
+    from ._io import resolve_container_key  # '_io' imports this module.
+
     # The path of the group that holds the array. The spec does not define the path of the root: we use '.'.
-    group = os.path.dirname(key.strip("/")) if key else ""
-    reference = {"path": group or ".", "name": name}
-    if key is not None:
-        reference[KEY_FIELD] = key
-    if type is not None:
-        reference["type"] = type
-    return reference
+    array_key = resolve_container_key(input_path, key, is_segmentation=is_segmentation)
+    group = os.path.dirname(array_key) if array_key else ""
+    return _add_key_and_type({"path": group or ".", "name": name}, array_key, type)
 
 
 def _to_json(value: Any) -> Any:
@@ -128,6 +135,21 @@ def _to_json(value: Any) -> Any:
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     return repr(value)
+
+
+def default_parameters(function: Callable) -> Dict[str, Any]:
+    """Get the parameters of a function that have a default value.
+
+    Args:
+        function: The function.
+
+    Returns:
+        The default values of these parameters.
+    """
+    return {
+        name: parameter.default for name, parameter in inspect.signature(function).parameters.items()
+        if parameter.default is not inspect.Parameter.empty
+    }
 
 
 def make_step(

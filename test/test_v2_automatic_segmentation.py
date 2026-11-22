@@ -1242,9 +1242,11 @@ def _provenance_segmenter(engine, **config):
 
 
 def test_provenance_step(tmp_path):
+    from micro_sam._test_util import write_ome_zarr
     from micro_sam.v2.automatic_segmentation import _provenance_step
 
     path = str(tmp_path / "image.ome.zarr")
+    write_ome_zarr(path, np.zeros((4, 4), dtype="uint8"))
     model, segmenter = _provenance_segmenter("ais")
     step = _provenance_step(
         model, segmenter, path, None, path, ndim=2, tile_shape=(64, 64), halo=(8, 8), mode="sparse",
@@ -1278,3 +1280,12 @@ def test_provenance_step(tmp_path):
     parameters = step["parameters"]
     assert "mode" not in parameters and parameters["segmenter"] == {"points_per_side": 8}
     assert parameters["generate"] == {"min_object_size": 0} and parameters["norm_bounds"] == "default"
+
+    # A model without a model type has no default parameters.
+    model, segmenter = _provenance_segmenter("ais")
+    model.model_type = None
+    step = _provenance_step(
+        model, segmenter, path, None, path, ndim=2, tile_shape=None, halo=None, mode="sparse",
+        norm_bounds=None, generate_kwargs={}, started=None,
+    )
+    assert step["parameters"]["model_type"] is None and step["parameters"]["generate"] == {"min_object_size": 0}

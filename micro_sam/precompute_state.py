@@ -14,7 +14,7 @@ from segment_anything.predictor import SamPredictor
 import torch
 
 from . import util
-from ._io import get_input_name, get_input_paths
+from ._io import check_unique_input_names, get_input_name, get_input_paths
 from .util import AutoSegBase
 
 
@@ -756,6 +756,7 @@ def precompute_state(
         input_files = get_input_paths(input_path, pattern)
         if len(input_files) == 0:
             raise ValueError(f"Could not find any files matching the pattern '{pattern}' in '{input_path}'.")
+        check_unique_input_names(input_files)
         os.makedirs(output_path, exist_ok=True)
         output_paths = [os.path.join(output_path, f"{get_input_name(f)}.zarr") for f in input_files]
 

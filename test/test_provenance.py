@@ -31,18 +31,26 @@ def test_references(tmp_path):
 
 
 def test_image_reference(tmp_path):
+    from micro_sam._test_util import write_ome_zarr
+
     image, output = str(tmp_path / "image.ome.zarr"), str(tmp_path / "out.ome.zarr")
+    data = np.zeros((4, 4), dtype="uint8")
+    write_ome_zarr(image, data, data)
 
     assert image_reference(np.zeros((2, 2)), None, output) is None
     assert image_reference(None, None, output) is None
     assert image_reference(image, "s0", output) == {
         "id": "image.ome.zarr", "name": "image", "micro_sam:key": "s0", "type": IMAGE
     }
-    # An input in the output file is recorded by the path of its group.
-    assert image_reference(image, None, image) == {"path": ".", "name": "image", "type": IMAGE}
+    # An input in the output file is recorded by the path of its group and the key of its array.
+    assert image_reference(image, None, image) == {"path": ".", "name": "image", "micro_sam:key": "s0", "type": IMAGE}
     assert image_reference(image + os.sep, "s0", image)["path"] == "."
-    reference = image_reference(image, "labels/cells/s0", image, name="segmentation", type=None)
-    assert reference == {"path": "labels/cells", "name": "segmentation", "micro_sam:key": "labels/cells/s0"}
+    expected = {"path": "labels/cells", "name": "segmentation", "micro_sam:key": "labels/cells/s0"}
+    assert image_reference(image, "labels/cells/s0", image, name="segmentation", type=None) == expected
+    # This also holds for a group key, and for a segmentation without a key.
+    assert image_reference(image, "labels/cells", image, name="segmentation", type=None) == expected
+    reference = image_reference(image, None, image, name="segmentation", type=None, is_segmentation=True)
+    assert reference == expected
 
 
 def test_step_matches_the_schema(tmp_path):
@@ -50,7 +58,10 @@ def test_step_matches_the_schema(tmp_path):
     with open(pooch.retrieve(CONVENTION["schema_url"], known_hash=SCHEMA_HASH)) as f:
         schema = json.load(f)
 
+    from micro_sam._test_util import write_ome_zarr
+
     image = str(tmp_path / "image.ome.zarr")
+    write_ome_zarr(image, np.zeros((4, 4), dtype="uint8"))
     parameters = {"tile_shape": (16, 16), "threshold": np.float32(0.5), "sizes": np.arange(2), "function": len}
     step = make_step(
         "Automatic instance segmentation", "Segmentation", "micro_sam.test", parameters,

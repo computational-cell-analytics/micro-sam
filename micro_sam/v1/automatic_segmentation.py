@@ -1,5 +1,4 @@
 import os
-import inspect
 import warnings
 from pathlib import Path
 from functools import partial
@@ -12,10 +11,12 @@ from torch_em.data.datasets.util import split_kwargs
 
 from .. import util
 from .._io import (
-    describe_output, get_input_name, get_input_paths, get_label_name, get_output_path, is_ome_zarr_path,
+    check_unique_input_names, describe_output, get_input_name, get_input_paths, get_label_name, is_ome_zarr_path,
     load_output, skip_existing_output, write_segmentation,
 )
-from .._provenance import IMAGE_ANALYSIS, image_reference, make_step, timestamp
+from .._provenance import (
+    IMAGE_ANALYSIS, SEGMENTATION_MAP, default_parameters, image_reference, local_reference, make_step, timestamp,
+)
 from ..util import AutoSegBase
 from .util import get_sam_model, precompute_image_embeddings, get_model_names
 from .multi_dimensional_segmentation import automatic_3d_segmentation, automatic_tracking_implementation
@@ -26,6 +27,9 @@ from .instance_segmentation import (
     InstanceSegmentationWithDecoder, TiledInstanceSegmentationWithDecoder,
     DEFAULT_SEGMENTATION_MODE_WITH_DECODER,
 )
+
+# The postfixes of the automatic and of the corrected result of 'annotate=True'.
+ANNOTATION_SUFFIXES = ("_automatic", "_corrected")
 
 
 def get_predictor_and_segmenter(
@@ -83,7 +87,7 @@ def get_predictor_and_segmenter(
         predictor=predictor, is_tiled=is_tiled, decoder=decoder, segmentation_mode=segmentation_mode, **kwargs
     )
     # For the provenance metadata of results.
-    segmenter._provenance = {"segmentation_mode": segmentation_mode.lower(), "segmenter": kwargs}
+    segmenter._init_parameters = kwargs
     return predictor, segmenter
 
 
@@ -98,22 +102,15 @@ def _provenance_step(
     generate_kwargs, started,
 ):
     """Get the provenance step for a result of `automatic_instance_segmentation`."""
-    recorded = getattr(segmenter, "_provenance", {})
     parameters = {
         "model_type": getattr(predictor, "model_name", None),
-        "segmentation_mode": recorded.get("segmentation_mode", _segmentation_mode(segmenter)),
+        "segmentation_mode": _segmentation_mode(segmenter),
         "ndim": ndim, "tile_shape": tile_shape, "halo": halo,
     }
-    if recorded.get("segmenter"):
-        parameters["segmenter"] = recorded["segmenter"]
-    # The defaults of the segmenter, updated with the parameters of this call.
-    parameters["generate"] = {
-        **{
-            name: parameter.default for name, parameter in inspect.signature(segmenter.generate).parameters.items()
-            if parameter.default is not inspect.Parameter.empty
-        },
-        **generate_kwargs,
-    }
+    init_parameters = getattr(segmenter, "_init_parameters", None)
+    if init_parameters:
+        parameters["segmenter"] = init_parameters
+    parameters["generate"] = {**default_parameters(segmenter.generate), **generate_kwargs}
     return make_step(
         name="Automatic instance segmentation",
         category="Segmentation",
@@ -131,8 +128,26 @@ def _provenance_step(
 
 def _add_suffix_to_output_path(output_path: Union[str, os.PathLike], suffix: str) -> str:
     fpath = Path(output_path).resolve()
+    if is_ome_zarr_path(fpath):
+        return str(fpath.with_name(f"{get_input_name(fpath)}{suffix}.ome.zarr"))
     fext = fpath.suffix if fpath.suffix else ".tif"
     return str(fpath.with_name(f"{fpath.stem}{suffix}{fext}"))
+
+
+def _get_outputs(output_path: Union[str, os.PathLike], label_name: str, annotate: bool) -> List[Tuple[str, str]]:
+    """Get the output path and the label name for the automatic and for the final result.
+
+    Without `annotate`, the automatic result is the final result. With `annotate`, both results are stored:
+    an existing ome-zarr image stores them as the label images '<label_name>_automatic' and
+    '<label_name>_corrected'. In all other cases each result has its own file, with the same postfix:
+    a new ome-zarr file holds only one label image.
+    """
+    if not annotate:
+        return [(output_path, label_name)] * 2
+    names = [f"{label_name}{suffix}" for suffix in ANNOTATION_SUFFIXES]
+    if is_ome_zarr_path(output_path) and os.path.exists(output_path):
+        return [(str(output_path), name) for name in names]
+    return [(_add_suffix_to_output_path(output_path, suffix), name) for suffix, name in zip(ANNOTATION_SUFFIXES, names)]
 
 
 def automatic_tracking(
@@ -248,8 +263,11 @@ def automatic_instance_segmentation(
         output_path: The output path where the instance segmentations will be saved. A path that ends with
             '.ome.zarr' saves them as an ome-zarr label image: as 'labels/<label_name>' with the scale levels of
             an existing ome-zarr image, which can be the input itself, or at the root of a new file.
-            Any other path saves them as an image file, by default a tif. If the result exists already,
+            Any other path saves them as a tif file, with the suffix '.tif'. If the result exists already,
             the function loads and returns it instead of a new computation, unless `overwrite` is True.
+            With `annotate`, the automatic and the corrected result are both saved, with the postfixes
+            '_automatic' and '_corrected': as two label images in an existing ome-zarr image,
+            otherwise as two files, e.g. 'out_automatic.tif' and 'out_corrected.tif'.
         embedding_path: The path where the embeddings are cached already / will be saved.
         mask_path: The path to an optional foreground mask. Areas outside of the foreground will not be processed.
         key: The key to the input file. This is needed for container files (eg. hdf5 or zarr)
@@ -266,8 +284,8 @@ def automatic_instance_segmentation(
             By default, does not activate the annotator.
         batch_size: The batch size to compute image embeddings over tiles / z-planes.
             By default, does it sequentially, i.e. one after the other.
-        label_name: The name of the label image for an ome-zarr output. By default the name of the input image
-            for an ome-zarr input, otherwise the normalized name of the input file.
+        label_name: The name of the label image for an ome-zarr output. By default '<name>_segmentation',
+            with the name of the input image for an ome-zarr input, otherwise the normalized name of the input file.
         overwrite: Whether to replace a result that exists already at `output_path`.
         generate_kwargs: optional keyword arguments for the generate function of the AMG or AIS class.
 
@@ -276,10 +294,12 @@ def automatic_instance_segmentation(
             which are None if the result exists already.
     """
     if output_path is not None:
-        output_path = get_output_path(output_path)
+        if not is_ome_zarr_path(output_path):
+            output_path = Path(output_path).with_suffix(".tif")
         label_name = get_label_name(input_path, key=key, label_name=label_name)
-        if skip_existing_output(output_path, label_name, overwrite):
-            instances = load_output(output_path, label_name)
+        (_output_path, _label_name), (final_path, final_name) = _get_outputs(output_path, label_name, annotate)
+        if skip_existing_output(final_path, final_name, overwrite):
+            instances = load_output(final_path, final_name, input_path, key)
             return (instances, None) if return_embeddings else instances
     started = timestamp()
 
@@ -347,18 +367,13 @@ def automatic_instance_segmentation(
 
     # Before starting to annotate, if at all desired, store the automatic segmentations in the first stage.
     if output_path is not None:
-        _output_path, _label_name = output_path, label_name
-        if annotate and is_ome_zarr_path(output_path):
-            _label_name = f"{label_name}_automatic"
-        elif annotate:
-            _output_path = _add_suffix_to_output_path(output_path, "_automatic")
         provenance = None
         if is_ome_zarr_path(output_path):
             provenance = [_provenance_step(
-                predictor, segmenter, input_path, key, output_path, mask_path, mask_key, ndim, tile_shape, halo,
+                predictor, segmenter, input_path, key, _output_path, mask_path, mask_key, ndim, tile_shape, halo,
                 generate_kwargs, started,
             )]
-        # The automatic result is only an intermediate result if we annotate, so we replace it.
+        # With 'annotate', the automatic result of a run that was not finished is replaced.
         write_segmentation(
             _output_path, instances, label_name=_label_name, overwrite=overwrite or annotate, provenance=provenance,
         )
@@ -393,20 +408,24 @@ def automatic_instance_segmentation(
         # Save the instance segmentation, if 'output_path' provided.
         if output_path is not None:
             if provenance is not None:
+                if _output_path == final_path:
+                    automatic = {"path": f"labels/{_label_name}", "name": "automatic segmentation"}
+                else:
+                    automatic = local_reference(_output_path, "automatic segmentation", type=SEGMENTATION_MAP)
                 provenance.append(make_step(
                     name="Interactive correction",
                     category="Annotation",
                     entry_point="micro_sam.sam_annotator.annotator",
                     parameters={},
-                    inputs=[{"path": f"labels/{_label_name}", "name": "automatic segmentation"}],
+                    inputs=[automatic],
                     started=annotation_started,
                     category_terms=(IMAGE_ANALYSIS,),
                 ))
             write_segmentation(
-                output_path, instances, label_name=label_name, overwrite=overwrite, provenance=provenance,
+                final_path, instances, label_name=final_name, overwrite=overwrite, provenance=provenance,
             )
             if verbose:
-                print(f"The final segmentation results are stored in {describe_output(output_path, label_name)}.")
+                print(f"The final segmentation results are stored in {describe_output(final_path, final_name)}.")
 
     if return_embeddings:
         return instances, image_embeddings
@@ -451,8 +470,8 @@ def main(argv=None):
     )
     parser.add_argument(
         "--label_name", default=None, type=str,
-        help="The name of the label image for an ome-zarr output. By default the name of the input image "
-        "for an ome-zarr input, otherwise the name of the input file."
+        help="The name of the label image for an ome-zarr output. By default '<name>_segmentation', with the name "
+        "of the input image for an ome-zarr input, otherwise the name of the input file."
     )
     parser.add_argument(
         "--overwrite", action="store_true",
@@ -496,7 +515,9 @@ def main(argv=None):
     )
     parser.add_argument(
         "--annotate", action="store_true",
-        help="Whether to continue annotation after the automatic segmentation is generated."
+        help="Whether to continue annotation after the automatic segmentation is generated. "
+        "The automatic and the corrected segmentation are both stored, with the postfixes '_automatic' "
+        "and '_corrected'."
     )
     parser.add_argument(
         "-d", "--device", default=None, type=str,
@@ -538,6 +559,7 @@ def main(argv=None):
     output_path = args.output_path
     embedding_path = args.embedding_path
     has_one_input = len(input_paths) == 1
+    check_unique_input_names(input_paths)
     if is_ome_zarr_path(output_path) and (args.tracking or not has_one_input):
         raise ValueError(
             f"The ome-zarr output '{output_path}' is only supported for segmentation of a single input. "
@@ -591,8 +613,9 @@ def main(argv=None):
                 _output_fpath = os.path.join(output_folder, f"{input_name}.tif")
 
         if not args.tracking and skip_existing_output(
-            get_output_path(_output_fpath),
-            get_label_name(input_path, key=args.key, label_name=args.label_name),
+            *_get_outputs(
+                _output_fpath, get_label_name(input_path, key=args.key, label_name=args.label_name), args.annotate
+            )[1],
             args.overwrite,
         ):
             continue

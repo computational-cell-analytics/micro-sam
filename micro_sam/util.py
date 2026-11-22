@@ -915,7 +915,7 @@ def load_image_data(
             ome-zarr file, or the single array of a zarr or n5 file is loaded.
         lazy_loading: Whether to lazyly load data. Only supported for n5 and zarr data.
         is_segmentation: Whether the data is a segmentation. Without a key, the single label image of an ome-zarr
-            file is then loaded instead of the image.
+            file is then loaded instead of the image, if the file has a 'labels' group.
 
     Returns:
         The image data.

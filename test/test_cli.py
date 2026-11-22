@@ -250,12 +250,26 @@ def test_inference_segmentation_resolves_containers(monkeypatch, tmp_path, conta
 
     runner = CliRunner()
     out = str(tmp_path / "out")
-    result = runner.invoke(cli, ["inference", "segmentation", "-i", str(container_folder), "-o", out])
+    command = ["inference", "segmentation", "-i", str(container_folder), "-o", out]
+    result = runner.invoke(cli, [*command, "--pattern", "*"])
     assert result.exit_code == 0, result.output
     assert [call["input_path"] for call in calls] == [
         str(container_folder / name) for name in ("a.ome.zarr", "b.ome.zarr", "c.tif")
     ]
     assert [call["output_path"] for call in calls] == [os.path.join(out, f"{name}.tif") for name in "abc"]
+    assert [call["label_name"] for call in calls] == [f"{name}_segmentation" for name in "abc"]
+
+    # Without a pattern, a folder gives its image files, but not its containers.
+    calls.clear()
+    result = runner.invoke(cli, command)
+    assert result.exit_code == 0, result.output
+    assert [call["input_path"] for call in calls] == [str(container_folder / "c.tif")]
+
+    # Two inputs with the same name would get the same result file.
+    imageio.imwrite(container_folder / "a.tif", binary_blobs(32, rng=0).astype("uint8"))
+    result = runner.invoke(cli, [*command, "--pattern", "*"])
+    assert result.exit_code != 0 and "same name" in result.output
+    os.remove(container_folder / "a.tif")
 
     calls.clear()
     path = str(container_folder / "a.ome.zarr")
@@ -312,6 +326,52 @@ def test_inference_segmentation_skips_existing_outputs_before_loading_the_model(
     assert "already stored" in result.output
 
 
+def test_inference_segmentation_views_a_stored_result(monkeypatch, tmp_path):
+    from click.testing import CliRunner
+
+    import micro_sam._cli as micro_sam_cli
+    import micro_sam.v2.automatic_segmentation as automatic_segmentation
+
+    viewed = []
+    monkeypatch.setattr(automatic_segmentation, "get_predictor_and_segmenter", _fail_to_load_model)
+    monkeypatch.setattr(micro_sam_cli, "_view_result", lambda *args: viewed.append(args))
+    image_path, output_path = str(tmp_path / "image.tif"), str(tmp_path / "seg.tif")
+    stored = binary_blobs(32, rng=1).astype("uint8")
+    imageio.imwrite(image_path, binary_blobs(32, rng=0).astype("uint8"))
+    imageio.imwrite(output_path, stored)
+
+    result = CliRunner().invoke(
+        micro_sam_cli.cli, ["inference", "segmentation", "-i", image_path, "-o", output_path, "--view"]
+    )
+    assert result.exit_code == 0, result.output
+    (path, key, segmentation), = viewed
+    assert path == image_path and key is None
+    np.testing.assert_array_equal(segmentation, stored)
+
+
+def test_inference_segmentation_apg_reads_the_dimensionality_of_hdf5(monkeypatch, tmp_path):
+    import h5py
+    from click.testing import CliRunner
+
+    from micro_sam._cli import cli
+    import micro_sam.v2.automatic_segmentation as automatic_segmentation
+
+    built = []
+    monkeypatch.setattr(
+        automatic_segmentation, "get_predictor_and_segmenter", lambda **kwargs: built.append(kwargs) or (None, None)
+    )
+    monkeypatch.setattr(automatic_segmentation, "automatic_instance_segmentation", lambda **kwargs: None)
+    image_path = str(tmp_path / "volume.h5")
+    with h5py.File(image_path, "w") as f:
+        f.create_dataset("raw", data=np.zeros((4, 16, 16), dtype="uint8"))
+
+    result = CliRunner().invoke(cli, [
+        "inference", "segmentation", "-i", image_path, "-k", "raw", "-o", str(tmp_path / "seg.tif"), "--engine", "apg",
+    ])
+    assert result.exit_code == 0, result.output
+    assert built[0]["ndim"] == 3
+
+
 def test_v1_automatic_segmentation_skips_existing_outputs_before_loading_the_model(monkeypatch, tmp_path, capsys):
     import micro_sam.v1.automatic_segmentation as automatic_segmentation
 
@@ -350,7 +410,8 @@ def test_inference_pixel_classification_skips_existing_outputs(monkeypatch, tmp_
     out.mkdir()
     imageio.imwrite(out / "a.tif", imageio.imread(container_folder / "c.tif"))
     args = [
-        "inference", "pixel-classification", "-i", str(container_folder), "-o", str(out), "--classifier", "rf.joblib"
+        "inference", "pixel-classification", "-i", str(container_folder), "--pattern", "*", "-o", str(out),
+        "--classifier", "rf.joblib",
     ]
     runner = CliRunner()
 
@@ -374,9 +435,11 @@ def test_inference_pixel_classification_skips_existing_outputs(monkeypatch, tmp_
     args = ["inference", "pixel-classification", "-i", path, "-o", path, "--classifier", str(rf_path)]
     result = runner.invoke(micro_sam_cli.cli, args)
     assert result.exit_code == 0, result.output
-    np.testing.assert_array_equal(util.load_image_data(path, key="labels/a"), util.load_image_data(path))
+    # The default name has the postfix of the command, so it differs from the name of a segmentation.
+    label_key = "labels/a_pixel_classification"
+    np.testing.assert_array_equal(util.load_image_data(path, key=label_key), util.load_image_data(path))
 
-    step, = z5py.File(path, mode="r")["labels/a"].attrs["provenance:steps"]
+    step, = z5py.File(path, mode="r")[label_key].attrs["provenance:steps"]
     assert step["name"] == "Pixel classification"
     assert step["parameters"]["model_type"] == "hvit_t"
     image, classifier = step["inputs"]
