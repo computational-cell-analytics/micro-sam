@@ -343,6 +343,7 @@ def train_decoder(
     checkpoint_path: Optional[Union[str, os.PathLike]] = None,
     resume: bool = False,
     boundary_dice_weight: float = 0.5,
+    scheduler_kwargs: Optional[Dict] = None,
 ) -> None:
     """Train a hybrid 2D/3D segmentation decoder on top of the frozen image encoder of a SAM2 model.
 
@@ -365,6 +366,8 @@ def train_decoder(
         resume: Whether to continue from the latest checkpoint of this training, if it exists.
             The training then runs for the epochs that are missing to reach `n_epochs`.
         boundary_dice_weight: The Dice weight in the boundary loss.
+        scheduler_kwargs: The arguments for the 'ReduceLROnPlateau' scheduler.
+            By default the mode 'min', a factor of 0.9 and a patience of 10 epochs.
     """
     device = get_device(device)
     model = get_decoder_train_model(
@@ -373,7 +376,7 @@ def train_decoder(
     )
     trainer = get_decoder_trainer(
         name=name, model=model, train_loader=train_loader, val_loader=val_loader, lr=lr, device=device,
-        save_root=save_root, boundary_dice_weight=boundary_dice_weight,
+        save_root=save_root, boundary_dice_weight=boundary_dice_weight, scheduler_kwargs=scheduler_kwargs,
     )
 
     fit_kwargs = {"epochs": n_epochs, "overwrite_training": True}
