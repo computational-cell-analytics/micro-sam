@@ -3,9 +3,10 @@
 The decoder is scored on the test data of the automatic segmentation panels of Figures 2 and 3 of the micro-sam2 paper
 (Extended Data Figure 1 uses the same datasets), with the evaluation pipeline of
 'finetuning/v2/evaluation/evaluate_automatic_segmentation.py': the same test samples and crops, padding, upscaling,
-tiling of large images, postprocessing and metrics. The reference is micro-sam2 hvit_t, i.e. the registry models
-'hvit_t_cells' and 'hvit_t_cells_decoder' with the library defaults, whose results are read from the registry
-evaluation of the paper (REFERENCE_FOLDERS).
+tiling of large images, postprocessing and metrics. In-domain datasets outside the panels are scored as well
+(SUPPLEMENT_DATASETS). The reference is micro-sam2 hvit_t, i.e. the registry models
+'hvit_t_cells' and 'hvit_t_cells_decoder' with the library defaults. Its results are copied from the registry
+evaluation of the paper and recomputed where the test set-up changed since ('reference', REFERENCE_ROOT).
 
 The decoder model ('FrozenEncoderHybridUNETR') takes and returns the same as the UniSAM2 model of the reference:
 three channels in [0, 1], resized to 1024 pixels inside the model, and the five output channels foreground,
@@ -13,8 +14,10 @@ three directed distances and boundaries. The only difference in the pipeline is 
 decoder was trained on stacks of 14 slices and processes blocks of 10 + 2 * 2 slices (Z_TILE, Z_HALO), the
 reference blocks of 4 + 2 * 2 slices.
 
-TODO: the postprocessing uses the library defaults of hvit_t_cells (see DEFAULT_MODEL_TYPE), which were tuned for the
-previous decoder. Replace them with parameters that are optimized for the new decoder.
+Postprocessing: without '--params' the library defaults of hvit_t_cells (see DEFAULT_MODEL_TYPE), which were tuned
+for the previous decoder. With '--params' the parameters that 'tune_decoder.py' found for the checkpoint: the best
+ones over the tuning datasets of a setting (2d, 3d, dense), with the 'min_size' of the dataset where it has tuning
+data.
 
 Usage:
 
@@ -25,6 +28,13 @@ Usage:
     python evaluate_decoder.py report -e <root>/evaluation/smoke --n_samples 2
     # The full evaluation, as a Slurm array over datasets and shards.
     python evaluate_decoder.py submit --checkpoint <root>/checkpoints/hiera_u_hvit_t_cells/best.pt [--dry-run]
+    # With tuned parameters, per setting and after the search job of the setting.
+    python evaluate_decoder.py submit --checkpoint <staged checkpoint> --data 3d \\
+        --params <tuning>/3d/best_parameters.json --dependency afterok:<job>
+    # The reference: copy the results that still hold, and recompute the others.
+    python evaluate_decoder.py reference copy
+    python evaluate_decoder.py reference submit
+    python evaluate_decoder.py reference summary
 
 The decoder of the checkpoint is copied to '<experiment>/checkpoints/' first, since the training overwrites 'best.pt'.
 The checksum of the training checkpoint names the result files ('<dataset>_micro_sam2_hvit_t_ais_default_ckpt-
@@ -53,25 +63,39 @@ SAVE_ROOT = os.environ.get(
 )
 DATA_ROOT = "/mnt/vast-nhr/projects/cidas/cca/data"
 
-# The model type that names the result files and selects the postprocessing parameters. 'hvit_t' uses the defaults of
-# the cells models, i.e. those of 'hvit_t_cells' (micro_sam._model_settings.DEFAULT_POSTPROCESSING).
-# TODO: these AIS defaults were tuned for the previous UNETR decoder. Replace them with parameters that are optimized
-# for the new decoder.
+# The model type that names the result files and selects the default postprocessing parameters. 'hvit_t' uses the
+# defaults of the cells models, i.e. those of 'hvit_t_cells' (micro_sam._model_settings.DEFAULT_POSTPROCESSING).
+# These AIS defaults were tuned for the previous UNETR decoder; '--params' replaces them with tuned parameters.
 DEFAULT_MODEL_TYPE = "hvit_t"
 
 # The z tile and halo of volumes: blocks of 10 + 2 * 2 = 14 slices, the number of slices of the training. The y and x
 # tiles are the ones of the reference (384 + 2 * 64 = 512 pixels, the size of the training patches).
 Z_TILE, Z_HALO = 10, 2
 
-# The results of the reference, micro-sam2 hvit_t with the registry models and the library defaults. A result in a
-# later folder replaces the result of the same dataset in an earlier one, as in the tables of the paper figures
-# ('collect_automatic_results.py' in experiments/baselines_2d/control).
+# The results of the reference, micro-sam2 hvit_t with the registry models and the library defaults, in the registry
+# evaluation of the paper. A result in a later folder replaces the result of the same dataset in an earlier one, as
+# in the tables of the paper figures ('collect_automatic_results.py' in experiments/baselines_2d/control).
 EXPERIMENTS = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments"
-REFERENCE_FOLDERS = [
+REFERENCE_SOURCE_FOLDERS = [
     f"{EXPERIMENTS}/v6_cells_registry_evaluation/results",
     f"{EXPERIMENTS}/v6_cells_registry_evaluation_crops32/results",
     f"{EXPERIMENTS}/v6_cells_registry_evaluation_isotropic/results",
 ]
+# The reference for the current test set-up ('reference'): a copy of the results above, without the datasets whose
+# test set-up changed since. Those are recomputed with the same models and defaults.
+REFERENCE_ROOT = os.path.join(SAVE_ROOT, "evaluation", "reference_hvit_t")
+REFERENCE_FOLDERS = [os.path.join(REFERENCE_ROOT, "results")]
+# platynereis_cells and synapsenet_compartments are segmented with the multicut and scored by the CREMI score now
+# (`common.DATASETS_DENSE`), and six test volumes of cartocell moved into tuning
+# (`common.CARTOCELL_TUNING_TEST_VOLUMES`).
+REFERENCE_RECOMPUTED = ("platynereis_cells", "synapsenet_compartments", "cartocell")
+
+# The datasets outside the figure panels that are scored as well: (dataset, panel). They are in-domain. xpress is,
+# like liconn of the neurite panel, not tuned on (see `parameter_search.IN_DOMAIN_CELLS`).
+SUPPLEMENT_DATASETS = (
+    ("platynereis_cells", "EM cells"), ("densecell", "EM cells"), ("synapsenet_compartments", "EM cells"),
+    ("embedseg_platy_ish", "other"), ("xpress", "X-ray neurites"),
+)
 
 # The samples per array task of the full evaluation.
 SAMPLES_PER_TASK = {2: 250, 3: 8}
@@ -143,6 +167,49 @@ def panel_datasets():
             for domain, names in domains.items():
                 datasets.extend((name, figure, panel, domain) for name in names)
     return datasets
+
+
+def evaluation_datasets():
+    """The panel datasets and the datasets of the supplement, as a list of (dataset, figure, panel, domain)."""
+    return panel_datasets() + [(name, "supplement", panel, "ID") for name, panel in SUPPLEMENT_DATASETS]
+
+
+def data_type(dataset, evaluation_common):
+    """The setting a dataset is tuned and segmented in: '2d', '3d' (flow) or 'dense' (multicut)."""
+    if dataset in evaluation_common.DATASETS_DENSE:
+        return "dense"
+    return "3d" if dataset in evaluation_common.DATASETS_3D else "2d"
+
+
+def load_tuned_parameters(paths, checksum, allow_check=False):
+    """Read the results of the tuning sessions ('best_parameters.json' of tune_decoder.py), keyed by setting.
+
+    They must belong to the checkpoint with the given checksum. The result of a check on small grids is refused
+    unless 'allow_check' is set.
+    """
+    tuned = {}
+    for path in paths:
+        with open(path) as f:
+            entry = json.load(f)
+        if entry["checksum"] != checksum:
+            raise RuntimeError(f"{path} was tuned for the checkpoint {entry['checksum']}, not for {checksum}.")
+        if (entry.get("check") or entry.get("n_samples")) and not allow_check:
+            raise RuntimeError(f"{path} is the result of a check (small grid or few samples).")
+        if entry["data"] in tuned:
+            raise RuntimeError(f"Got two parameter files for '{entry['data']}'.")
+        tuned[entry["data"]] = entry
+    return tuned
+
+
+def dataset_parameters(tuned, dataset, evaluation_common):
+    """The tuned parameters of a dataset: the best ones of its setting, with its own 'min_size' if it was tuned on."""
+    setting = data_type(dataset, evaluation_common)
+    if setting not in tuned:
+        raise RuntimeError(f"No tuned parameters for '{dataset}': the '{setting}' session is missing.")
+    params = dict(tuned[setting]["params"])
+    if dataset in tuned[setting].get("min_size_per_dataset", {}):
+        params["min_size"] = int(tuned[setting]["min_size_per_dataset"][dataset])
+    return params
 
 
 # The modules whose objects a training checkpoint may build. Everything else, e.g. the datasets and augmentations
@@ -281,7 +348,10 @@ def run(args):
     staged, checksum, checkpoint = stage_checkpoint(args.checkpoint, experiment_folder)
     print(f"Checkpoint {staged} (epoch {checkpoint['epoch'] + 1}, checksum {checksum}).")
 
-    datasets = args.datasets or [name for name, *_ in panel_datasets()]
+    datasets = args.datasets or [name for name, *_ in evaluation_datasets()]
+    tuned = None
+    if args.params:
+        tuned = load_tuned_parameters(args.params, checksum, allow_check=args.n_samples is not None)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Device:", torch.cuda.get_device_name() if device == "cuda" else "CPU")
     model = load_decoder_model(checkpoint, device)
@@ -303,11 +373,13 @@ def run(args):
         start = time.time()
         try:
             evaluation_common.check_data_download(dataset, DATA_ROOT, download=False)
-            # params=None: the postprocessing uses the defaults of DEFAULT_MODEL_TYPE.
-            # TODO: replace them with parameters optimized for the new decoder.
+            # Without tuned parameters the postprocessing uses the defaults of DEFAULT_MODEL_TYPE.
+            params = None if tuned is None else dataset_parameters(tuned, dataset, evaluation_common)
+            if params is not None:
+                print(f"{dataset}: {params}")
             evaluation.run_evaluation(
-                model, "ais", dataset, DATA_ROOT, experiment_folder, DEFAULT_MODEL_TYPE, None, device,
-                args.n_samples, checkpoint_id=checksum, tuned=False,
+                model, "ais", dataset, DATA_ROOT, experiment_folder, DEFAULT_MODEL_TYPE, params, device,
+                args.n_samples, checkpoint_id=checksum, tuned=tuned is not None,
                 result_tag=_result_tag(args.z_tile, args.z_halo), shard=shard,
                 min_shape=evaluation.TRAINING_SCALE_MIN_SHAPE_2D.get(dataset), predict_kwargs=predict_kwargs,
             )
@@ -344,18 +416,13 @@ def _reference_result(dataset):
     return found
 
 
-def _sample_rows(result_path, n_samples=None, sample_ids=None):
-    """The per-sample rows of the first 'n_samples' samples, without the samples that have no labels.
-
-    'sample_ids' maps the samples to the positions of the stored rows, for a reference written before test
-    volumes moved into tuning (see `common.legacy_test_sample_ids`). None means the positions are unchanged.
-    """
+def _sample_rows(result_path, n_samples=None):
+    """The per-sample rows of the first 'n_samples' samples, without the samples that have no labels."""
     import pandas as pd
 
     # A dataset can have fewer samples than 'n_samples'.
     n_stored = len(glob.glob(os.path.join(result_path[:-4] + "_samples", "sample_*.csv")))
-    if sample_ids is None:
-        sample_ids = range(n_stored)
+    sample_ids = range(n_stored)
     if n_samples is not None:
         sample_ids = sample_ids[:n_samples]
     rows = []
@@ -370,9 +437,9 @@ def _sample_rows(result_path, n_samples=None, sample_ids=None):
     return pd.concat(rows, ignore_index=True) if rows else None
 
 
-def _new_result(experiment_folder, dataset, tag, checkpoint_id):
+def _new_result(experiment_folder, dataset, tag, checkpoint_id, parameters="default"):
     paths = glob.glob(os.path.join(
-        experiment_folder, "results", f"{dataset}_micro_sam2_{DEFAULT_MODEL_TYPE}_ais_default{tag}_ckpt-*.csv"
+        experiment_folder, "results", f"{dataset}_micro_sam2_{DEFAULT_MODEL_TYPE}_ais_{parameters}{tag}_ckpt-*.csv"
     ))
     if checkpoint_id is not None:
         paths = [path for path in paths if path.endswith(f"_ckpt-{checkpoint_id}.csv")]
@@ -389,22 +456,26 @@ def report(args):
     result_tag = _result_tag(args.z_tile, args.z_halo)
     tag = (f"_{result_tag}" if result_tag else "") + (f"_n{args.n_samples}" if args.n_samples else "")
 
+    parameters = args.parameters
+    if parameters is None:  # The tuned results if there are any.
+        tuned = glob.glob(os.path.join(args.experiment_folder, "results", f"*_ais_tuned{tag}_ckpt-*.csv"))
+        parameters = "tuned" if tuned else "default"
+    print(f"Results with the {parameters} parameters, reference: {REFERENCE_FOLDERS[-1]}")
+
     rows = []
-    for dataset, figure, panel, domain in panel_datasets():
+    for dataset, figure, panel, domain in evaluation_datasets():
         column = _metric_column(dataset, evaluation_common)
         row = {
             "dataset": dataset, "figure": figure, "panel": panel, "domain": domain,
             "metric": column.lower(), "new": None, "reference": None, "n_samples": None,
         }
-        new_path = _new_result(args.experiment_folder, dataset, tag, args.checkpoint_id)
+        new_path = _new_result(args.experiment_folder, dataset, tag, args.checkpoint_id, parameters)
         if new_path is not None:
             row["new"] = float(pd.read_csv(new_path)[column].iloc[0])
         reference_path = _reference_result(dataset)
-        # The reference predates the move of test volumes into tuning, so its rows are matched by sample.
-        legacy_ids = evaluation_common.legacy_test_sample_ids(dataset, DATA_ROOT)
         if reference_path is not None:
-            if args.n_samples or legacy_ids is not None:
-                samples = _sample_rows(reference_path, args.n_samples, legacy_ids)
+            if args.n_samples:
+                samples = _sample_rows(reference_path, args.n_samples)
                 if samples is not None:
                     row["reference"], row["n_samples"] = float(samples[column].mean()), len(samples)
             else:
@@ -413,7 +484,7 @@ def report(args):
 
     table = pd.DataFrame(rows)
     table["delta"] = table["new"] - table["reference"]
-    path = os.path.join(args.experiment_folder, f"report{tag}.csv")
+    path = os.path.join(args.experiment_folder, f"report_{parameters}{tag}.csv")
     table.to_csv(path, index=False)
 
     pd.set_option("display.width", 200)
@@ -443,6 +514,7 @@ SBATCH = """#!/bin/bash
 #SBATCH --array=1-{n_tasks}%{max_parallel}
 #SBATCH -o {experiment}/logs/slurm/{job_name}_%A_%a.out
 #SBATCH -e {experiment}/logs/slurm/{job_name}_%A_%a.err
+{extra}
 set -eo pipefail
 source ~/.bashrc
 set -u
@@ -450,8 +522,34 @@ micromamba activate new-stack
 export PYTHONUNBUFFERED=1 PYTORCH_ALLOC_CONF=expandable_segments:True
 cd {code}
 ARGS=$(sed -n "${{SLURM_ARRAY_TASK_ID}}p" {tasks})
-python evaluate_decoder.py run --checkpoint {checkpoint} -e {experiment} --skip_failed $ARGS
+{command} $ARGS
 """
+
+
+def freeze_code(folder):
+    """Copy this folder, the evaluation code and the plotting scripts with the panel datasets for a Slurm job."""
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    code = os.path.join(folder, "jobs", f"code_{stamp}")
+    shutil.copytree(HERE, code, ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(
+        evaluation_dir(), os.path.join(code, "evaluation"),
+        ignore=shutil.ignore_patterns("__pycache__", "gpu_jobs", "optimization"),
+    )
+    for_paper = os.path.join(_repo_root(), "scripts", "plotting", "v2", "for_paper")
+    os.makedirs(os.path.join(code, "for_paper"))
+    for figure in ("figure2", "figure3"):
+        shutil.copy(os.path.join(for_paper, f"plots_for_{figure}.py"), os.path.join(code, "for_paper"))
+    return code
+
+
+def shard_tasks(datasets, evaluation_common, template):
+    """One task per shard of every dataset: 'template' formatted with the dataset, the shards and the shard."""
+    tasks = []
+    for dataset in datasets:
+        ndim = 3 if dataset in evaluation_common.DATASETS_3D else 2
+        n_shards = max(1, math.ceil(evaluation_common.n_samples(dataset, DATA_ROOT) / SAMPLES_PER_TASK[ndim]))
+        tasks.extend(template.format(dataset=dataset, n_shards=n_shards, index=index) for index in range(n_shards))
+    return tasks
 
 
 def submit(args):
@@ -459,40 +557,143 @@ def submit(args):
     _, evaluation_common = import_evaluation()
     experiment_folder = args.experiment_folder or default_experiment_folder(args.checkpoint)
     staged, checksum, _ = stage_checkpoint(args.checkpoint, experiment_folder)
+    code = freeze_code(experiment_folder)
 
-    stamp = time.strftime("%Y%m%d_%H%M%S")
-    code = os.path.join(experiment_folder, "jobs", f"code_{stamp}")
-    shutil.copytree(HERE, code, ignore=shutil.ignore_patterns("__pycache__"))
-    shutil.copytree(evaluation_dir(), os.path.join(code, "evaluation"), ignore=shutil.ignore_patterns("__pycache__"))
-    for_paper = os.path.join(_repo_root(), "scripts", "plotting", "v2", "for_paper")
-    os.makedirs(os.path.join(code, "for_paper"))
-    for figure in ("figure2", "figure3"):
-        shutil.copy(os.path.join(for_paper, f"plots_for_{figure}.py"), os.path.join(code, "for_paper"))
-
-    tasks = []
-    datasets = args.datasets or [name for name, *_ in panel_datasets()]
-    z_args = f"--z_tile {args.z_tile} --z_halo {args.z_halo}"
-    for dataset in datasets:
-        ndim = 3 if dataset in evaluation_common.DATASETS_3D else 2
-        n_shards = max(1, math.ceil(evaluation_common.n_samples(dataset, DATA_ROOT) / SAMPLES_PER_TASK[ndim]))
-        tasks.extend(
-            f"--datasets {dataset} --n_shards {n_shards} --shard_index {index} {z_args}" for index in range(n_shards)
-        )
+    datasets = args.datasets or [name for name, *_ in evaluation_datasets()]
+    if args.data:
+        datasets = [name for name in datasets if data_type(name, evaluation_common) in args.data]
+    template = "--datasets {dataset} --n_shards {n_shards} --shard_index {index} " + (
+        f"--z_tile {args.z_tile} --z_halo {args.z_halo}"
+    )
+    tasks = shard_tasks(datasets, evaluation_common, template)
     tasks_path = os.path.join(code, "tasks.txt")
     with open(tasks_path, "w") as f:
         f.write("\n".join(tasks) + "\n")
 
-    job_name = f"deceval_{os.path.basename(staged)[:-3]}"
+    command = f"python evaluate_decoder.py run --checkpoint {staged} -e {experiment_folder} --skip_failed"
+    if args.params:
+        # The files are read by the tasks: with '--dependency' the search that writes them may still run.
+        command += " --params " + " ".join(os.path.abspath(path) for path in args.params)
+    job_name = "_".join(["deceval", *(args.data or []), os.path.basename(staged)[:-3]])
     script = SBATCH.format(
         job_name=job_name, partition=args.partition, gres=args.gres, cpus=args.cpus, mem=args.mem, time=args.time,
         n_tasks=len(tasks), max_parallel=args.max_parallel, experiment=experiment_folder, code=code,
-        tasks=tasks_path, checkpoint=staged,
+        tasks=tasks_path, command=command,
+        extra="\n".join(
+            ([f"#SBATCH --dependency={args.dependency}"] if args.dependency else [])
+            + ([f"#SBATCH --qos={args.qos}"] if args.qos else [])
+            + (["#SBATCH --requeue"] if args.requeue else [])
+        ),
     )
     script_path = os.path.join(code, "submit.sbatch")
     with open(script_path, "w") as f:
         f.write(script)
     os.makedirs(os.path.join(experiment_folder, "logs", "slurm"), exist_ok=True)
     print(f"{len(tasks)} tasks for {len(datasets)} datasets, checkpoint {staged} ({checksum}).")
+    print(f"Script: {script_path}")
+    if args.dry_run:
+        return
+    print(subprocess.run(["sbatch", script_path], capture_output=True, text=True, check=True).stdout.strip())
+
+
+def _source_reference_result(dataset):
+    """The result of a dataset in the registry evaluation of the paper: the one of the last folder that holds it."""
+    found = None
+    for folder in REFERENCE_SOURCE_FOLDERS:
+        paths = glob.glob(os.path.join(folder, f"{dataset}_micro_sam2_hvit_t_ais_default_ckpt-*.csv"))
+        if len(paths) > 1:
+            raise RuntimeError(f"More than one reference result for '{dataset}' in {folder}: {paths}.")
+        if paths:
+            found = paths[0]
+    return found
+
+
+def reference_summary():
+    """Write the table of the reference results, 'summary.csv', and return it."""
+    import pandas as pd
+
+    _, evaluation_common = import_evaluation()
+    sources_path = os.path.join(REFERENCE_ROOT, "sources.json")
+    sources = {}
+    if os.path.exists(sources_path):
+        with open(sources_path) as f:
+            sources = json.load(f)
+    rows = []
+    for dataset, figure, panel, domain in evaluation_datasets():
+        column = _metric_column(dataset, evaluation_common)
+        path = _reference_result(dataset)
+        row = {
+            "dataset": dataset, "figure": figure, "panel": panel, "domain": domain, "metric": column.lower(),
+            "value": None, "n_samples": None,
+            "source": "recomputed" if dataset in REFERENCE_RECOMPUTED else sources.get(dataset),
+        }
+        if path is not None:
+            row["value"] = float(pd.read_csv(path)[column].iloc[0])
+            samples = _sample_rows(path)
+            row["n_samples"] = None if samples is None else len(samples)
+        rows.append(row)
+    table = pd.DataFrame(rows)
+    path = os.path.join(REFERENCE_ROOT, "summary.csv")
+    table.to_csv(path, index=False)
+    missing = table[table["value"].isna()]["dataset"].tolist()
+    print(f"Reference results of {len(table) - len(missing)} of {len(table)} datasets; open: {missing or 'none'}")
+    print(f"Written to {path}")
+    return table
+
+
+def reference(args):
+    """Build the reference for the current test set-up, see REFERENCE_ROOT."""
+    _, evaluation_common = import_evaluation()
+    results = REFERENCE_FOLDERS[-1]
+    if args.action == "summary":
+        reference_summary()
+        return
+
+    if args.action == "copy":
+        os.makedirs(results, exist_ok=True)
+        sources = {}
+        for dataset, *_ in evaluation_datasets():
+            if dataset in REFERENCE_RECOMPUTED:
+                continue
+            source = _source_reference_result(dataset)
+            if source is None:
+                print(f"No reference result for '{dataset}'.")
+                continue
+            sources[dataset] = source
+            target = os.path.join(results, os.path.basename(source))
+            if not os.path.exists(target):
+                if os.path.isdir(source[:-4] + "_samples"):
+                    shutil.copytree(source[:-4] + "_samples", target[:-4] + "_samples", dirs_exist_ok=True)
+                shutil.copyfile(source, target + ".tmp")
+                os.replace(target + ".tmp", target)
+        with open(os.path.join(REFERENCE_ROOT, "sources.json"), "w") as f:
+            json.dump(sources, f, indent=1)
+        print(f"Copied the results of {len(sources)} datasets to {results}.")
+        reference_summary()
+        return
+
+    # Recompute the datasets whose test set-up changed, with the command of the registry evaluation.
+    _, decoder_path = evaluation_common.registry_weight_paths("hvit_t_cells")
+    code = freeze_code(REFERENCE_ROOT)
+    datasets = args.datasets or list(REFERENCE_RECOMPUTED)
+    tasks = shard_tasks(datasets, evaluation_common, "-d {dataset} --n_shards {n_shards} --shard_index {index}")
+    tasks_path = os.path.join(code, "tasks.txt")
+    with open(tasks_path, "w") as f:
+        f.write("\n".join(tasks) + "\n")
+    script = SBATCH.format(
+        job_name="decref_hvit_t", partition=args.partition, gres=args.gres, cpus=args.cpus, mem=args.mem,
+        time=args.time, n_tasks=len(tasks), max_parallel=args.max_parallel, experiment=REFERENCE_ROOT, code=code,
+        tasks=tasks_path, extra=f"#SBATCH --qos={args.qos}" if args.qos else "",
+        command=(
+            f"python evaluation/evaluate_automatic_segmentation.py -e {REFERENCE_ROOT} -m {DEFAULT_MODEL_TYPE} "
+            f"--mode ais --skip_tuning -c {decoder_path}"
+        ),
+    )
+    script_path = os.path.join(code, "submit.sbatch")
+    with open(script_path, "w") as f:
+        f.write(script)
+    os.makedirs(os.path.join(REFERENCE_ROOT, "logs", "slurm"), exist_ok=True)
+    print(f"{len(tasks)} tasks for {datasets}, decoder {decoder_path}.")
     print(f"Script: {script_path}")
     if args.dry_run:
         return
@@ -508,7 +709,11 @@ def main():
         sub.add_argument("-e", "--experiment_folder", default=None,
                          help="The output folder. Default: <DECODER_SAVE_ROOT>/evaluation/<training run>.")
         sub.add_argument("--datasets", nargs="+", default=None,
-                         help="The datasets to evaluate. Default: the panel datasets of Figures 2 and 3.")
+                         help="The datasets to evaluate. Default: the panel datasets of Figures 2 and 3 and the "
+                         "supplement datasets.")
+        sub.add_argument("--params", nargs="+", default=None,
+                         help="The 'best_parameters.json' of the tuning sessions (tune_decoder.py). The datasets are "
+                         "then segmented with the tuned parameters of their setting. Default: the library defaults.")
         sub.add_argument("--z_tile", type=int, default=Z_TILE, help="The z tile of volumes.")
         sub.add_argument("--z_halo", type=int, default=Z_HALO, help="The z halo of volumes.")
 
@@ -525,18 +730,36 @@ def main():
     sub.add_argument("--n_samples", type=int, default=None,
                      help="The '--n_samples' of the run; the reference is then the mean over the same samples.")
     sub.add_argument("--checkpoint_id", default=None, help="The checksum of the checkpoint, if there are several.")
+    sub.add_argument("--parameters", default=None, choices=("default", "tuned"),
+                     help="The results to report. Default: the tuned ones if there are any.")
     sub.add_argument("--z_tile", type=int, default=Z_TILE)
     sub.add_argument("--z_halo", type=int, default=Z_HALO)
 
+    def add_slurm(sub):
+        sub.add_argument("--partition", default="grete:shared")
+        sub.add_argument("--gres", default="A100:1")
+        sub.add_argument("--cpus", type=int, default=8)
+        sub.add_argument("--mem", default="64G")
+        sub.add_argument("--time", default="04:00:00")
+        sub.add_argument("--qos", default=None, help="The Slurm QoS, e.g. '2h' for jobs of at most two hours.")
+        sub.add_argument("--max_parallel", type=int, default=16)
+        sub.add_argument("--dry-run", action="store_true", dest="dry_run", help="Only write the script and the tasks.")
+
     sub = commands.add_parser("submit", help="Submit the full evaluation as a Slurm array.")
     add_common(sub, True)
-    sub.add_argument("--partition", default="grete:shared")
-    sub.add_argument("--gres", default="A100:1")
-    sub.add_argument("--cpus", type=int, default=8)
-    sub.add_argument("--mem", default="64G")
-    sub.add_argument("--time", default="04:00:00")
-    sub.add_argument("--max_parallel", type=int, default=16)
-    sub.add_argument("--dry-run", action="store_true", dest="dry_run", help="Only write the script and the tasks.")
+    sub.add_argument("--data", nargs="+", default=None, choices=("2d", "3d", "dense"),
+                     help="Only the datasets of these settings.")
+    sub.add_argument("--dependency", default=None, help="The Slurm dependency of the array, e.g. 'afterok:<job>'.")
+    sub.add_argument("--requeue", action="store_true",
+                     help="Requeue preempted tasks, for the partition 'grete:preemptible'.")
+    add_slurm(sub)
+
+    sub = commands.add_parser("reference", help="Build the reference results for the current test set-up.")
+    sub.add_argument("action", choices=("copy", "submit", "summary"),
+                     help="'copy' the results that still hold, 'submit' the datasets to recompute as a Slurm array, "
+                     "write the 'summary' table.")
+    sub.add_argument("--datasets", nargs="+", default=None, help="For 'submit'. Default: REFERENCE_RECOMPUTED.")
+    add_slurm(sub)
 
     args = parser.parse_args()
     if args.command == "run":
@@ -545,6 +768,8 @@ def main():
         run(args)
     elif args.command == "report":
         report(args)
+    elif args.command == "reference":
+        reference(args)
     else:
         submit(args)
 

@@ -3214,17 +3214,17 @@ def postprocess_unisam2(out, dataset_name, model_type, params=None):
     EM datasets use the dense (multicut) mode, all others the sparse (flow) mode. 'params' overrides
     the postprocessing defaults, e.g. with the best combination found by grid_search_automatic_cells.
     Without 'params', 'model_type' selects the per-model library default. The boundary channel 4 is
-    forwarded to the sparse mode as 'boundary'.
+    forwarded to the sparse mode as 'boundary'. In the dense mode the parameter 'boundary_weight' mixes it into
+    the boundary map of the multicut, see `micro_sam.v2.postprocessing.multicut_boundary_map`.
     """
     from micro_sam.v2.util import UNISAM2_OUTPUT_CHANNELS
-    from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
+    from micro_sam.v2.postprocessing import flow_instance_segmentation, multicut_boundary_map, run_multicut
     if out.shape[0] != UNISAM2_OUTPUT_CHANNELS:
         raise ValueError(f"Expected a {UNISAM2_OUTPUT_CHANNELS}-channel UniSAM2 prediction, got {out.shape[0]}.")
-    params = {} if params is None else params
+    params = {} if params is None else dict(params)
     fg = out[0]
     if dataset_name in DATASETS_DENSE:
-        boundary_map = fg.max() - fg
-        boundary_map /= boundary_map.max()
+        boundary_map = multicut_boundary_map(fg, out[4], params.pop("boundary_weight", None))
         distances = np.stack([out[2], out[3]])
         seg = run_multicut(boundary_map, distances, model_type=model_type, **params)
     else:

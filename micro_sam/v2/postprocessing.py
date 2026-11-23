@@ -219,6 +219,38 @@ def flow_instance_segmentation(
     return seg.astype("uint32")
 
 
+def multicut_boundary_map(
+    foreground: np.ndarray, boundary: Optional[np.ndarray] = None, boundary_weight: Optional[float] = None,
+) -> np.ndarray:
+    """Build the boundary map that `run_multicut` segments.
+
+    The inverted foreground, scaled to [0, 1], marks the membranes between densely packed objects. The predicted
+    object boundary (channel 4 of the UniSAM2 prediction) can be mixed in.
+
+    Args:
+        foreground: Foreground probability map, shape (*spatial).
+        boundary: The predicted object-boundary probability, same shape as the foreground.
+        boundary_weight: The weight of the predicted boundary in the map,
+            ``(1 - boundary_weight) * inverted foreground + boundary_weight * boundary``.
+            None or 0 uses the inverted foreground only.
+
+    Returns:
+        The boundary map, same shape as the foreground.
+    """
+    boundary_map = foreground.max() - foreground
+    denom = boundary_map.max()
+    if denom > 0:
+        boundary_map = boundary_map / denom
+    if boundary_weight is None or boundary_weight == 0:
+        return boundary_map
+    if boundary is None:
+        raise ValueError("'boundary_weight' needs the predicted boundary map.")
+    if boundary.shape != foreground.shape:
+        raise ValueError(f"The boundary map {boundary.shape} must have the shape of the foreground {foreground.shape}.")
+    weight = np.float32(boundary_weight)
+    return ((1 - weight) * boundary_map + weight * np.clip(boundary, 0, 1)).astype(boundary_map.dtype, copy=False)
+
+
 def run_multicut(
     boundary_map: np.ndarray,
     distances: np.ndarray,

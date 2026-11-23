@@ -148,6 +148,10 @@ class FrozenEncoderHybridUNETR(_hybrid_unetr_class()):
         """The trainable parameters, which all belong to the decoder."""
         return list(self.decoder.parameters())
 
+    def decoder_parameter_names(self) -> List[str]:
+        """The names of the trainable parameters, in the order of `decoder_parameters`."""
+        return [DECODER_PREFIX + name for name, _ in self.decoder.named_parameters()]
+
     def decoder_state(self) -> Dict[str, torch.Tensor]:
         """The state of the decoder, with the prefix 'decoder.' of the full model state."""
         return {DECODER_PREFIX + key: value for key, value in self.decoder.state_dict().items()}
@@ -206,6 +210,8 @@ class DecoderTrainer(UniSAM2Trainer):
         extra_save_dict.setdefault("decoder_state", model.decoder_state())
         extra_save_dict.setdefault("decoder_config", model.decoder_config)
         extra_save_dict.setdefault("encoder_model_type", model.model_type)
+        # The optimizer state is stored by the position of the parameters; the names make it independent of it.
+        extra_save_dict.setdefault("optimizer_param_names", model.decoder_parameter_names())
         self.model = _DecoderStateView(model)
         try:
             super().save_checkpoint(name, current_metric, best_metric, **extra_save_dict)
@@ -216,9 +222,49 @@ class DecoderTrainer(UniSAM2Trainer):
         model = self.model
         self.model = _DecoderStateView(model)
         try:
-            return super().load_checkpoint(checkpoint)
+            save_dict = super().load_checkpoint(checkpoint)
         finally:
             self.model = model
+        if save_dict is not None:
+            self._align_optimizer_state(save_dict)
+        return save_dict
+
+    def _align_optimizer_state(self, save_dict):
+        """Assign the optimizer state of a checkpoint to the parameters by name.
+
+        The optimizer stores its state by the position of the parameters. That position depends on the order in
+        which the decoder registers its modules, which changes with refactorings of the decoder, so a checkpoint
+        may come with a different order than the model. Checkpoints without 'optimizer_param_names' fall back to
+        the order of the parameters in the stored model state, which is the order they were registered in.
+        """
+        model = self.model
+        names = model.decoder_parameter_names()
+        saved_names = save_dict.get("optimizer_param_names")
+        if saved_names is None:
+            saved_names = [name for name in save_dict["model_state"] if name in set(names)]
+        if list(saved_names) == names:
+            return
+        if sorted(saved_names) != sorted(names):
+            raise RuntimeError("The parameters of the checkpoint do not match the parameters of the decoder.")
+
+        parameters = dict(zip(names, model.decoder_parameters()))
+        optimizer_parameters = [param for group in self.optimizer.param_groups for param in group["params"]]
+        if len(optimizer_parameters) != len(names) or any(
+            param is not parameters[name] for param, name in zip(optimizer_parameters, names)
+        ):
+            raise RuntimeError("The optimizer does not hold the decoder parameters in the order of the decoder.")
+
+        # After loading, the state at position i belongs to the parameter with the name saved_names[i].
+        state = self.optimizer.state
+        saved_state = {
+            name: state.pop(param) for name, param in zip(saved_names, optimizer_parameters) if param in state
+        }
+        for name, param_state in saved_state.items():
+            param = parameters[name]
+            for value in param_state.values():
+                if torch.is_tensor(value) and value.dim() > 0 and value.shape != param.shape:
+                    raise RuntimeError(f"The optimizer state of '{name}' does not match the shape of the parameter.")
+            state[param] = param_state
 
 
 def get_decoder_train_model(

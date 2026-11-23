@@ -1,6 +1,6 @@
 # Tuning and test data of the post-processing search (cells)
 
-State of 2026-11-21, branch `ais-hiera-training`. The tables are read from the code: the tuning pools are
+State of 2026-11-23, branch `ais-hiera-training`. The tables are read from the code: the tuning pools are
 `parameter_search.IN_DOMAIN_CELLS`, the pinned tuning crops `evaluation/tuning_crops.json`, the test panels
 `PANEL_DATASETS` of `scripts/plotting/v2/for_paper/plots_for_figure{2,3}.py`, and the counts `common.n_samples`.
 
@@ -21,21 +21,43 @@ CREMI score without label zero, a stored sweep without its ranking metric is rec
 apart from the mSA means), `decoders/tune_set.py`, `decoders/select_tune_tiles.py` (new), tests in
 `test/test_parameter_search.py`.
 
+Update 2026-11-21 (search and test of the Hiera-U checkpoint of epoch 25, see README.md):
+- The reference results (micro-sam2 hvit_t, library defaults) are in
+  `<decoder_training>/evaluation/reference_hvit_t/`: a copy of the registry evaluation, with `platynereis_cells`,
+  `synapsenet_compartments` (multicut, CREMI score) and `cartocell` (54 test volumes) recomputed.
+- The search has a boundary stage (2D, 3D: `boundary_weight`, `boundary_mask_threshold`; dense: `boundary_weight`,
+  which mixes the predicted boundary into the multicut boundary map) and, for 2D and 3D, a `min_size` stage that
+  gives the best `min_size` per tuning dataset. The test uses the best parameters over the tuning datasets of a
+  setting with the `min_size` of the dataset where it has tuning data (the "tuned in" column below).
+- Of the 3094 2D tuning samples 20 have no labelled object and are not scored (pannuke 11, histo_miner 3,
+  neurips_cellseg_label_free 2, tsakiroglou 2, enseg 1, livecell 1).
+- The test of the new decoder also scores the four supplement datasets.
+
+Update 2026-11-23 (after the comparison of the epoch 25 checkpoint with the reference,
+`TUNING_EVALUATION_RESULTS.md`; the search of that checkpoint ran with the pools before this change):
+- `orgline` is in the 2D pool with its validation split (515 images). A third of its test images hold one organoid of
+  about 100000 pixels, which got no seed with the parameters found without it; no other 2D tuning dataset has such
+  objects.
+- `liconn` and `xpress` are out of the dense pool. They are no EM volumes (expansion microscopy, X-ray), have one
+  tuning crop each and decided the dense parameters: without them the search gives the parameters of the reference.
+  Both are still evaluated: `liconn` in the EM neurites panel, `xpress` with the supplement datasets
+  (`evaluate_decoder.SUPPLEMENT_DATASETS`; it is not in the panel because its test data is a single slab of 20
+  slices).
+
 Not done yet:
-- The reference results (micro-sam2 hvit_t) of `platynereis_cells` and `synapsenet_compartments` are flow-based mSA
-  and need a re-run with the multicut to be comparable. The cartocell reference already holds SA50.
 - The larger 3D tuning set of `tune_set.py` (up to 10 tiles per dataset) is not written to `tuning_crops.json`:
   the other 3D datasets still tune on one center crop per tuning volume (the counts below).
-- The dense defaults and grid were tuned on neurites only.
+- The dense search of the new decoder includes `platynereis_cells` and `synapsenet_compartments`; the dense defaults
+  of the previous decoder (the reference) were tuned on neurites only.
 - The figure tables (collector script of the baselines) read mSA for cartocell.
 
 ## Settings
 
 | setting | segmentation | ranked by | tuning datasets | tuning samples |
 |---|---|---|---|---|
-| 2D | flow | mSA | 30 | 3094 |
+| 2D | flow | mSA | 31 | 3609 |
 | 3D | flow | mSA (13 datasets), SA50 (1 dataset) | 14 | 66 |
-| dense (3D EM) | multicut | CREMI | 8 | 21 |
+| dense (3D EM) | multicut | CREMI | 6 | 19 |
 
 Tuning samples are images (2D) or crops of up to 32 x 512 x 512 (3D, dense). OOD datasets are never tuned on.
 
@@ -75,6 +97,7 @@ Tuning samples are images (2D) or crops of up to 32 x 512 x 512 (3D, dense). OOD
 | `vicar` | 55 | mSA | images | label-free cells |
 | `astih` | 5 | mSA | images | not in a panel |
 | `tumor_spheroid` | 2 | mSA | images | not in a panel |
+| `orgline` | 515 | mSA | images | label-free cells |
 
 ### 3D (flow)
 
@@ -103,10 +126,10 @@ Tuning samples are images (2D) or crops of up to 32 x 512 x 512 (3D, dense). OOD
 | `fafb` | 1 | CREMI | center crop per volume | EM neurites |
 | `hemibrain` | 1 | CREMI | center crop per volume | EM neurites |
 | `zebrafinch_j0126` | 1 | CREMI | center crop per volume | EM neurites |
-| `liconn` | 1 | CREMI | center crop per volume | EM neurites |
-| `xpress` | 1 | CREMI | center crop per volume | not in a panel |
 | `platynereis_cells` | 6 | CREMI | pinned tiles | not in a panel |
 | `synapsenet_compartments` | 8 | CREMI | pinned tiles | not in a panel |
+
+`liconn` and `xpress` have validation data (one center crop each) but are not tuned on, see above.
 
 ## Test data
 
@@ -117,13 +140,13 @@ an ID dataset has tuning data in; "-" means it has none.
 
 | figure | panel | metric | ID datasets (samples) | of these tuned | OOD datasets (samples) |
 |---|---|---|---|---|---|
-| Fig. 2 (2D) | label-free cells | mSA | 6 (2095) | 5 | 6 (1514) |
+| Fig. 2 (2D) | label-free cells | mSA | 6 (2095) | 6 | 6 (1514) |
 | Fig. 2 (2D) | fluorescence nuclei | mSA | 6 (942) | 5 | 6 (1467) |
 | Fig. 2 (2D) | histopathology nuclei | mSA | 6 (3047) | 6 | 6 (462) |
 | Fig. 2 (2D) | fluorescence cells | mSA | 6 (1440) | 5 | 6 (173) |
 | Fig. 3 (3D) | fluorescence cells | mSA / SA50 | 6 (367) | 6 | 3 (327) |
 | Fig. 3 (3D) | fluorescence nuclei | mSA | 6 (92) | 6 | 6 (199) |
-| Fig. 3 (3D) | EM neurites | CREMI | 6 (134) | 5 | 6 (72) |
+| Fig. 3 (3D) | EM neurites | CREMI | 6 (134) | 4 | 6 (72) |
 
 Extended Data Fig. 1 uses the same datasets. The EM cell datasets are scored for the supplement only.
 
@@ -136,7 +159,7 @@ Extended Data Fig. 1 uses the same datasets. The EM cell datasets are scored for
 | label-free cells | ID | `cell_acdc` | 12 | flow | mSA | 2D |
 | label-free cells | ID | `vicar` | 55 | flow | mSA | 2D |
 | label-free cells | ID | `omnipose_bact_phase` | 143 | flow | mSA | 2D |
-| label-free cells | ID | `orgline` | 344 | flow | mSA | - |
+| label-free cells | ID | `orgline` | 344 | flow | mSA | 2D |
 | label-free cells | OOD | `deepseas` | 576 | flow | mSA | - |
 | label-free cells | OOD | `bbbc010` | 20 | flow | mSA | - |
 | label-free cells | OOD | `yeastsam` | 44 | flow | mSA | - |
@@ -208,7 +231,7 @@ Extended Data Fig. 1 uses the same datasets. The EM cell datasets are scored for
 | EM neurites | ID | `cremi` | 12 | multicut | CREMI | dense |
 | EM neurites | ID | `fafb` | 44 | multicut | CREMI | dense |
 | EM neurites | ID | `hemibrain` | 24 | multicut | CREMI | dense |
-| EM neurites | ID | `liconn` | 25 | multicut | CREMI | dense |
+| EM neurites | ID | `liconn` | 25 | multicut | CREMI | - |
 | EM neurites | ID | `snemi` | 4 | multicut | CREMI | - |
 | EM neurites | ID | `zebrafinch_j0126` | 25 | multicut | CREMI | dense |
 | EM neurites | OOD | `humanneurons` | 16 | multicut | CREMI | - |
@@ -226,3 +249,4 @@ Extended Data Fig. 1 uses the same datasets. The EM cell datasets are scored for
 | EM cells | ID | `densecell` | 1 | flow | mSA | 3D |
 | EM cells | ID | `synapsenet_compartments` | 8 | multicut | CREMI | dense |
 | - | ID | `embedseg_platy_ish` | 2 | flow | mSA | 3D |
+| X-ray neurites | ID | `xpress` | 1 | multicut | CREMI | - |

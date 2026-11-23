@@ -107,11 +107,20 @@ the jobs request 250 GB, `MALLOC_TRIM_THRESHOLD_` is set as in the joint run, an
 memory every 15 minutes (`[memory]` lines in the log). The pending jobs 17348081 - 17348083 were updated in place
 (memory request, `common.py` and `train_decoder.py` of their code copy) and job 17390104 was appended to the chain.
 
+Job 17348082 failed on 2026-11-22 at its first optimizer step after resuming from epoch 26. The decoder in
+torch-em was refactored on 2026-11-21 (the jobs import torch-em from the working tree), which changed the order
+of the decoder parameters; the optimizer state is stored by position and no longer fit. The weights are not
+affected: the checkpoint of epoch 25 gives the same predictions with the torch-em commit of the training start
+(`c5e7087f`) and with the refactored one (maximal difference 6e-7). `DecoderTrainer` now assigns the optimizer
+state by parameter name and stores the names in the checkpoints. Job 17479058 was appended to the chain.
+Validation loss up to epoch 26: best 0.329 (epoch 25), 0.332 - 0.335 for epochs 17 - 26 otherwise.
+
 ## Evaluation
 
 `evaluate_decoder.py` scores a decoder checkpoint with automatic instance segmentation (AIS) on the datasets of the
 automatic segmentation panels of Figures 2 and 3 of the paper (read from `PANEL_DATASETS` in
-`scripts/plotting/v2/for_paper/plots_for_figure{2,3}.py`; Extended Data Figure 1 uses the same datasets).
+`scripts/plotting/v2/for_paper/plots_for_figure{2,3}.py`; Extended Data Figure 1 uses the same datasets) and on the
+four supplement datasets that the parameter search tunes on (`SUPPLEMENT_DATASETS`), 85 datasets in total.
 
 ```bash
 # Check: the first N samples of every dataset, on the local GPU.
@@ -122,6 +131,12 @@ python evaluate_decoder.py report -e <root>/evaluation/smoke --n_samples 2
 # Full evaluation: Slurm array over datasets and shards (one A100 per task by default), then the report.
 python evaluate_decoder.py submit --checkpoint <root>/checkpoints/hiera_u_hvit_t_cells/best.pt [--dry-run]
 python evaluate_decoder.py report -e <root>/evaluation/hiera_u_hvit_t_cells
+
+# With the parameters of the search (next section): one array per setting, after its search job.
+python evaluate_decoder.py submit --checkpoint <staged checkpoint> -e <root>/evaluation/<checkpoint> --data 3d \
+    --params <root>/tuning/<checkpoint>/3d/best_parameters.json --dependency afterok:<search job> \
+    --partition grete:preemptible --gres 1g.10gb:1 --cpus 4 --mem 32G --requeue
+python evaluate_decoder.py report -e <root>/evaluation/<checkpoint>   # the tuned results if there are any
 ```
 
 - The pipeline is the one of `finetuning/v2/evaluation/evaluate_automatic_segmentation.py` (`run_evaluation`): the
@@ -131,12 +146,24 @@ python evaluate_decoder.py report -e <root>/evaluation/hiera_u_hvit_t_cells
 - The only difference to the reference: volumes are predicted in blocks of 10 + 2 x 2 = 14 slices, the number of
   slices of the training (`--z_tile`, `--z_halo`; the reference uses 4 + 2 x 2). These blocks need about 9.1 GiB
   of GPU memory and `PYTORCH_ALLOC_CONF=expandable_segments:True` (set by the script).
-- Reference: micro-sam2 hvit_t, i.e. `hvit_t_cells` with `hvit_t_cells_decoder` and the library defaults, from the
-  registry evaluation of the paper (`experiments/v6_cells_registry_evaluation{,_crops32,_isotropic}/results`, a
-  later folder replaces the result of an earlier one, as for the figure tables). With `--n_samples`, the report
-  compares on the same samples, using the per-sample rows of the reference.
-- **Postprocessing parameters: for now the library defaults of `hvit_t_cells`** (`model_type="hvit_t"`, see
-  `DEFAULT_MODEL_TYPE`). They were tuned for the previous decoder; parameters optimized for the new decoder come next.
+- Reference: micro-sam2 hvit_t, i.e. `hvit_t_cells` with `hvit_t_cells_decoder` and the library defaults (no
+  tuning), in `<root>/evaluation/reference_hvit_t/` (`results/`, `summary.csv`, `sources.json`). It is built with
+  `evaluate_decoder.py reference`:
+  - `copy` takes the results of the registry evaluation of the paper
+    (`experiments/v6_cells_registry_evaluation{,_crops32,_isotropic}/results`, a later folder replaces the result of
+    an earlier one, as for the figure tables), without the datasets whose test set-up changed since
+    (`REFERENCE_RECOMPUTED`): `platynereis_cells` and `synapsenet_compartments` (now multicut and CREMI score) and
+    `cartocell` (six test volumes moved into tuning).
+  - `submit` recomputes these three with the command of the registry evaluation
+    (`evaluate_automatic_segmentation.py -m hvit_t --mode ais --skip_tuning -c <hvit_t_cells_decoder>`) and the
+    current code; `summary` rewrites the table.
+  - With `--n_samples`, the report compares on the same samples, using the per-sample rows of the reference.
+- Postprocessing parameters: without `--params` the library defaults of `hvit_t_cells` (`model_type="hvit_t"`, see
+  `DEFAULT_MODEL_TYPE`), which were tuned for the previous decoder (results `..._ais_default_...`). With `--params`
+  the result of the parameter search for the checkpoint (results `..._ais_tuned_...`): the best parameters over the
+  tuning datasets of the setting of a dataset (2d, 3d or dense), with the `min_size` of the dataset itself where
+  it has tuning data. The out-of-domain datasets have none, so they take the `min_size` of the best parameters.
+  The parameters must belong to the checkpoint (checksum), and a dataset without a session is an error.
 - The checkpoint is staged first (`<experiment>/checkpoints/<run>_epoch<k>_<checksum>.pt`, decoder entries only),
   since the training overwrites `best.pt`. The checksum of the training checkpoint names the result files
   (`results/<dataset>_micro_sam2_hvit_t_ais_default[_n<N>]_ckpt-<checksum>.csv`). torch_em stores the training
@@ -158,6 +185,85 @@ two samples per dataset, so these numbers only show that the pipeline works):
 | 3D fluorescence cells (mSA) | 0.447 / 0.471 | 0.319 / 0.285 |
 | 3D fluorescence nuclei (mSA) | 0.356 / 0.359 | 0.291 / 0.253 |
 | 3D EM neurites (CREMI, lower is better) | 1.087 / 1.102 | 1.001 / 0.963 |
+
+## Post-processing parameter search for a decoder checkpoint
+
+`tune_decoder.py` runs the search of `finetuning/v2/evaluation/parameter_search.py` (`search`) for a decoder
+checkpoint, once per setting (`TUNING_DATA.md` lists the tuning data): `2d` (flow, 31 datasets), `3d` (flow, 14
+datasets) and `dense` (multicut, 6 datasets). The run of the epoch 25 checkpoint below used the pools before
+2026-11-23: 2d without `orgline` (30 datasets), dense with `liconn` and `xpress` (8 datasets).
+
+```bash
+python tune_decoder.py predict --checkpoint <staged checkpoint> --data 3d     # GPU, minutes
+python tune_decoder.py search --checkpoint <staged checkpoint> --data 3d      # CPU
+python tune_decoder.py submit --checkpoint <checkpoint> [--skip_predict] [--dry-run]   # all settings as Slurm jobs
+```
+
+- Stages of a search, each on all tuning datasets of the setting; the best combination has the best mean relative
+  score over the datasets:
+  1. the broad grid (`BROAD_GRIDS_2D`, `BROAD_GRIDS_3D`), without boundary terms;
+  2. up to two rounds one step past the grid edges that the best combination sits on;
+  3. the boundary stage (`BOUNDARY_GRID`). Sparse: the 20 best combinations with `boundary_weight` (the predicted
+     boundary as a ridge on the watershed height map) in {0, 0.25, 0.5, 1} and `boundary_mask_threshold` (the first
+     watershed stays off the boundary pixels) in {off, 0.3, 0.5, 0.7}. Dense: the 10 best oversegmentation settings
+     with `boundary_weight` in {0.25, 0.5, 0.75, 1} and every `beta` swept so far. For the multicut the weight
+     mixes the predicted boundary into the boundary map, which was the inverted foreground only
+     (`micro_sam.v2.postprocessing.multicut_boundary_map`; weight 0, the default, is the earlier behaviour);
+  4. sparse only: the winner with every `min_size` of `MIN_SIZE_VALUES`. Each dataset takes the value that scores
+     best on its tuning data (`min_size_per_dataset`); it keeps the value of the winner unless another one is better.
+- `predict` stores the decoder outputs of the tuning samples (`<session>/predictions/`), with the z blocks of 14
+  slices and the padding of the small TissueNet images of the test evaluation. `search` scores from them and needs
+  no GPU. It reuses the queue of `parameter_search.SlurmRunner` (sharded sweeps, claims, resume) with worker slots
+  inside the job. Finished sweeps are kept: a search that is started again continues with the open tasks
+  (`--retry_failed` also runs failed ones again).
+- Output: `<root>/tuning/<staged checkpoint>/<setting>/` with `best_parameters.json` (checksum, best parameters,
+  `min_size_per_dataset`, summary with the scores at the global and the per-dataset `min_size`),
+  `selection/<setting>_ais/hvit_t.csv` (the 50 best combinations) and `tuning/<setting>/<stage>/` (all sweeps, with
+  the per-sample scores).
+- `search --check` uses small grids to check the pipeline; the evaluation refuses such a result for a full run.
+
+Run for `best.pt` after 25 epochs (2026-11-21; staged as `hiera_u_hvit_t_cells_epoch25_1b75589f`, checksum
+`1b75589f51a2aa4cfd7762e794a18dfb`, validation loss 0.329):
+
+| Step | Setting | Job | State (2026-11-22 20:15) |
+|---|---|---|---|
+| Predictions | 2d, 3d, dense | interactive node, no Slurm job | done: 3074 images with labels (of 3094), 66 tiles, 21 crops |
+| Search | 2d | 17449319 (`grete:preemptible`, 40 CPU threads) + 4 workers 17450248 (`standard96s:shared`) | done (22 h 51 min) |
+| Search | dense | 17449337 (`grete:preemptible`, 24 CPU threads) | done (1 h 54 min) |
+| Search | 3d | 17450284 (`grete:preemptible`, 8 CPU threads) | time limit after 24 h, 86 of 238 tasks of the first stage |
+| Search | 3d | 17474388 (`grete:preemptible`, 40 CPU threads; preempted 14:52) + worker 17474394 (24 CPU threads), then the driver on the interactive node | done 2026-11-22 18:01 |
+| Workers | 3d | 17450326 (10 x 16 CPU threads), 17459478 (20 x 8), `standard96s:shared` | never started (fair share), cancelled |
+| Search | dense, neurite datasets only | 17474640 (session `dense_neurites`) | done (22 min) |
+| Test | 2d: 48 datasets | 17449378 (array of 82) | done |
+| Test | dense: 14 datasets | 17449390 (array of 36) | done |
+| Test | 3d: 23 datasets | 17450263 (array of 137, dependency removed) | released 2026-11-22 20:00 |
+| Test | dense, neurite-only parameters: 12 datasets | 17474645 (array of 33), folder `..._dense_neurites` | done |
+
+- Folders: `<root>/tuning/hiera_u_hvit_t_cells_epoch25_1b75589f/{2d,3d,dense}/` and
+  `<root>/evaluation/hiera_u_hvit_t_cells_epoch25_1b75589f/`. The test arrays run on `grete:preemptible`
+  (10 GB slice, 4 CPUs, 32 GB, `--requeue`, 8 tasks at once).
+- Queue (2026-11-21): `grete:shared` (A100) had a start estimate of 4-5 days, also with the 2 h QoS; a 10 GB slice
+  on `grete:preemptible` started at once (`sbatch --test-only` is wrong for this partition, and it replaces the
+  QoS). A GPU request is mandatory there, so the 2d and dense searches hold one slice they do not use. They were
+  first queued on `standard96s:shared` (17440356, 17440359; cancelled); the 3d search needs a full CPU node.
+- Small jobs instead of one node: `tune_decoder.py worker -e <session> --threads 16 --slots 8` takes tasks from the
+  queue of a session that a `search` job drives (scripts `jobs/code_workers_1009/worker_<setting>.sbatch`). It waits
+  between the stages and ends with the result, or after 30 minutes without an open task. Measured memory: about
+  1 GB (2d) and 2 GB (dense) per task that runs.
+- A search job that fails or runs into its time limit leaves its test array pending with an unmet dependency.
+  Then: submit the search again (`tune_decoder.py submit --checkpoint <staged> --skip_predict --data <setting>`),
+  cancel the array and submit it again with the new job id.
+- Dense search without `platynereis_cells` and `synapsenet_compartments` (2026-11-22): the winner only changes in
+  `density_threshold` (3.0 instead of 2.0) and `n_iter` (50 instead of 25). Test means (CREMI score, lower is
+  better): neurites ID 0.859 (all 8 tuning datasets: 0.858, reference 1.080), OOD 1.053 (1.055, reference 0.964).
+  The two cell datasets do not explain the OOD difference to the reference.
+- On `grete:preemptible` interactive jobs can hold all 10 GB slices for hours (seen on a Sunday afternoon); jobs
+  then wait and running ones are preempted. Do not make a test array depend on a job that may not start.
+- The reference results of `platynereis_cells`, `synapsenet_compartments` and `cartocell` were recomputed on the
+  interactive node (`reference_hvit_t/logs/recompute_*_local.log`); `evaluate_decoder.py reference summary` rewrites
+  the table.
+- Checks before the submission (small grids, 1-3 samples of two datasets per setting, scratch folder): prediction,
+  all stages of the search, the test run with the resulting parameters and the report ran for all three settings.
 
 ## Post-processing parameter search: offline analysis
 

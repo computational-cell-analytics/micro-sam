@@ -143,6 +143,22 @@ def test_volume_filling_em_cells_are_tuned_and_scored_as_dense_datasets(dataset)
     assert dataset in common.TUNING_CROPS
 
 
+@pytest.mark.parametrize("dataset", ["liconn", "xpress"])
+def test_liconn_and_xpress_are_evaluated_but_not_tuned_on(dataset):
+    import common
+
+    assert dataset in common.DATASETS_DENSE
+    assert dataset in common.DATASETS_3D_EM_NEURITE_ID
+    assert dataset not in parameter_search.search_datasets(None, ["dense"], "cells")["dense"]
+
+
+def test_orgline_is_in_the_2d_tuning_pool():
+    import common
+
+    assert common.VAL_SPLITS["orgline"] == "val"
+    assert "orgline" in parameter_search.search_datasets(None, ["2d"], "cells")["2d"]
+
+
 def test_platynereis_cells_tuning_crops_stay_inside_the_labelled_boxes():
     import common
 
@@ -190,3 +206,143 @@ def test_compute_metrics_reports_sa50():
     assert metrics["msa"] < 1.0  # ... but the second one not at the higher thresholds.
     seg[:, 4:7] = 0  # A quarter of its pixels: no match, so one hit, one miss and one false positive.
     assert parameter_search.compute_metrics(seg, labels, "sparse")["sa50"] == pytest.approx(1 / 3)
+
+
+def _synthetic_prediction(shape, n_per_axis=2):
+    """A five-channel prediction of a grid of touching boxes: foreground, distances to the centers, boundaries."""
+    import numpy as np
+
+    ndim = len(shape)
+    labels = np.zeros(shape, dtype="uint32")
+    prediction = np.zeros((5,) + shape, dtype="float32")
+    size_y, size_x = shape[-2] // n_per_axis, shape[-1] // n_per_axis
+    grid = np.stack(np.meshgrid(*[np.arange(s) for s in shape], indexing="ij")).astype("float32")
+    for i in range(n_per_axis):
+        for j in range(n_per_axis):
+            y, x = slice(i * size_y, (i + 1) * size_y), slice(j * size_x, (j + 1) * size_x)
+            box = (slice(None),) * (ndim - 2) + (y, x)
+            labels[box] = i * n_per_axis + j + 1
+            center = (i * size_y + size_y / 2, j * size_x + size_x / 2)
+            for axis, c in zip((-2, -1), center):
+                prediction[(4 + axis,) + box] = (grid[(axis,) + box] - c) / (size_y / 2)
+            boundary = np.zeros(labels[box].shape, dtype="float32")
+            boundary[..., 0, :] = boundary[..., -1, :] = boundary[..., :, 0] = boundary[..., :, -1] = 1
+            prediction[(4,) + box] = boundary
+    prediction[0] = 1 - 0.6 * prediction[4]
+    return prediction, labels
+
+
+def _scored_segmentations(monkeypatch, prediction, labels, mode, params):
+    segmentations = []
+
+    def record(seg, *args, **kwargs):
+        segmentations.append(seg.copy())
+        return {"msa": 1.0, "cremi": 0.0}
+
+    monkeypatch.setattr(parameter_search, "compute_metrics", record)
+    scores = parameter_search.score_image(prediction, labels, mode, params, n_threads=1)
+    assert all(score is not None for score in scores)
+    return segmentations
+
+
+def _same_partition(a, b):
+    import numpy as np
+
+    pairs = np.unique(np.stack([a.ravel(), b.ravel()]), axis=1)
+    return len(pairs[0]) == len(np.unique(a)) == len(np.unique(b))
+
+
+def test_sparse_scoring_with_boundary_parameters_matches_the_library(monkeypatch):
+    import numpy as np
+    from micro_sam.v2.postprocessing import flow_instance_segmentation
+
+    prediction, labels = _synthetic_prediction((48, 48))
+    base = {
+        "foreground_threshold": 0.3, "sigma": 0.5, "n_iter": 20, "dt": 1.0, "density_threshold": 2.0,
+        "foreground_weight": 0.5, "min_size": 5,
+    }
+    params = [
+        base, {**base, "boundary_weight": 0, "boundary_mask_threshold": None},
+        {**base, "boundary_weight": 0.5, "boundary_mask_threshold": None},
+        {**base, "boundary_weight": 0, "boundary_mask_threshold": 0.5},
+        {**base, "boundary_weight": 1.0, "boundary_mask_threshold": 0.5},
+    ]
+    segmentations = _scored_segmentations(monkeypatch, prediction, labels, "sparse", params)
+    assert len(segmentations) == len(params)
+    for combo, seg in zip(params, segmentations):
+        expected = flow_instance_segmentation(
+            prediction[0], prediction[1:4], model_type="hvit_t", boundary=prediction[4], n_threads=1, **combo
+        )
+        assert np.array_equal(seg, expected), combo
+    assert segmentations[0].max() > 1
+    assert np.array_equal(segmentations[0], segmentations[1])
+
+
+def test_dense_scoring_with_a_boundary_weight_matches_the_evaluation(monkeypatch):
+    import numpy as np
+    import common
+    from micro_sam.v2.instance_segmentation import _segment_from_predictions
+    from micro_sam.v2.postprocessing import multicut_boundary_map
+
+    prediction, labels = _synthetic_prediction((4, 48, 48))
+    foreground, boundary = prediction[0], prediction[4]
+    inverted = (foreground.max() - foreground) / (foreground.max() - foreground).max()
+    assert np.array_equal(multicut_boundary_map(foreground), inverted)
+    assert np.array_equal(multicut_boundary_map(foreground, boundary, 0), inverted)
+    assert np.allclose(multicut_boundary_map(foreground, boundary, 1.0), boundary)
+    with pytest.raises(ValueError):
+        multicut_boundary_map(foreground, None, 0.5)
+
+    base = {"beta": 0.5, "density_threshold": 2.0, "sigma": 0.5, "n_iter": 20, "dt": 1.0}
+    params = [base, {**base, "boundary_weight": 0.5}, {**base, "beta": 0.6, "boundary_weight": 0.5}]
+    segmentations = _scored_segmentations(monkeypatch, prediction, labels, "dense", params)
+    for combo, seg in zip(params, segmentations):
+        expected = common.postprocess_unisam2(prediction.copy(), "cremi", "hvit_t", params=combo)
+        assert _same_partition(seg, expected), combo
+        # The library segments the same way.
+        library = _segment_from_predictions(prediction.copy(), mode="dense", model_type="hvit_t", **combo)
+        assert _same_partition(library, expected), combo
+    # The combos that share an oversegmentation are grouped by all of its parameters, also for the shards.
+    assert parameter_search.n_shard_groups(params, "dense", 3) == 2
+
+
+def test_boundary_combos_start_from_the_best_combos():
+    import json
+
+    sparse = [{"density_threshold": value, "min_size": 50} for value in (10.0, 20.0, 30.0)]
+    ranked = [json.dumps(params, sort_keys=True) for params in sparse]
+    combos = parameter_search.boundary_combos(ranked, "3d", top=2)
+    pairs = 4 * 4 - 1  # Every pair of the boundary grid but the one without a boundary term.
+    assert len(combos) == 2 * pairs
+    assert {combo["density_threshold"] for combo in combos} == {10.0, 20.0}
+    assert not any(c["boundary_weight"] == 0 and c["boundary_mask_threshold"] is None for c in combos)
+    # A combo of an earlier boundary stage is no start for the stage.
+    again = parameter_search.boundary_combos([json.dumps(combos[0], sort_keys=True)] + ranked, "3d", top=2)
+    assert again == combos
+
+    dense = [
+        {"beta": beta, "density_threshold": threshold, "sigma": 0.5, "n_iter": 25, "dt": 0.5}
+        for threshold, beta in ((3.0, 0.5), (3.0, 0.4), (5.0, 0.5), (1.0, 0.6))
+    ]
+    combos = parameter_search.boundary_combos([json.dumps(params, sort_keys=True) for params in dense], "dense", top=2)
+    # The two best oversegmentation settings, with every mix weight and every beta swept so far.
+    assert len(combos) == 2 * 4 * 3
+    assert {combo["density_threshold"] for combo in combos} == {3.0, 5.0}
+    assert {combo["beta"] for combo in combos} == {0.4, 0.5, 0.6}
+
+
+def test_per_dataset_min_size_keeps_the_winner_unless_another_value_scores_higher():
+    import json
+
+    winner = {"density_threshold": 10.0, "min_size": 50, "boundary_mask_threshold": None}
+    rows = {
+        json.dumps({**winner, "min_size": 25}, sort_keys=True): {"a": 0.5, "b": 0.7, "c": 0.4},
+        json.dumps(winner, sort_keys=True): {"a": 0.6, "b": 0.6, "c": 0.4},
+        json.dumps({**winner, "min_size": 100}, sort_keys=True): {"a": 0.4, "b": 0.6, "c": 0.4},
+        # Another combination does not count, whatever its score.
+        json.dumps({**winner, "density_threshold": 20.0, "min_size": 200}, sort_keys=True): dict(a=0.9, b=0.9, c=0.9),
+    }
+    scores = pd.DataFrame(rows).T
+    best, compared = parameter_search.per_dataset_min_size(scores, winner)
+    assert best == {"a": 50, "b": 25, "c": 50}
+    assert compared["b"] == {"global": 0.6, "per_dataset": 0.7}

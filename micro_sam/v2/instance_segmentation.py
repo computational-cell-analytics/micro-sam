@@ -33,7 +33,7 @@ from bioimage_cpp.utils import Blocking
 
 from micro_sam.v1.inference import _merge_segmentations
 from micro_sam.util import AutoSegBase, make_temp_embedding_path, mask_data_to_segmentation
-from micro_sam.v2.postprocessing import flow_instance_segmentation, run_multicut
+from micro_sam.v2.postprocessing import flow_instance_segmentation, multicut_boundary_map, run_multicut
 from micro_sam.v1.multi_dimensional_segmentation import merge_instance_segmentation_3d
 from micro_sam.v2.util import (
     autocast, precompute_image_embeddings, set_precomputed, to_float32, _load_list_datasets,
@@ -1032,7 +1032,8 @@ def _segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kw
         mode: The segmentation mode. 'sparse' uses flow-based segmentation (LM data, 2d and 3d),
             'dense' uses multicut-based segmentation (EM data, 2d and 3d).
         kwargs: Additional parameters forwarded to the postprocessing function
-            (`flow_instance_segmentation` for 'sparse', `run_multicut` for 'dense').
+            (`flow_instance_segmentation` for 'sparse', `run_multicut` for 'dense'). For 'dense', 'boundary_weight'
+            mixes the predicted boundary into the boundary map, see `multicut_boundary_map`.
 
     Returns:
         The instance segmentation, uint32 array with the spatial shape of the prediction.
@@ -1044,10 +1045,8 @@ def _segment_from_predictions(prediction: np.ndarray, mode: str = "sparse", **kw
         )
     foreground = prediction[0]
     if mode == "dense":
-        boundary_map = foreground.max() - foreground
-        denom = boundary_map.max()
-        if denom > 0:
-            boundary_map = boundary_map / denom
+        kwargs = dict(kwargs)
+        boundary_map = multicut_boundary_map(foreground, prediction[4], kwargs.pop("boundary_weight", None))
         # Multicut uses the in-plane (y, x) distance channels.
         distances = np.stack([prediction[2], prediction[3]])
         # run_multicut takes a volume, so 2d data runs as a single slice, which has no z-edges.

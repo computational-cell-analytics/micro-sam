@@ -5,7 +5,9 @@
 1. A broad grid on the validation split of every dataset. 3d APG screens its prompt axes on a few volumes first,
    and then sweeps its selection axes for the best prompt combinations.
 2. Rounds that sweep one step past every grid edge that the best combination sits on.
-3. For APG, the best combinations with each refinement mode.
+3. For APG, the best combinations with each refinement mode. For AIS, the best combinations with the parameters of
+   the predicted boundary (BOUNDARY_GRID), and for sparse AIS the winner with every 'min_size' (MIN_SIZE_VALUES),
+   which gives the best 'min_size' per dataset ('selection/<data>_ais/<model>.json').
 The best combination has the best mean relative score over the datasets: the score of a dataset over its best score.
 It runs here, or with '--slurm' as Slurm job arrays. Finished sweeps are kept, so a search resumes where it stopped.
 The models are the registry models of `micro_sam.v2.util` with a decoder, e.g. 'hvit_b_cells'. A run downloads
@@ -55,7 +57,7 @@ from bioimage_cpp.segmentation import label as connected_components, watershed
 
 from bioimage_py.evaluation import symmetric_best_dice_score
 
-from micro_sam.v2.postprocessing import watershed_heightmap, _compute_flow_density
+from micro_sam.v2.postprocessing import multicut_boundary_map, watershed_heightmap, _compute_flow_density
 from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, models as model_registry
 
 from common import (
@@ -64,7 +66,7 @@ from common import (
     EM_NUCLEUS_MOCK_2D_ROOT, GT_MIN_SIZE_2D, CROP_SHAPE_3D, DATA_ROOT, LABELLED_ONLY_DATASETS, MODEL_TYPES, MODES,
     TUNING_CROPS, VOLUME_SPEED_OPTIONS, build_model, check_data_download, drop_severed_objects, em_roi,
     get_data_paths, has_val_split, keep_labelled_objects, load_data, load_evaluation_sample_2d,
-    load_evaluation_sample_3d, n_samples, predict_unisam2,
+    load_evaluation_sample_3d, n_samples, pad_to_min_shape, predict_unisam2,
     read_tuned_params, resolve_checkpoint_identity, sorted_path_pairs, use_tmpdir_for_embeddings, val_z_range,
     _read_crops, _read_window,
 )
@@ -202,14 +204,30 @@ GRID_PRESETS = ("default", *PRESET_GRIDS_2D)
 APG_PROPOSAL_KEYS = ("candidate_threshold", "sigma", "foreground_threshold", "n_iter", "dt", "min_candidate_size")
 
 # Sparse-flow parameters that determine the (expensive) convergence-density map. Combos that share
-# these reuse a cached density. Only 'density_threshold', 'foreground_weight' and 'min_size' (the cheap
-# seed + watershed + size-filter steps) then vary on top. See score_image_sparse_cached.
+# these reuse a cached density. Only 'density_threshold', 'foreground_weight', 'min_size' and the boundary
+# parameters (the cheap seed + watershed + size-filter steps) then vary on top. See score_image_sparse_cached.
 FLOW_DENSITY_KEYS = ("foreground_threshold", "sigma", "n_iter", "dt")
 
 # Dense-multicut parameters that determine the (expensive) slice-wise oversegmentation and RAG.
 # Combos that share these reuse a cached oversegmentation. Only 'beta' (the cheap edge-cost +
 # multicut-solve step) then varies on top. See score_image_dense_cached.
-OVERSEG_KEYS = ("density_threshold", "sigma", "n_iter", "dt")
+OVERSEG_KEYS = ("density_threshold", "sigma", "n_iter", "dt", "boundary_weight")
+
+# The boundary stage of the AIS search: the predicted object boundary (channel 4) is not part of the broad grids,
+# its parameters are swept on the best combinations of the broad grid and its edge rounds, see `boundary_combos`.
+# Sparse: 'boundary_weight' adds the boundary as a ridge to the watershed height map and 'boundary_mask_threshold'
+# keeps the first watershed off the boundary pixels (`flow_instance_segmentation`). Dense: 'boundary_weight' mixes
+# the boundary into the boundary map of the multicut (`multicut_boundary_map`).
+BOUNDARY_GRID = {
+    "sparse": {"boundary_weight": [0, 0.25, 0.5, 1.0], "boundary_mask_threshold": [None, 0.3, 0.5, 0.7]},
+    "dense": {"boundary_weight": [0.25, 0.5, 0.75, 1.0]},
+}
+# The best combinations (sparse) or oversegmentation settings (dense) that the boundary stage starts from.
+BOUNDARY_TOP = {"sparse": 20, "dense": 10}
+# The 'min_size' values that are swept for the winner of a sparse AIS search, to choose the value per dataset.
+MIN_SIZE_VALUES = {
+    "2d": [0, 5, 10, 25, 50, 100, 200, 500, 1000], "3d": [0, 25, 50, 100, 200, 500, 1000, 2000, 4000],
+}
 
 # Metric the grid is ranked by, and whether lower is better. 'msa' (mean segmentation accuracy) and 'sa50' (the
 # segmentation accuracy at an IoU of 0.5, see `common.DATASETS_SA50`) are maximised; 'cremi' (a VI + adapted-Rand
@@ -412,9 +430,17 @@ def score_image_sparse_cached(
     """
     foreground = prediction[0]
     directed = prediction[1:4]
+    boundary = prediction[4] if prediction.shape[0] > 4 else None
     ndim = foreground.ndim
     if directed.shape[0] > ndim:
         directed = directed[-ndim:]
+
+    def boundary_params(params):
+        """The weight of the boundary ridge (0 for none) and the threshold of the boundary mask (None for none)."""
+        weight, threshold = params.get("boundary_weight") or 0, params.get("boundary_mask_threshold")
+        if boundary is None and (weight or threshold is not None):
+            raise ValueError("The boundary parameters need the boundary channel of the prediction.")
+        return weight, threshold
 
     # The convergence densities and the height maps are built up front, so the scoring below only reads them.
     fg_mask_cache, density_cache, hmap_cache = {}, {}, {}
@@ -428,24 +454,34 @@ def score_image_sparse_cached(
                 directed, fg_mask_cache[ft], n_iter=int(n_iter), dt=dt, sigma=sigma, spacing=spacing,
                 n_threads=n_threads,
             )
-        fw = params["foreground_weight"]
-        if fw not in hmap_cache:
-            hmap_cache[fw] = watershed_heightmap(foreground, directed, fw)
+        fw, (bw, _) = params["foreground_weight"], boundary_params(params)
+        if (fw, bw) not in hmap_cache:
+            hmap = watershed_heightmap(foreground, directed, fw)
+            if bw:  # The predicted boundary as a ridge, as in `flow_instance_segmentation`.
+                hmap = np.ascontiguousarray(hmap + np.float32(bw) * np.clip(boundary, 0, 1), dtype="float32")
+            hmap_cache[(fw, bw)] = hmap
 
     # The base watershed does not depend on min_size, so the combos that differ only in min_size share it. They
     # are scored together and the base is dropped afterwards: keeping every base of a volume runs out of memory.
     groups = {}
     for index, params in enumerate(params_list):
-        key = tuple(params[k] for k in FLOW_DENSITY_KEYS) + (params["density_threshold"], params["foreground_weight"])
+        key = tuple(params[k] for k in FLOW_DENSITY_KEYS) + (
+            params["density_threshold"], params["foreground_weight"], *boundary_params(params)
+        )
         groups.setdefault(key, []).append(index)
 
     def score_group(key, indices):
-        ft, sigma, n_iter, dt, density_threshold, fw = key
-        fg_mask, hmap = fg_mask_cache[ft], hmap_cache[fw]
+        ft, sigma, n_iter, dt, density_threshold, fw, bw, boundary_mask_threshold = key
+        fg_mask, hmap = fg_mask_cache[ft], hmap_cache[(fw, bw)]
         try:
-            base = watershed(
-                hmap, markers=connected_components(density_cache[key[:4]] > density_threshold), mask=fg_mask
-            )
+            seeds = connected_components(density_cache[key[:4]] > density_threshold)
+            if boundary_mask_threshold is None:
+                base = watershed(hmap, markers=seeds, mask=fg_mask)
+            else:
+                # Flood everything but the boundary pixels first, then let the instances claim them.
+                open_mask = fg_mask & ~(boundary > boundary_mask_threshold)
+                first = watershed(hmap, markers=np.where(open_mask, seeds, 0).astype(seeds.dtype), mask=open_mask)
+                base = watershed(hmap, markers=first, mask=fg_mask)
         except Exception as e:
             warnings.warn(f"Sparse postprocessing failed for {dict(zip(FLOW_DENSITY_KEYS, key))}: {e}")
             return [(index, None) for index in indices]
@@ -476,13 +512,13 @@ def score_image_sparse_cached(
     return scores
 
 
-def dense_boundary_and_distances(prediction):
-    """Return the (boundary_map, in-plane distances) inputs to run_multicut for a dense prediction."""
-    fg = prediction[0]
-    boundary_map = fg.max() - fg
-    denom = boundary_map.max()
-    if denom > 0:
-        boundary_map = boundary_map / denom
+def dense_boundary_and_distances(prediction, boundary_weight=None):
+    """Return the (boundary_map, in-plane distances) inputs to run_multicut for a dense prediction.
+
+    'boundary_weight' mixes the predicted boundary (channel 4) into the map, see `multicut_boundary_map`.
+    """
+    boundary = prediction[4] if boundary_weight else None
+    boundary_map = multicut_boundary_map(prediction[0], boundary, boundary_weight)
     distances = np.stack([prediction[2], prediction[3]])
     return boundary_map, distances
 
@@ -538,27 +574,40 @@ def score_image_dense_cached(
     prediction, labels, params_list, n_threads=POSTPROC_THREADS, border_min_size=0, valid_roi=None,
     labelled_only=False, ignore_zero=False,
 ):
-    """Score all dense combos on one image, caching the oversegmentation and RAG across shared combos."""
-    boundary_map, distances = dense_boundary_and_distances(prediction)
-    overseg_cache = {}
-    scores = []
-    for params in params_list:
-        dt = params.get("dt", 0.5)
-        key = tuple(params.get(k, dt if k == "dt" else None) for k in OVERSEG_KEYS)
-        if key not in overseg_cache:
-            overseg_cache[key] = dense_oversegmentation(
-                boundary_map, distances, params["density_threshold"], params["sigma"], params["n_iter"],
-                dt=dt, n_threads=n_threads,
-            )
-        overseg, rag, feats, z_edges, n_slices = overseg_cache[key]
+    """Score all dense combos on one image, sharing the oversegmentation and RAG between the combos of a group.
+
+    The combos that differ only in 'beta' share an oversegmentation (OVERSEG_KEYS). A group is scored and its
+    oversegmentation dropped before the next one is built, since those of a whole grid do not fit into memory.
+    """
+    groups = {}
+    for index, params in enumerate(params_list):
+        key = (
+            params["density_threshold"], params["sigma"], params["n_iter"], params.get("dt", 0.5),
+            params.get("boundary_weight") or 0,
+        )
+        groups.setdefault(key, []).append(index)
+
+    scores = [None] * len(params_list)
+    maps = {}  # The boundary map per boundary weight.
+    for (density_threshold, sigma, n_iter, dt, boundary_weight), indices in groups.items():
+        if boundary_weight not in maps:
+            maps[boundary_weight] = dense_boundary_and_distances(prediction, boundary_weight)
+        boundary_map, distances = maps[boundary_weight]
         try:
-            seg = dense_solve(rag, feats, z_edges, overseg, n_slices, params["beta"])
-            scores.append(compute_metrics(
-                seg, labels, "dense", border_min_size, valid_roi, labelled_only, ignore_zero,
-            ))
+            overseg, rag, feats, z_edges, n_slices = dense_oversegmentation(
+                boundary_map, distances, density_threshold, sigma, n_iter, dt=dt, n_threads=n_threads,
+            )
         except Exception as e:
-            warnings.warn(f"Dense multicut solve failed for {params}: {e}")
-            scores.append(None)
+            warnings.warn(f"Dense oversegmentation failed for {params_list[indices[0]]}: {e}")
+            continue
+        for index in indices:
+            try:
+                seg = dense_solve(rag, feats, z_edges, overseg, n_slices, params_list[index]["beta"])
+                scores[index] = compute_metrics(
+                    seg, labels, "dense", border_min_size, valid_roi, labelled_only, ignore_zero,
+                )
+            except Exception as e:
+                warnings.warn(f"Dense multicut solve failed for {params_list[index]}: {e}")
     return scores
 
 
@@ -621,20 +670,33 @@ def score_sample_apg_cached(
     return scores
 
 
-def cached_prediction(cache_dir, index, model, raw, ndim, device):
+def predict_sample(model, raw, ndim, device, predict_kwargs=None, min_shape=None):
+    """Predict one sample. An image smaller than 'min_shape' (y, x) is padded with zeros to it, as the test
+    evaluation does (`evaluate_automatic_segmentation.segment`), and the prediction is cropped back.
+    """
+    predict_kwargs = predict_kwargs or {}
+    if min_shape is not None and ndim == 2 and min(raw.shape[:2]) < min(min_shape):
+        padded, crop = pad_to_min_shape(raw, min_shape)
+        prediction = predict_unisam2(model, padded, ndim=ndim, device=device, **predict_kwargs)
+        return np.ascontiguousarray(prediction[(slice(None),) + tuple(crop)])
+    return predict_unisam2(model, raw, ndim=ndim, device=device, **predict_kwargs)
+
+
+def cached_prediction(cache_dir, index, model, raw, ndim, device, predict_kwargs=None, min_shape=None):
     """Return the decoder output of one validation sample, from 'cache_dir' when it holds it.
 
     Without a cache directory the model always runs. With one, a missing output is predicted and
     written there, through a temporary file so that a concurrent reader never sees half of it.
+    'predict_kwargs' go to `predict_unisam2`, e.g. the tiling of volumes; for 'min_shape' see `predict_sample`.
     """
     if cache_dir is None:
-        return predict_unisam2(model, raw, ndim=ndim, device=device)
+        return predict_sample(model, raw, ndim, device, predict_kwargs, min_shape)
     path = os.path.join(cache_dir, f"{index}.npy")
     if os.path.exists(path):
         return np.load(path)
     if model is None:
         raise FileNotFoundError(f"'{path}' is not cached and no model was loaded to predict it.")
-    prediction = predict_unisam2(model, raw, ndim=ndim, device=device)
+    prediction = predict_sample(model, raw, ndim, device, predict_kwargs, min_shape)
     tmp_path = f"{path}.{os.getpid()}.tmp.npy"
     np.save(tmp_path, prediction)
     os.replace(tmp_path, path)
@@ -764,7 +826,7 @@ def tune_parameters(
     model, mode, dataset_name, data_root, model_type, output_root, device,
     n_threads=POSTPROC_THREADS, n_tuning_samples=None, tuning_stride=1, crop_shape=None, criterion=None,
     checkpoint_id=None, shard_index=0, num_shards=1, grid_override=None, grid_preset="default", subsample=None,
-    prediction_cache=None, cache_only=False, params_file=None,
+    prediction_cache=None, cache_only=False, params_file=None, predict_kwargs=None, min_shape=None,
 ):
     """Sweep the grid of a mode on the validation split and return the best parameter combination.
 
@@ -807,6 +869,8 @@ def tune_parameters(
             sweep that finds every output there needs no model, so it runs on a CPU node.
         cache_only: Only write the decoder outputs to 'prediction_cache', do not sweep.
         params_file: A JSON list of parameter dicts to sweep instead of the grid.
+        predict_kwargs: Keyword arguments for `predict_unisam2` (AIS only), e.g. the tiling of volumes.
+        min_shape: AIS only. Pad smaller images to this (y, x) shape for the prediction, see `predict_sample`.
 
     Returns:
         The best parameter combination, or None when the dataset has nothing held out to tune on, or
@@ -890,7 +954,9 @@ def tune_parameters(
                     valid_roi=valid_roi, labelled_only=labelled_only,
                 )
             else:
-                prediction = cached_prediction(cache_dir, index, model, raw, ndim, device)
+                prediction = cached_prediction(
+                    cache_dir, index, model, raw, ndim, device, predict_kwargs, min_shape,
+                )
                 if cache_only:
                     continue
                 scores = score_image(
@@ -948,18 +1014,17 @@ IN_DOMAIN_CELLS = {
         "deepbacs_label_free", "dynamicnuclearnet", "enseg", "flywing", "glysac", "histo_miner", "ifnuclei",
         "livecell", "microbeseg", "monuseg", "neurips_cellseg_fluorescence", "neurips_cellseg_label_free",
         "omnipose_bact_fluor", "omnipose_bact_phase", "pannuke", "puma", "tissuenet", "tsakiroglou", "u20s", "vicar",
-        "astih", "tumor_spheroid",
+        "astih", "tumor_spheroid", "orgline",
     ],
     "3d": [
         "plantseg_root", "pnas_arabidopsis", "cartocell", "phmamm", "wing_disc", "embedseg_organoid",
         "embedseg_mouse_skull", "embedseg_platy_nuclei", "nis3d", "celegans_atlas", "gonuclear", "nucverse3d",
         "densecell", "embedseg_platy_ish",
     ],
-    # The last two are segmented and scored like the neurites, see `common.DATASETS_DENSE`.
-    "dense": [
-        "cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress", "platynereis_cells",
-        "synapsenet_compartments",
-    ],
+    # The last two are segmented and scored like the neurites, see `common.DATASETS_DENSE`. liconn (expansion
+    # microscopy) and xpress (X-ray) are in-domain and evaluated, but not tuned on: they are no EM volumes, have one
+    # tuning crop each and decided the dense parameters at the cost of the EM datasets.
+    "dense": ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "platynereis_cells", "synapsenet_compartments"],
 }
 # The in-domain data of the EM mitochondria model: the held-out parts of its training data.
 IN_DOMAIN_EM_MITO = {
@@ -1221,6 +1286,78 @@ def edge_combos(winner, swept):
     return combos
 
 
+def boundary_combos(ranked, data, top=None):
+    """The combos of the boundary stage of an AIS search, see BOUNDARY_GRID.
+
+    Sparse: the best combos, each with every pair of boundary parameters but the one that changes nothing. Dense: the
+    oversegmentation settings of the best combos, each with every mix weight and every 'beta' swept so far, since
+    mixing the boundary in changes the statistics of the boundary map that 'beta' is a bias on.
+
+    Args:
+        ranked: The combos swept so far as JSON strings, best first (the index of the table of `select_combos`).
+        data: The data type, '2d', '3d' or 'dense'.
+        top: The number of combos (sparse) or oversegmentation settings (dense) to start from. Defaults to
+            BOUNDARY_TOP.
+
+    Returns:
+        The combos to sweep.
+    """
+    kind = "dense" if data == "dense" else "sparse"
+    top = BOUNDARY_TOP[kind] if top is None else top
+    grid = BOUNDARY_GRID[kind]
+    # A combo that already holds boundary parameters is the result of this stage, not a start for it.
+    ranked = [params for params in map(json.loads, ranked) if not set(grid) & set(params)]
+    if kind == "sparse":
+        keys = list(grid)
+        pairs = [dict(zip(keys, values)) for values in itertools.product(*grid.values())]
+        pairs = [pair for pair in pairs if pair["boundary_weight"] or pair["boundary_mask_threshold"] is not None]
+        return [{**params, **pair} for params in ranked[:top] for pair in pairs]
+
+    betas = sorted({params["beta"] for params in ranked})
+    settings = []
+    for params in ranked:
+        setting = {key: value for key, value in params.items() if key != "beta"}
+        if setting not in settings:
+            settings.append(setting)
+    return [
+        {**setting, "beta": beta, "boundary_weight": weight}
+        for setting in settings[:top] for weight in grid["boundary_weight"] for beta in betas
+    ]
+
+
+def per_dataset_min_size(scores, winner):
+    """The best 'min_size' of every dataset, with the other parameters of the winner.
+
+    Args:
+        scores: The mean score per combo (rows, as JSON strings) and dataset (columns), higher is better.
+        winner: The parameters of the winner.
+
+    Returns:
+        The 'min_size' per dataset, and per dataset its score with the 'min_size' of the winner ('global') and
+        with its own one ('per_dataset'). A dataset keeps the value of the winner unless another one scores higher.
+    """
+    others = {key: value for key, value in winner.items() if key != "min_size"}
+    rows = {}
+    for combo in scores.index:
+        params = json.loads(combo)
+        if "min_size" in params and {key: value for key, value in params.items() if key != "min_size"} == others:
+            rows[int(params["min_size"])] = scores.loc[combo]
+    table = pd.DataFrame(rows).T.sort_index()
+    global_value = int(winner["min_size"])
+    best, compared = {}, {}
+    for name in table.columns:
+        column = table[name].dropna()
+        value = global_value
+        if global_value not in column.index or column.max() > column[global_value]:
+            value = int(column.idxmax())
+        best[name] = value
+        compared[name] = {
+            "global": float(column[global_value]) if global_value in column.index else None,
+            "per_dataset": float(column[value]),
+        }
+    return best, compared
+
+
 def run_params_stage(context, runner, model, mode, data, stage, combos, options):
     """Sweep 'combos' on every dataset of a data type and return the root of the stage."""
     params_file = write_params(context, data, stage, model, mode, combos)
@@ -1293,7 +1430,24 @@ def search(context, runner, model, mode, data):
         refined = [{**p, "refinement": r} for p in best for r in REFINEMENTS if p.get("refinement") != r]
         roots.append(run_params_stage(context, runner, model, mode, data, "refinement", refined, options))
 
-    table, summary = select_combos(load_scores(context, roots, mode, model, datasets), lower_is_better)
+    boundary_top = context.get("boundary_top")
+    if mode == "ais" and boundary_top != 0:
+        table, _ = select_combos(load_scores(context, roots, mode, model, datasets), lower_is_better)
+        new = boundary_combos(table.index, data, boundary_top)
+        roots.append(run_params_stage(context, runner, model, mode, data, "boundary", new, options))
+
+    # The sparse winner with every 'min_size', from which each dataset takes its best one.
+    per_dataset = mode == "ais" and data in MIN_SIZE_VALUES and context.get("min_size_stage", True)
+    if per_dataset:
+        _, summary = select_combos(load_scores(context, roots, mode, model, datasets), lower_is_better)
+        winner = summary["params"]
+        new = [{**winner, "min_size": value} for value in MIN_SIZE_VALUES[data] if value != winner["min_size"]]
+        roots.append(run_params_stage(context, runner, model, mode, data, "min_size", new, options))
+
+    scores = load_scores(context, roots, mode, model, datasets)
+    table, summary = select_combos(scores, lower_is_better)
+    if per_dataset:
+        summary["min_size_per_dataset"], summary["min_size_scores"] = per_dataset_min_size(scores, summary["params"])
     output_dir = os.path.join(context["experiment_folder"], "selection", f"{data}_{mode}")
     os.makedirs(output_dir, exist_ok=True)
     table.head(50).reset_index(names="params").to_csv(os.path.join(output_dir, f"{model}.csv"), index=False)
@@ -1630,6 +1784,7 @@ def run_command(args):
         "experiment_folder": os.path.abspath(args.experiment_folder), "data_root": args.input_path,
         "datasets": datasets, "n_samples": args.n_samples, "edge_rounds": args.edge_rounds,
         "crop_3d": args.crop_3d, "n_threads": args.n_threads, "identities": {}, "lock": threading.Lock(),
+        "boundary_top": args.boundary_top, "min_size_stage": not args.no_min_size_stage,
         "weights": {model: registry_weights(model) for model in args.model_type},
     }
     searches = [
@@ -1900,6 +2055,14 @@ def add_run_arguments(parser):
     )
     parser.add_argument("--n_samples", type=int, default=None, help="Score at most this many samples per dataset.")
     parser.add_argument("--edge_rounds", type=int, default=2, help="Rounds that sweep past the grid edges.")
+    parser.add_argument(
+        "--boundary_top", type=int, default=None,
+        help="AIS: the best combos that the boundary stage starts from. Defaults to BOUNDARY_TOP, 0 skips the stage.",
+    )
+    parser.add_argument(
+        "--no_min_size_stage", action="store_true",
+        help="AIS: do not sweep 'min_size' for the winner, which gives the best value per dataset.",
+    )
     parser.add_argument("--crop_3d", type=int, nargs=3, default=PIPELINE_CROP_3D, help="The crop of the volumes.")
     parser.add_argument("--n_threads", type=int, default=POSTPROC_THREADS, help="Threads for the postprocessing.")
     parser.add_argument("--slurm", action="store_true", help="Run the sweeps as Slurm job arrays of workers.")

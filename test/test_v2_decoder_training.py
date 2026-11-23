@@ -160,6 +160,58 @@ class TestDecoderTraining(unittest.TestCase):
             self.assertEqual(checkpoint["iteration"], 8)
             self.assertEqual(checkpoint["epoch"], 1)
 
+    def test_resume_with_changed_parameter_order(self):
+        # The optimizer state has to follow the parameters by name if the decoder registers them in another order.
+        from micro_sam.v2.training import get_decoder_train_model, get_decoder_trainer
+
+        def get_trainer(save_root):
+            model = get_decoder_train_model(MODEL_TYPE, device=self.device)
+            train_loader = DataLoader(_RandomTargets(n_z=1, n_samples=2), batch_size=1)
+            val_loader = DataLoader(_RandomTargets(n_z=1, n_samples=1), batch_size=1)
+            for loader in (train_loader, val_loader):
+                loader.shuffle = False
+            return get_decoder_trainer(
+                "test-order", model, train_loader, val_loader, device=self.device, save_root=save_root,
+            )
+
+        with TemporaryDirectory() as tmp:
+            trainer = get_trainer(tmp)
+            trainer.fit(epochs=1, overwrite_training=True)
+            path = os.path.join(tmp, "checkpoints", "test-order", "latest.pt")
+            checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+            names = checkpoint["optimizer_param_names"]
+            self.assertEqual(names, trainer.model.decoder_parameter_names())
+            state = checkpoint["optimizer_state"]["state"]
+            # Parameters that did not get gradients (the 3D branches for 2D data) have no optimizer state.
+            expected = {name: state[i]["exp_avg"] for i, name in enumerate(names) if i in state}
+            self.assertGreater(len(expected), 4)
+
+            # Move the first four parameters to the end, as if their modules were registered last.
+            order = list(range(4, len(names))) + list(range(4))
+            moved_names = [names[i] for i in order]
+            self.assertNotEqual(moved_names, names)
+            for with_names in (True, False):
+                moved = dict(checkpoint)
+                moved["optimizer_state"] = dict(checkpoint["optimizer_state"])
+                moved["optimizer_state"]["state"] = {
+                    new: state[old] for new, old in enumerate(order) if old in state
+                }
+                if with_names:
+                    moved["optimizer_param_names"] = moved_names
+                else:  # Older checkpoints: the order is the one of the stored model state.
+                    moved.pop("optimizer_param_names")
+                    moved["model_state"] = {name: checkpoint["model_state"][name] for name in moved_names}
+
+                trainer = get_trainer(tmp)
+                trainer.load_checkpoint(moved)
+                parameters = dict(zip(names, trainer.model.decoder_parameters()))
+                self.assertEqual(len(trainer.optimizer.state), len(expected))
+                for name in expected:
+                    param = parameters[name]
+                    exp_avg = trainer.optimizer.state[param]["exp_avg"]
+                    self.assertEqual(exp_avg.shape, param.shape)
+                    self.assertTrue(torch.equal(exp_avg.cpu(), expected[name]), name)
+
     def test_loss_ignores_instance_channel(self):
         from micro_sam.v2.training.decoder_training import DecoderLoss
 
