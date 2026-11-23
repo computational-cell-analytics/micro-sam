@@ -35,9 +35,11 @@ Update 2026-11-21 (search and test of the Hiera-U checkpoint of epoch 25, see RE
 
 Update 2026-11-23 (after the comparison of the epoch 25 checkpoint with the reference,
 `TUNING_EVALUATION_RESULTS.md`; the search of that checkpoint ran with the pools before this change):
-- `orgline` is in the 2D pool with its validation split (515 images). A third of its test images hold one organoid of
-  about 100000 pixels, which got no seed with the parameters found without it; no other 2D tuning dataset has such
-  objects.
+- `orgline` is in the 2D pool with its validation split (515 images, 11 of them without a labelled object). A third
+  of its test images hold one organoid of about 100000 pixels, which got no seed with the parameters found without
+  it; no other 2D tuning dataset has such objects. The broad grid holds the longer flow travel these objects need:
+  on the validation split the epoch 25 checkpoint scores mSA 0.287 at the 2D winner (`n_iter` 50, `dt` 1) and 0.379
+  at twice the travel, the same for `n_iter` 50 with `dt` 2 (the form in the grid) and `n_iter` 100 with `dt` 1.
 - `liconn` and `xpress` are out of the dense pool. They are no EM volumes (expansion microscopy, X-ray), have one
   tuning crop each and decided the dense parameters: without them the search gives the parameters of the reference.
   Both are still evaluated: `liconn` in the EM neurites panel, `xpress` with the supplement datasets
