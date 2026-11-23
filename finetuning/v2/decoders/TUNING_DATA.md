@@ -45,10 +45,52 @@ Update 2026-11-23 (after the comparison of the epoch 25 checkpoint with the refe
   Both are still evaluated: `liconn` in the EM neurites panel, `xpress` with the supplement datasets
   (`evaluate_decoder.SUPPLEMENT_DATASETS`; it is not in the panel because its test data is a single slab of 20
   slices).
+- `plantseg_root` and `nucverse3d` tune on 10 tiles each that are placed like their test crops
+  (`tune_set.TEST_LIKE`): tiles centered in the tuning region (`tile_starts(centered=True)`, which reproduces the
+  test crops of `eval_crops.json`), without the tiles below 20 % of the median object count, and of these 10 that
+  are spread over the volumes and over the object counts (`parameter_search.spread_tiles`). No model score enters
+  the choice. Both scored lower on their tuning crops than on the test crops, which came from the crops and not
+  from the volumes:
+  - `plantseg_root`: the center crops of the two volumes sit in the dense core of the root (36 and 46 cells); 72
+    of the 98 test crops hold at most 20 cells, and the test crops with more than 20 score as low as the center
+    crops did (0.21-0.23 against 0.39 for the crops with at most 10 cells, epoch 25 checkpoint). The 10 tiles hold
+    3-39 cells (8 of the first volume, 2 of the second).
+  - `nucverse3d`: one center crop per collection made the glia slab (11 slices, mSA 0.09) a third of the tuning
+    data; it is 2 of the 54 test crops. Now: 1 glia, 5 liver and 4 liver_hcc tiles.
+- The light microscopy volumes and `densecell` (`common.SLIVER_DATASETS`, 28 datasets) are scored without slivers,
+  in the parameter search and in the test (user, 2026-11-23). The volumes are scored on crops of 32 slices, which
+  cut almost every object (99 % of the `plantseg_root` cells), and a part of the pieces is a sliver of a cell
+  that lies outside the crop: 48 of the 164 objects in the `plantseg_root` tuning tiles have fewer than 1000 voxels
+  and all of them are cut, while the smallest whole cell of the tuning volumes has 31000.
+  - Rule (`common.exclude_slivers`): an object that touches a face of its crop and is smaller than a tenth of the
+    median object of its dataset (`common.SLIVER_FRACTION`) is a sliver. It is cleared in the ground truth, the
+    segmentation is cleared in its place, and the predicted objects on a crop face below the same size are
+    dropped. A crop whose objects are all slivers is skipped.
+  - The size per dataset and split is measured on the ground truth of all crops of the split
+    (`parameter_search.py prepare --sliver_sizes`, about 5 minutes with 4 processes) and stored in
+    `evaluation/sliver_sizes.json` with the median and the number of slivers. It has to be measured again when the
+    crops of a dataset change. Examples (test split): `plantseg_root` 4217 voxels (619 of 1931 objects are
+    slivers), `pnas_arabidopsis` 676 (6209 of 43130), `nucverse3d` 330 (463 of 3612), `celegans_atlas` 85 (194 of
+    3102), `embedseg_organoid` 4243 (0 of 192).
+  - The results hold `gt_slivers` (the number of ground-truth slivers left out) and, in the test,
+    `mSA_with_slivers` (the score from before, to check a rescoring against the old results). A result, sample row
+    or sweep of these datasets without `gt_slivers` counts as not computed (`common.result_is_current`,
+    `parameter_search.sweep_cache_is_current`, `sweep_is_done`), and `evaluate_decoder.py report` does not compare
+    a result with slivers with one without.
+  - Effect on the tuning tiles of the epoch 25 checkpoint with the 3D winner (mSA with / without slivers):
+    `plantseg_root` 0.256 / 0.353 (58 of 164 objects are slivers), `nucverse3d` 0.307 / 0.342 (73 of 632). The
+    order of the `min_size` values does not change (table in `<root>/param_analysis/tune_set/min_size_20261123/`).
+  - The EM organelle volumes keep their scoring, so the results of the EM organelle models are not touched. The
+    dense datasets are scored by the CREMI score, which has no objects to leave out.
 
 Not done yet:
-- The larger 3D tuning set of `tune_set.py` (up to 10 tiles per dataset) is not written to `tuning_crops.json`:
-  the other 3D datasets still tune on one center crop per tuning volume (the counts below).
+- The larger 3D tuning set of `tune_set.py` (up to 10 tiles per dataset) is written to `tuning_crops.json` only
+  for `plantseg_root` and `nucverse3d`: the other 3D datasets still tune on one center crop per tuning volume (the
+  counts below).
+- No search ran with the tuning data and the scoring of 2026-11-23 yet, and nothing is rescored: the reference
+  (`evaluate_decoder.py reference summary` lists 23 datasets for `reference submit`), the test results of the
+  epoch 25 checkpoint for these datasets, and the 3D light microscopy results of the baselines in the figure
+  tables (`evaluate_automatic_baselines.py` scores through the same `common.evaluate_samples`).
 - The dense search of the new decoder includes `platynereis_cells` and `synapsenet_compartments`; the dense defaults
   of the previous decoder (the reference) were tuned on neurites only.
 - The figure tables (collector script of the baselines) read mSA for cartocell.
@@ -58,7 +100,7 @@ Not done yet:
 | setting | segmentation | ranked by | tuning datasets | tuning samples |
 |---|---|---|---|---|
 | 2D | flow | mSA | 31 | 3609 |
-| 3D | flow | mSA (13 datasets), SA50 (1 dataset) | 14 | 66 |
+| 3D | flow | mSA (13 datasets), SA50 (1 dataset) | 14 | 81 |
 | dense (3D EM) | multicut | CREMI | 6 | 19 |
 
 Tuning samples are images (2D) or crops of up to 32 x 512 x 512 (3D, dense). OOD datasets are never tuned on.
@@ -105,7 +147,7 @@ Tuning samples are images (2D) or crops of up to 32 x 512 x 512 (3D, dense). OOD
 
 | dataset | tuning samples | ranked by | crops | test panel (ID) |
 |---|---|---|---|---|
-| `plantseg_root` | 2 | mSA | center crop per volume | fluorescence cells |
+| `plantseg_root` | 10 | mSA | pinned tiles, placed like the test crops | fluorescence cells |
 | `pnas_arabidopsis` | 20 | mSA | center crop per volume | fluorescence cells |
 | `cartocell` | 9 | SA50 | pinned tiles | fluorescence cells |
 | `phmamm` | 10 | mSA | center crop per volume | fluorescence cells |
@@ -116,7 +158,7 @@ Tuning samples are images (2D) or crops of up to 32 x 512 x 512 (3D, dense). OOD
 | `nis3d` | 1 | mSA | center crop per volume | fluorescence nuclei |
 | `celegans_atlas` | 3 | mSA | center crop per volume | fluorescence nuclei |
 | `gonuclear` | 1 | mSA | center crop per volume | fluorescence nuclei |
-| `nucverse3d` | 3 | mSA | center crop per volume | fluorescence nuclei |
+| `nucverse3d` | 10 | mSA | pinned tiles, placed like the test crops | fluorescence nuclei |
 | `densecell` | 1 | mSA | center crop per volume | not in a panel |
 | `embedseg_platy_ish` | 1 | mSA | center crop per volume | not in a panel |
 

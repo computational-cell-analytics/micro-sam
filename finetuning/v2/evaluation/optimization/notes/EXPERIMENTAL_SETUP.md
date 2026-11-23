@@ -194,6 +194,16 @@ Constants: `DEEP_DEPTH = 32` (`MIN_REALIZED_DEPTH = 24` slices of annotation mak
     ignored). SBD exists since 2026-09-14. Older result files have no `SBD` column.
   - Dense EM: `cremi`, `vi_split`, `vi_merge` and `adapted_rand`, without SBD.
   - Volumes also report the sums `unmatched` and `genuine_misses`.
+  - Since 2026-11-23 the volumes of `common.SLIVER_DATASETS` (the light microscopy volumes and densecell) are
+    scored without slivers, in the test and in the parameter search (`common.exclude_slivers`): an object that a
+    face of the crop cuts and that is smaller than a tenth of the median object of its dataset
+    (`common.SLIVER_FRACTION`; the size per dataset and split is measured on the ground truth of all crops and
+    stored in `sliver_sizes.json`, `parameter_search.py prepare --sliver_sizes`) is cleared in the ground truth,
+    the segmentation is cleared in its place, and the predicted objects on a face below the same size are dropped.
+    A crop whose objects are all slivers is skipped. Their results hold `gt_slivers` (the number of
+    ground-truth slivers left out) and `mSA_with_slivers` (the score from before). A stored result, sample row or
+    sweep without `gt_slivers` is computed again (`common.result_is_current`,
+    `parameter_search.sweep_cache_is_current`). The EM organelle volumes keep their scoring.
   - 3D test volumes are scored on the pinned crops of `eval_crops_3d.json` (`common.EVAL_CROPS_3D`), with one
     sample per crop. The crops are 32 deep and at most 512 in plane. They tile the annotated bounding box
     without overlap and stay clear of tuning data. Near-empty crops are left out.

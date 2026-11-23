@@ -87,7 +87,8 @@ REFERENCE_ROOT = os.path.join(SAVE_ROOT, "evaluation", "reference_hvit_t")
 REFERENCE_FOLDERS = [os.path.join(REFERENCE_ROOT, "results")]
 # platynereis_cells and synapsenet_compartments are segmented with the multicut and scored by the CREMI score now
 # (`common.DATASETS_DENSE`), and six test volumes of cartocell moved into tuning
-# (`common.CARTOCELL_TUNING_TEST_VOLUMES`).
+# (`common.CARTOCELL_TUNING_TEST_VOLUMES`). The volumes that are scored without slivers since 2026-11-23
+# (`common.SLIVER_DATASETS`) are recomputed as well, see `is_recomputed`.
 REFERENCE_RECOMPUTED = ("platynereis_cells", "synapsenet_compartments", "cartocell")
 
 # The datasets outside the figure panels that are scored as well: (dataset, panel). They are in-domain. xpress is,
@@ -405,10 +406,18 @@ def _metric_column(dataset, evaluation_common):
     return "SA50" if dataset in evaluation_common.DATASETS_SA50 else "mSA"
 
 
+def is_recomputed(dataset, evaluation_common):
+    """Whether the reference of a dataset is recomputed, since the registry evaluation scored it in another way."""
+    return dataset in REFERENCE_RECOMPUTED or dataset in evaluation_common.SLIVER_DATASETS
+
+
 def _reference_result(dataset):
+    _, evaluation_common = import_evaluation()
     found = None
     for folder in REFERENCE_FOLDERS:
         paths = glob.glob(os.path.join(folder, f"{dataset}_micro_sam2_hvit_t_ais_default_ckpt-*.csv"))
+        # A recomputed result replaces the copy that was scored the old way (`common.result_is_current`).
+        paths = [path for path in paths if evaluation_common.result_is_current(path, dataset)] or paths
         if len(paths) > 1:
             raise RuntimeError(f"More than one reference result for '{dataset}' in {folder}: {paths}.")
         if paths:
@@ -467,12 +476,17 @@ def report(args):
         column = _metric_column(dataset, evaluation_common)
         row = {
             "dataset": dataset, "figure": figure, "panel": panel, "domain": domain,
-            "metric": column.lower(), "new": None, "reference": None, "n_samples": None,
+            "metric": column.lower(), "new": None, "reference": None, "n_samples": None, "same_scoring": True,
         }
         new_path = _new_result(args.experiment_folder, dataset, tag, args.checkpoint_id, parameters)
         if new_path is not None:
             row["new"] = float(pd.read_csv(new_path)[column].iloc[0])
         reference_path = _reference_result(dataset)
+        if new_path is not None and reference_path is not None:
+            # Results scored with and without slivers (`common.exclude_slivers`) are not compared.
+            row["same_scoring"] = evaluation_common.result_is_current(new_path, dataset) == (
+                evaluation_common.result_is_current(reference_path, dataset)
+            )
         if reference_path is not None:
             if args.n_samples:
                 samples = _sample_rows(reference_path, args.n_samples)
@@ -483,13 +497,13 @@ def report(args):
         rows.append(row)
 
     table = pd.DataFrame(rows)
-    table["delta"] = table["new"] - table["reference"]
+    table["delta"] = (table["new"] - table["reference"]).where(table["same_scoring"])
     path = os.path.join(args.experiment_folder, f"report_{parameters}{tag}.csv")
     table.to_csv(path, index=False)
 
     pd.set_option("display.width", 200)
     print(table.to_string(index=False, float_format=lambda value: f"{value:.4f}"))
-    both = table.dropna(subset=["new", "reference"])
+    both = table[table["same_scoring"]].dropna(subset=["new", "reference"])
     # Per metric, so that the datasets scored by SA50 (common.DATASETS_SA50) do not enter a mean of mSA values.
     groups = ["figure", "panel", "domain", "metric"]
     means = both.groupby(groups)[["new", "reference", "delta"]].mean()
@@ -499,6 +513,12 @@ def report(args):
     missing = table[table["new"].isna()]["dataset"].tolist()
     if missing:
         print(f"\nNo result for {len(missing)} dataset(s): {missing}")
+    other_scoring = table[~table["same_scoring"]]["dataset"].tolist()
+    if other_scoring:
+        print(
+            f"\nNot compared, since only one of the two results is scored without slivers "
+            f"({len(other_scoring)} dataset(s), rescore the older one): {other_scoring}"
+        )
     print(f"\nWritten to {path}")
 
 
@@ -624,11 +644,12 @@ def reference_summary():
         path = _reference_result(dataset)
         row = {
             "dataset": dataset, "figure": figure, "panel": panel, "domain": domain, "metric": column.lower(),
-            "value": None, "n_samples": None,
-            "source": "recomputed" if dataset in REFERENCE_RECOMPUTED else sources.get(dataset),
+            "value": None, "n_samples": None, "current": None,
+            "source": "recomputed" if is_recomputed(dataset, evaluation_common) else sources.get(dataset),
         }
         if path is not None:
             row["value"] = float(pd.read_csv(path)[column].iloc[0])
+            row["current"] = evaluation_common.result_is_current(path, dataset)
             samples = _sample_rows(path)
             row["n_samples"] = None if samples is None else len(samples)
         rows.append(row)
@@ -637,6 +658,9 @@ def reference_summary():
     table.to_csv(path, index=False)
     missing = table[table["value"].isna()]["dataset"].tolist()
     print(f"Reference results of {len(table) - len(missing)} of {len(table)} datasets; open: {missing or 'none'}")
+    outdated = table[table["current"].eq(False)]["dataset"].tolist()
+    if outdated:
+        print(f"Scored with slivers, to recompute ('reference submit'): {outdated}")
     print(f"Written to {path}")
     return table
 
@@ -653,7 +677,7 @@ def reference(args):
         os.makedirs(results, exist_ok=True)
         sources = {}
         for dataset, *_ in evaluation_datasets():
-            if dataset in REFERENCE_RECOMPUTED:
+            if is_recomputed(dataset, evaluation_common):
                 continue
             source = _source_reference_result(dataset)
             if source is None:
@@ -675,7 +699,15 @@ def reference(args):
     # Recompute the datasets whose test set-up changed, with the command of the registry evaluation.
     _, decoder_path = evaluation_common.registry_weight_paths("hvit_t_cells")
     code = freeze_code(REFERENCE_ROOT)
-    datasets = args.datasets or list(REFERENCE_RECOMPUTED)
+    # By default the recomputed datasets that have no result with the current scoring yet.
+    datasets = args.datasets or [
+        dataset for dataset, *_ in evaluation_datasets() if is_recomputed(dataset, evaluation_common) and not (
+            (path := _reference_result(dataset)) and evaluation_common.result_is_current(path, dataset)
+        )
+    ]
+    if not datasets:
+        print("Every recomputed dataset has a current reference result.")
+        return
     tasks = shard_tasks(datasets, evaluation_common, "-d {dataset} --n_shards {n_shards} --shard_index {index}")
     tasks_path = os.path.join(code, "tasks.txt")
     with open(tasks_path, "w") as f:
@@ -758,7 +790,8 @@ def main():
     sub.add_argument("action", choices=("copy", "submit", "summary"),
                      help="'copy' the results that still hold, 'submit' the datasets to recompute as a Slurm array, "
                      "write the 'summary' table.")
-    sub.add_argument("--datasets", nargs="+", default=None, help="For 'submit'. Default: REFERENCE_RECOMPUTED.")
+    sub.add_argument("--datasets", nargs="+", default=None,
+                     help="For 'submit'. Default: the recomputed datasets without a current result.")
     add_slurm(sub)
 
     args = parser.parse_args()

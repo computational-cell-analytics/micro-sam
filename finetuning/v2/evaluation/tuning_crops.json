@@ -1449,6 +1449,136 @@
     "CYST 7d Filt 3well Pha,Bcat,DAPI 40x Z4 15.7.19 3a.tif": [],
     "cyst 4d fil 3well Pha,bcat,dapi 02.08.19 40x Z5 12a.tif": []
    }
+  },
+  "plantseg_root": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "10 tiles of 2 volumes, holding 3-39 objects; tune_set.py: tiles placed like the test crops, spread evenly over the object counts of each volume.",
+   "starts": {
+    "Movie1_t00004_crop_gt.h5": [
+     [
+      3,
+      54,
+      153
+     ],
+     [
+      67,
+      54,
+      665
+     ],
+     [
+      99,
+      54,
+      153
+     ],
+     [
+      131,
+      54,
+      665
+     ],
+     [
+      163,
+      54,
+      153
+     ],
+     [
+      195,
+      54,
+      153
+     ],
+     [
+      227,
+      54,
+      665
+     ],
+     [
+      259,
+      54,
+      153
+     ]
+    ],
+    "Movie1_t00030_crop_gt.h5": [
+     [
+      36,
+      0,
+      244
+     ],
+     [
+      132,
+      0,
+      244
+     ]
+    ]
+   }
+  },
+  "nucverse3d": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "10 tiles of 3 volumes, holding 38-91 objects; tune_set.py: tiles placed like the test crops, spread evenly over the object counts of each volume.",
+   "starts": {
+    "C2_M01.h5": [
+     [
+      0,
+      94,
+      94
+     ]
+    ],
+    "20221006_13_Control_8w_Periportal.h5": [
+     [
+      12,
+      0,
+      0
+     ],
+     [
+      76,
+      0,
+      0
+     ],
+     [
+      172,
+      0,
+      0
+     ],
+     [
+      204,
+      0,
+      0
+     ],
+     [
+      236,
+      0,
+      0
+     ]
+    ],
+    "20221014_6_control_16w_centro.h5": [
+     [
+      33,
+      0,
+      0
+     ],
+     [
+      65,
+      0,
+      0
+     ],
+     [
+      161,
+      0,
+      0
+     ],
+     [
+      193,
+      0,
+      0
+     ]
+    ]
+   }
   }
  }
 }

@@ -9,13 +9,16 @@
    the predicted boundary (BOUNDARY_GRID), and for sparse AIS the winner with every 'min_size' (MIN_SIZE_VALUES),
    which gives the best 'min_size' per dataset ('selection/<data>_ais/<model>.json').
 The best combination has the best mean relative score over the datasets: the score of a dataset over its best score.
+The volumes of `common.SLIVER_DATASETS` are scored without the slivers of cut objects, like in the test
+(`common.exclude_slivers`).
 It runs here, or with '--slurm' as Slurm job arrays. Finished sweeps are kept, so a search resumes where it stopped.
 The models are the registry models of `micro_sam.v2.util` with a decoder, e.g. 'hvit_b_cells'. A run downloads
 them first.
 
 'sweep' runs one sweep per dataset and writes it to '<tuning_root>/<mode>/<model_type>/<checkpoint_id>/', the layout
 that `common.read_tuned_params` reads. 'worker' is the Slurm worker of 'run --slurm'. 'prepare' writes the tuning
-crops (tuning_crops.json) and the mock 2d slices of the nucleus volumes that the EM organelle searches tune on.
+crops (tuning_crops.json) and the mock 2d slices of the nucleus volumes that the EM organelle searches tune on, or
+with '--sliver_sizes' the size bound of the slivers (sliver_sizes.json).
 
 Usage examples:
     python parameter_search.py run -e <exp> -m hvit_b_cells
@@ -64,8 +67,10 @@ from common import (
     CREMI_IGNORE_ZERO_LABEL, DATASETS_SA50,
     DATASETS_2D_EM_NUCLEUS_MOCK, DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
     EM_NUCLEUS_MOCK_2D_ROOT, GT_MIN_SIZE_2D, CROP_SHAPE_3D, DATA_ROOT, LABELLED_ONLY_DATASETS, MODEL_TYPES, MODES,
-    TUNING_CROPS, VOLUME_SPEED_OPTIONS, build_model, check_data_download, drop_severed_objects, em_roi,
-    get_data_paths, has_val_split, keep_labelled_objects, load_data, load_evaluation_sample_2d,
+    SLIVER_DATASETS, SLIVER_FRACTION, SLIVER_SIZES, TUNING_CROPS, VOLUME_SPEED_OPTIONS, build_model,
+    check_data_download, dataset_slivers, drop_severed_objects, em_roi, exclude_slivers, has_scored_objects,
+    cut_objects, get_data_paths, has_val_split, keep_labelled_objects, load_data, load_evaluation_sample_2d,
+    object_sizes,
     load_evaluation_sample_3d, n_samples, pad_to_min_shape, predict_unisam2,
     read_tuned_params, resolve_checkpoint_identity, sorted_path_pairs, use_tmpdir_for_embeddings, val_z_range,
     _read_crops, _read_window,
@@ -301,11 +306,14 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_over
         "criterion": criterion or default_criterion(dataset_name),
         # Only set for the volumes with no split of their own.
         "z_range": VAL_Z_RANGE.get(dataset_name),
+        # Whether the slivers of cut objects are left out of the scoring, see `common.exclude_slivers`.
+        "slivers": dataset_name in SLIVER_DATASETS,
     }
 
 
 def compute_metrics(
     seg, labels, metric_mode, border_min_size=0, valid_roi=None, labelled_only=False, ignore_zero=False,
+    slivers=None,
 ):
     """Compute the evaluation metrics for one segmentation.
 
@@ -317,6 +325,8 @@ def compute_metrics(
     Dense (EM neuron) mode also reports the CREMI score with its VI-split, VI-merge and adapted-Rand components.
     Neuron segmentation is ranked by CREMI (lower is better) instead of mSA. With 'ignore_zero' the CREMI score
     leaves out the voxels with label zero (see `common.CREMI_IGNORE_ZERO_LABEL`).
+    With 'slivers' (the result of `common.dataset_slivers` for 'labels') the slivers of cut objects are left out of
+    the ground truth and the segmentation of a volume, and their number is reported as 'gt_slivers'.
     """
     if valid_roi is not None:
         seg = np.where(valid_roi, seg, 0).astype(seg.dtype)
@@ -325,8 +335,13 @@ def compute_metrics(
     if seg.ndim == 2:
         # Symmetric with the ground truth, which `load_evaluation_sample_2d` filtered the same way.
         seg = drop_severed_objects(seg, border_min_size)
+    n_slivers = None
+    if slivers is not None:
+        labels, seg, n_slivers = exclude_slivers(labels, seg, slivers)
     msa, accuracies = mean_segmentation_accuracy(seg, labels, return_accuracies=True)
     metrics = {"msa": float(msa), "sa50": float(accuracies[0])}  # The thresholds start at an IoU of 0.5.
+    if n_slivers is not None:
+        metrics["gt_slivers"] = float(n_slivers)
     if metric_mode == "sparse":
         metrics["sbd"] = float(symmetric_best_dice_score(seg, labels))
     if metric_mode == "dense":
@@ -419,7 +434,7 @@ def deduplicate_flow_travel(params_list):
 
 def score_image_sparse_cached(
     prediction, labels, params_list, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0, valid_roi=None,
-    labelled_only=False,
+    labelled_only=False, slivers=None,
 ):
     """Score all sparse combos on one image, caching the flow density across shared combos.
 
@@ -497,6 +512,7 @@ def score_image_sparse_cached(
                     seg = watershed(hmap, markers=seg, mask=fg_mask)
                 results.append((index, compute_metrics(
                     seg.astype("uint32"), labels, "sparse", border_min_size, valid_roi, labelled_only,
+                    slivers=slivers,
                 )))
             except Exception as e:
                 warnings.warn(f"Sparse postprocessing failed for {params_list[index]}: {e}")
@@ -613,7 +629,7 @@ def score_image_dense_cached(
 
 def score_sample_apg(
     segmenter, raw, labels, params_list, ndim, metric_mode, spacing=None, border_min_size=0, valid_roi=None,
-    labelled_only=False,
+    labelled_only=False, slivers=None,
 ):
     """Return a per-combo list of metric dicts for one sample, aligned with params_list.
 
@@ -635,6 +651,7 @@ def score_sample_apg(
             seg = segmenter.generate(spacing=spacing, **params)
             scores.append(compute_metrics(
                 seg.astype("uint32"), labels, metric_mode, border_min_size, valid_roi, labelled_only,
+                slivers=slivers,
             ))
         except Exception as e:
             warnings.warn(f"Prompt generation failed for {params}: {e}")
@@ -705,17 +722,17 @@ def cached_prediction(cache_dir, index, model, raw, ndim, device, predict_kwargs
 
 def score_image(
     prediction, labels, mode, params_list, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0,
-    valid_roi=None, labelled_only=False, ignore_zero=False,
+    valid_roi=None, labelled_only=False, ignore_zero=False, slivers=None,
 ):
     """Return a per-combo list of metric dicts for one decoder prediction, aligned with params_list.
 
-    'valid_roi' and 'labelled_only' restrict the scored region and 'ignore_zero' the CREMI score of the dense
-    mode, see `compute_metrics`.
+    'valid_roi' and 'labelled_only' restrict the scored region, 'ignore_zero' the CREMI score of the dense mode,
+    and 'slivers' leaves the slivers of cut objects out of the sparse mode, see `compute_metrics`.
     """
     if mode == "sparse":
         return score_image_sparse_cached(
             prediction, labels, params_list, n_threads=n_threads, spacing=spacing,
-            border_min_size=border_min_size, valid_roi=valid_roi, labelled_only=labelled_only,
+            border_min_size=border_min_size, valid_roi=valid_roi, labelled_only=labelled_only, slivers=slivers,
         )
     return score_image_dense_cached(
         prediction, labels, params_list, n_threads=n_threads, border_min_size=border_min_size,
@@ -739,8 +756,14 @@ def report_best(df, dataset_name, config):
 
 
 def sweep_cache_is_current(csv_path, config):
-    """Return whether a cached sweep contains every parameter in the current grid and the metric it is ranked by."""
+    """Return whether a cached sweep contains every parameter in the current grid and the metric it is ranked by.
+
+    A sweep of a dataset that is scored without slivers (`common.SLIVER_DATASETS`) must have been scored that way.
+    """
     columns = set(pd.read_csv(csv_path, nrows=0).columns)
+    if config.get("slivers") and "gt_slivers_mean" not in columns:
+        print(f"Ignoring the cached sweep at '{csv_path}'. It was scored with the slivers of cut objects.")
+        return False
     missing = [key for key in config["grid"] if key not in columns]
     if missing:
         print(f"Ignoring the cached sweep at '{csv_path}'. It lacks parameter columns: {missing}.")
@@ -944,14 +967,16 @@ def tune_parameters(
         if n_tuning_samples is not None and n_scored >= n_tuning_samples:
             break
         n_scored += 1
-        if labels.max() == 0:  # Nothing to score without ground-truth.
+        # The slivers of the ground truth are found once for all combos.
+        slivers = dataset_slivers(dataset_name, labels, split="val")
+        if not has_scored_objects(labels, slivers):  # Nothing to score without ground-truth.
             continue
         try:
             if postproc_mode == "apg":
                 scores = score_sample_apg(
                     model, raw, labels, params_list, ndim, config["metric_mode"],
                     spacing=config["spacing"], border_min_size=border_min_size,
-                    valid_roi=valid_roi, labelled_only=labelled_only,
+                    valid_roi=valid_roi, labelled_only=labelled_only, slivers=slivers,
                 )
             else:
                 prediction = cached_prediction(
@@ -963,7 +988,7 @@ def tune_parameters(
                     prediction, labels, postproc_mode, params_list,
                     n_threads=n_threads, spacing=config["spacing"], border_min_size=border_min_size,
                     valid_roi=valid_roi, labelled_only=labelled_only,
-                    ignore_zero=dataset_name in CREMI_IGNORE_ZERO_LABEL,
+                    ignore_zero=dataset_name in CREMI_IGNORE_ZERO_LABEL, slivers=slivers,
                 )
         except Exception as e:
             warnings.warn(f"Skipping validation sample {index} of '{dataset_name}': {e}")
@@ -1155,8 +1180,11 @@ def sweep_csv(context, sweep, root=None):
 
 
 def sweep_is_done(context, sweep):
+    """Whether a sweep is stored. A sweep that was scored with slivers does not count for a dataset without them."""
     csv_path = sweep_csv(context, sweep)
-    return os.path.exists(csv_path) and os.path.exists(per_image_path(csv_path))
+    if not (os.path.exists(csv_path) and os.path.exists(per_image_path(csv_path))):
+        return False
+    return sweep["dataset"] not in SLIVER_DATASETS or "gt_slivers_mean" in pd.read_csv(csv_path, nrows=0).columns
 
 
 def prediction_cache(context, sweep):
@@ -1877,6 +1905,9 @@ TUNING_CROPS_PATH = Path(__file__).resolve().parent / "tuning_crops.json"
 TUNING_CROP_3D, MAX_TUNING_CROPS_3D = (32, 512, 512), 5
 TUNING_CROP_2D, MAX_TUNING_CROPS_2D = (512, 512), 10
 MOCK_SLICES, MOCK_MIN_Z_DISTANCE = 10, 4
+# The test crops with fewer objects than this fraction of the median count of their dataset are left out
+# (eval_crops.json), and so are the tuning tiles that are placed like them (`spread_tiles`).
+TEST_CROP_MIN_COUNT_FRACTION = 0.2
 TUNING_CROP_DATASETS = {
     3: IN_DOMAIN_EM_MITO["3d"] + IN_DOMAIN_EM_NUCLEUS["3d"],
     2: [
@@ -1886,23 +1917,69 @@ TUNING_CROP_DATASETS = {
 }
 
 
-def tile_starts(region, crop_shape, edge_aligned=False):
+def tile_starts(region, crop_shape, edge_aligned=False, centered=False):
     """The starts of the tiles of a region, a tuple of slices.
 
     The tiles do not overlap, so the rest of an axis that is no multiple of the crop stays uncovered. With
     'edge_aligned' a last tile that ends at the region's end covers it, overlapping its neighbour, if the rest is at
-    least half a tile: a smaller rest would add a tile that mostly repeats its neighbour.
+    least half a tile: a smaller rest would add a tile that mostly repeats its neighbour. With 'centered' the tiles
+    sit in the middle of the region instead of at its start, so that the rest is split between both ends. This is
+    how the test crops are placed (eval_crops.json).
     """
+    if edge_aligned and centered:
+        raise ValueError("The tiles are either edge aligned or centered.")
     axes = []
     for sl, size in zip(region, crop_shape):
-        if sl.stop - sl.start <= size:
+        length = sl.stop - sl.start
+        if length <= size:
             axes.append([sl.start])
             continue
-        starts = list(range(sl.start, sl.stop - size + 1, size))
+        first = sl.start + (length % size) // 2 if centered else sl.start
+        starts = list(range(first, sl.stop - size + 1, size))
         if edge_aligned and sl.stop - (starts[-1] + size) >= size / 2:
             starts.append(sl.stop - size)
         axes.append(starts)
     return list(itertools.product(*axes))
+
+
+def spread_tiles(tiles, max_tiles, min_count_fraction=TEST_CROP_MIN_COUNT_FRACTION):
+    """Choose up to 'max_tiles' tiles as a sample of all tiles of a dataset, for tiles placed like the test crops.
+
+    The tiles below 'min_count_fraction' of the median object count are left out, like for the test crops. Every
+    volume gets a share of 'max_tiles' in proportion to its tiles, and at least one tile. Within a volume the tiles
+    at evenly spaced ranks of the object count are taken, so that the chosen tiles hold few to many objects like
+    all tiles do.
+
+    Args:
+        tiles: The (object count, volume, start) of every tile.
+        max_tiles: The number of tiles to choose at most.
+        min_count_fraction: The fraction of the median object count below which a tile is left out.
+
+    Returns:
+        The (volume, start) of the chosen tiles.
+    """
+    floor = min_count_fraction * np.median([n_objects for n_objects, _, _ in tiles])
+    groups = {}
+    for n_objects, volume, start in sorted(tiles, key=lambda tile: (tile[1], tile[0], tile[2])):
+        if n_objects >= floor:
+            groups.setdefault(volume, []).append(start)
+    n_tiles = sum(len(starts) for starts in groups.values())
+    if n_tiles <= max_tiles:
+        return [(volume, start) for volume, starts in groups.items() for start in starts]
+    if len(groups) > max_tiles:
+        raise ValueError(f"{len(groups)} volumes do not fit into {max_tiles} tiles.")
+    # One tile per volume, the rest by the largest remainder of the proportional share.
+    spare = max_tiles - len(groups)
+    shares = {volume: spare * (len(starts) - 1) / (n_tiles - len(groups)) for volume, starts in groups.items()}
+    counts = {volume: 1 + int(share) for volume, share in shares.items()}
+    by_remainder = sorted(groups, key=lambda volume: (int(shares[volume]) - shares[volume], volume))
+    for volume in by_remainder[:max_tiles - sum(counts.values())]:
+        counts[volume] += 1
+    chosen = []
+    for volume, starts in groups.items():
+        ranks = [int((i + 0.5) * len(starts) / counts[volume]) for i in range(counts[volume])]
+        chosen += [(volume, starts[rank]) for rank in ranks]
+    return chosen
 
 
 def tile_regions(dataset_name, data_root, ndim):
@@ -1971,6 +2048,81 @@ def write_tuning_crops(placed):
     TUNING_CROPS.update(_read_crops(TUNING_CROPS_PATH.name))
 
 
+SLIVER_SIZES_PATH = Path(__file__).resolve().parent / "sliver_sizes.json"
+SLIVER_RULE = (
+    "The size bound of the slivers per dataset and split, measured by 'parameter_search.py prepare --sliver_sizes': "
+    "'min_size' is {fraction} of the median size of the ground-truth objects in all crops of the split (test: the "
+    "test crops, val: the tuning crops of the parameter search). An object that touches a face of its crop and has "
+    "fewer voxels is left out of the scoring, in the ground truth and in the segmentation (common.exclude_slivers); "
+    "'n_slivers' counts these objects in the ground truth."
+)
+
+
+def measure_sliver_size(dataset_name, data_root, split):
+    """The size bound of the slivers of one dataset and split, as an entry of sliver_sizes.json.
+
+    Returns None for a split without objects, which is not scored.
+    """
+    if split == "val":  # The crops of the search, see `tune_parameters`.
+        samples = load_data(
+            dataset_name, data_root, 3, split="val", crop_shape=PIPELINE_CROP_3D,
+            z_range=VAL_Z_RANGE.get(dataset_name),
+        )
+    else:
+        samples = load_data(dataset_name, data_root, 3)
+    sizes, is_cut, n_crops = [], [], 0
+    for _, labels, _ in samples:
+        ids, crop_sizes = object_sizes(labels)
+        sizes.append(crop_sizes)
+        is_cut.append(np.isin(ids, cut_objects(labels)))
+        n_crops += 1
+    sizes = np.concatenate(sizes) if sizes else np.array([])
+    if sizes.size == 0:
+        return None
+    median = float(np.median(sizes))
+    min_size = round(SLIVER_FRACTION * median, 1)
+    return {
+        "min_size": min_size, "median_size": median, "n_objects": int(sizes.size),
+        "n_slivers": int((np.concatenate(is_cut) & (sizes < min_size)).sum()), "n_crops": n_crops,
+    }
+
+
+def write_sliver_sizes(datasets, data_root, n_workers=1, dry=False):
+    """Measure the size bound of the slivers of the datasets, for every split they have, and add it to the file."""
+    tasks = [
+        (name, split) for name in datasets for split in ("test", "val") if split == "test" or has_val_split(name)
+    ]
+    with futures.ProcessPoolExecutor(max_workers=n_workers) as pool:
+        jobs = {task: pool.submit(measure_sliver_size, task[0], data_root, task[1]) for task in tasks}
+        measured = {}
+        for (name, split), job in jobs.items():
+            entry = job.result()
+            if entry is None:
+                print(f"{name} {split}: no object, so no size.", flush=True)
+                continue
+            measured.setdefault(name, {})[split] = entry
+            print(
+                f"{name} {split}: min_size {entry['min_size']} (median {entry['median_size']:.0f}), "
+                f"{entry['n_slivers']} of {entry['n_objects']} objects in {entry['n_crops']} crops are slivers",
+                flush=True,
+            )
+    if dry:
+        return measured
+    with open(SLIVER_SIZES_PATH) as f:
+        stored = json.load(f)
+    stored["rule"] = SLIVER_RULE.format(fraction=SLIVER_FRACTION)
+    stored["datasets"].update(measured)
+    stored["datasets"] = dict(sorted(stored["datasets"].items()))
+    tmp_path = f"{SLIVER_SIZES_PATH}.tmp{os.getpid()}"
+    with open(tmp_path, "w") as f:
+        json.dump(stored, f, indent=1)
+        f.write("\n")
+    os.replace(tmp_path, SLIVER_SIZES_PATH)
+    SLIVER_SIZES.update(measured)
+    print(f"Written to {SLIVER_SIZES_PATH}")
+    return measured
+
+
 def mock_slice_labels(labels, min_size):
     """The connected components of a 2d label slice, without the ones below 'min_size' pixels."""
     components = label_components(labels > 0)
@@ -2017,6 +2169,9 @@ def write_mock_slices(dataset_name, data_root, split):
 
 def prepare_command(args):
     """The 3d crops come first, since the mock 2d slices are cut from them."""
+    if args.sliver_sizes:  # Only this: the sizes are measured on the crops that are placed already.
+        write_sliver_sizes(args.datasets or sorted(SLIVER_DATASETS), args.input_path, args.threads, args.dry)
+        return
     if 3 in args.ndim:
         placed = {name: place_tuning_crops(name, args.input_path, 3) for name in TUNING_CROP_DATASETS[3]}
         if not args.dry:
@@ -2129,6 +2284,13 @@ def add_prepare_arguments(parser):
     parser.add_argument("--ndim", type=int, nargs="+", default=[3, 2], choices=(2, 3), help="The crops to place.")
     parser.add_argument("--mock_nucleus_2d", action="store_true", help="Write the mock 2d nucleus slices too.")
     parser.add_argument("--dry", action="store_true", help="Print the crops without writing anything.")
+    parser.add_argument(
+        "--sliver_sizes", action="store_true",
+        help="Measure the size bound of the slivers (sliver_sizes.json) instead of placing crops. It has to be "
+        "measured again for a dataset whose test or tuning crops change.",
+    )
+    parser.add_argument("-d", "--datasets", nargs="+", default=None, help="The datasets of --sliver_sizes.")
+    parser.add_argument("--threads", type=int, default=1, help="The processes of --sliver_sizes.")
 
 
 def main():

@@ -10,8 +10,9 @@ whether other regions score better, and writes the chosen tiles to `evaluation/t
     python tune_set.py score --model hiera_u --checkpoint <decoder_training>/checkpoints/epoch-10.pt
     python tune_set.py submit --model hiera_u --checkpoint ...   # the same as a grete:shared job
     python tune_set.py report                        # per-tile tables for choosing the tiles
-    python tune_set.py write [--exclude picks.json]  # place at most 10 tiles per dataset in tuning_crops.json
+    python tune_set.py write [--picks picks.json]    # place at most 10 tiles per dataset in tuning_crops.json
 
+The datasets in TEST_LIKE get tiles that are placed like their test crops instead, see `select_test_like`.
 Outputs go to OUT_ROOT (env TUNE_SET_ROOT).
 """
 import os
@@ -38,6 +39,12 @@ OUT_ROOT = os.environ.get(
 # `common.DATASETS_DENSE`.
 LOW_SCORING = ("cartocell", "plantseg_root", "celegans_atlas", "nucverse3d")
 MAX_TILES = 10
+# The datasets whose tuning tiles are placed like the test crops (eval_crops.json): centered in the tuning region,
+# without the tiles that hold far fewer objects than the median tile. Their center crops did not represent the
+# test crops: the ones of plantseg_root sit in the dense core of the root (36 and 46 cells, 72 of the 98 test crops
+# hold at most 20), and nucverse3d had one crop per collection, so that the glia slab was a third of the tuning data
+# (2 of its 54 test crops).
+TEST_LIKE = ("plantseg_root", "nucverse3d")
 MIN_OBJECT_SIZE = 10  # Voxels; smaller label fragments are not counted as objects in the statistics.
 # The hvit_t cells defaults for volumes (micro_sam/_model_settings.py).
 DEFAULTS_3D = {
@@ -118,6 +125,10 @@ def candidates_command(args):
         for volume, paths, z_range, region in search.tile_regions(dataset, search_common.DATA_ROOT, 3):
             # The v6 crop (the center crop) first, then the tiles.
             starts = [None] + search.tile_starts(region, search.TUNING_CROP_3D, edge_aligned=True)
+            test_like = set()
+            if dataset in TEST_LIKE:
+                test_like = set(search.tile_starts(region, search.TUNING_CROP_3D, centered=True))
+                starts += sorted(test_like - set(starts))
             for start in starts:
                 _, labels, valid_roi = search_common.load_evaluation_sample_3d(
                     *paths, crop_shape=search.TUNING_CROP_3D, z_range=z_range, split="val", crop_start=start,
@@ -126,7 +137,7 @@ def candidates_command(args):
                     "key": tile_key(dataset, volume, start), "dataset": dataset, "volume": volume,
                     "start": "center" if start is None else "_".join(map(str, start)),
                     "region": "x".join(str(sl.stop - sl.start) for sl in region),
-                    **_label_statistics(labels, valid_roi),
+                    "test_like": start in test_like, **_label_statistics(labels, valid_roi),
                 })
         n = sum(row["dataset"] == dataset for row in rows)
         print(f"{dataset}: {n} candidates ({time.time() - t0:.0f} s)", flush=True)
@@ -216,6 +227,7 @@ def score_command(args):
             msa = [
                 np.nan if m is None else m["msa"] for m in search.score_image(
                     prediction, labels, "sparse", params, n_threads=args.threads, valid_roi=valid_roi,
+                    slivers=search_common.dataset_slivers(dataset, labels, split="val"),
                 )
             ]
             result = {"key": row.key, "msa": msa, **_foreground_statistics(prediction, labels, valid_roi)}
@@ -384,6 +396,13 @@ def select_tiles(rows, max_tiles=MAX_TILES):
     return chosen
 
 
+def select_test_like(rows, max_tiles=MAX_TILES):
+    """Up to 'max_tiles' of the tiles that are placed like the test crops, see `parameter_search.spread_tiles`."""
+    search, _ = import_search()
+    rows = rows[rows["test_like"].fillna(False).astype(bool)]
+    return search.spread_tiles(list(zip(rows["n_objects"], rows["volume"], rows["start"])), max_tiles)
+
+
 def write_command(args):
     search, search_common = import_search()
     candidates = pd.read_csv(os.path.join(OUT_ROOT, "candidates.csv"))
@@ -398,20 +417,21 @@ def write_command(args):
         rows = candidates[(candidates["dataset"] == dataset) & (candidates["n_objects"] > 0)]
         rows = rows[(rows["start"] != "center") & ~rows["key"].isin(exclude)]
         if dataset in include:
-            chosen = [(key.split("|")[1], key.split("|")[2]) for key in include[dataset]]
+            chosen, how = [(key.split("|")[1], key.split("|")[2]) for key in include[dataset]], "tiles picked by hand"
+        elif dataset in TEST_LIKE:
+            chosen = select_test_like(rows, args.max_tiles)
+            how = "tiles placed like the test crops, spread evenly over the object counts of each volume"
         else:
-            chosen = select_tiles(rows, args.max_tiles)
+            chosen, how = select_tiles(rows, args.max_tiles), "round-robin over volumes, most objects first"
         # Every tuning volume needs an entry, also the ones without a chosen tile.
         volumes = [volume for volume, *_ in search.tile_regions(dataset, search_common.DATA_ROOT, 3)]
         starts = {volume: [] for volume in volumes}
-        for volume, start in sorted(chosen):
-            starts[volume].append(list(_start(start)))
+        for volume, start in sorted((volume, _start(start)) for volume, start in chosen):
+            starts[volume].append(list(start))
         objects = rows.set_index("key").loc[[tile_key(dataset, v, _start(s)) for v, s in chosen], "n_objects"]
         note = (
             f"{len(chosen)} tiles of {len(volumes)} volumes, holding {int(objects.min())}-{int(objects.max())} "
-            "objects; tune_set.py: round-robin over volumes, most objects first" + (
-                ", tiles picked by hand" if dataset in include else ""
-            ) + "."
+            f"objects; tune_set.py: {how}."
         )
         placed[dataset] = {"crop_shape": list(search.TUNING_CROP_3D), "note": note, "starts": starts}
         print(f"{dataset}: {note}")

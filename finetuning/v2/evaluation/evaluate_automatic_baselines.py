@@ -146,6 +146,7 @@ from common import (  # noqa: E402
     DATASETS_2D_LM_NUCLEUS_ID, DATASETS_2D_LM_NUCLEUS_SUPPLEMENTARY, DATASETS_2D_LM_NUCLEUS_OOD,
     DATASETS_2D_LM_NUCLEUS_HELD_OUT_PLATFORM, DATASETS_EM_MITO, DATASETS_EM_NUCLEUS, GT_MIN_SIZE_2D,
     check_data_download, drop_severed_objects, ensure_8bit_range, evaluate_samples, load_data, n_samples,
+    result_is_current,
 )
 
 LM_DATASETS = set(DATASETS_2D + DATASETS_3D_LM)
@@ -850,7 +851,7 @@ def _run_evaluation(
 ):
     if limit is not None:  # Name the file after the truncation, so it cannot pass for the full evaluation.
         save_path = f"{save_path[:-4]}_n{limit}.csv"
-    if os.path.exists(save_path):
+    if result_is_current(save_path, dataset_name):
         print(f"Results already stored at '{save_path}'.")
         return
     evaluate_samples(
@@ -915,7 +916,7 @@ def run_cellvit_evaluation(
         checkpoint = os.path.join(CELLVIT_CHECKPOINT_ROOT, CELLVIT_CHECKPOINTS[model_type])
     magnification = 20 if model_type.endswith("_x20") else 40
     save_path = os.path.join(experiment_folder, "results", f"{dataset_name}_cellvit_{model_type}.csv")
-    if os.path.exists(save_path):
+    if result_is_current(save_path, dataset_name):
         print(f"Results already stored at '{save_path}'.")
         return
 

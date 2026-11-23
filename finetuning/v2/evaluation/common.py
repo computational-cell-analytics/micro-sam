@@ -545,6 +545,20 @@ DATASETS_DENSE = (
 # voxel already scores mSA 0.01, so the higher IoU thresholds of mSA measure the voxel grid, not the segmentation.
 # The result tables hold both columns; this set selects the one that is tuned for and compared.
 DATASETS_SA50 = {"cartocell"}
+# The volumetric datasets that are scored without slivers, in the parameter search and in the test (user,
+# 2026-11-23), see `exclude_slivers`. Their volumes are scored on crops of 32 slices, which cut almost every object
+# (99 % of the plantseg_root cells), and a part of the pieces is a sliver of a cell that lies outside the crop: a
+# quarter of the plantseg_root test objects had fewer than 500 voxels, the smallest whole cell of its tuning volumes
+# has 31000. These are the light microscopy volumes and densecell, i.e. the volumes the cells models segment with
+# the flow-based post-processing. The EM organelle volumes keep the scoring of their reported results.
+SLIVER_DATASETS = frozenset(DATASETS_3D_LM + ["densecell"])
+# An object that a crop face cuts is a sliver if it is smaller than this fraction of the median object of its
+# dataset: the median over the ground-truth objects in all crops of the split, measured by
+# 'parameter_search.py prepare --sliver_sizes' and stored in sliver_sizes.json (SLIVER_SIZES). The bound defines the
+# ground truth, so it is measured and never tuned. It is one size per dataset and split, since the median of a
+# single crop is no measure: a plantseg_root crop with a few elongated cells has a median of 450000 voxels, and a
+# tenth of that is more than the smallest whole cell.
+SLIVER_FRACTION = 0.1
 # Dense datasets whose label zero is not scored by the CREMI score: zero marks voxels without annotation (for
 # platynereis_cells the neuropil and the cells that were left out, for synapsenet_compartments the unlabelled
 # parts of the tomogram, see load_volume), not a segment to match.
@@ -3313,6 +3327,10 @@ def evaluate_samples(
     finds the rows of all samples writes the dataset result, so the array tasks of one dataset need no merge step.
     Every metric is a mean over the samples, so the mean of the rows equals the score of one run over all samples.
 
+    The volumes of the datasets in SLIVER_DATASETS are scored without the slivers of cut objects, see
+    `exclude_slivers`. Their results also hold the number of ground-truth slivers left out ('gt_slivers') and the mSA
+    with them ('mSA_with_slivers'). A stored result or sample row of these datasets from before is computed again.
+
     Args:
         segment_fn: The function that maps one image or volume to its instance segmentation.
         dataset_name: The dataset to score.
@@ -3331,6 +3349,7 @@ def evaluate_samples(
         The results as a DataFrame, or None while the rows of other samples are missing.
     """
     import pandas as pd
+    from elf.evaluation import mean_segmentation_accuracy
     from tqdm import tqdm
 
     ndim = 3 if dataset_name in DATASETS_3D else 2
@@ -3340,7 +3359,7 @@ def evaluate_samples(
         # Read only the samples of this shard that have no stored row yet.
         shard_ids = [
             index for index in range(shard[0], total, shard[1])
-            if not os.path.exists(sample_row_path(save_path, index))
+            if not result_is_current(sample_row_path(save_path, index), dataset_name)
         ]
     samples = load_data(
         dataset_name, data_root, ndim, crop_shape=crop_shape, normalize=normalize,
@@ -3357,7 +3376,7 @@ def evaluate_samples(
     elif sample_index is not None:
         if limit is not None:
             raise ValueError("Got both 'sample_index' and 'limit'. Pass only one of them.")
-        if os.path.exists(sample_row_path(save_path, sample_index)):
+        if result_is_current(sample_row_path(save_path, sample_index), dataset_name):
             samples, total = [], 0
         else:
             samples, total, first = islice(samples, sample_index, sample_index + 1), 1, sample_index
@@ -3366,9 +3385,10 @@ def evaluate_samples(
 
     if shard is None:
         samples = enumerate(samples, start=first)
-    all_gt, all_seg, misses = [], [], []
+    all_gt, all_seg, misses, slivers = [], [], [], []
     for index, (raw, labels, valid_roi) in tqdm(samples, total=total, desc=desc):
-        if labels.max() == 0:  # The sample has no ground truth to score.
+        sample_slivers = dataset_slivers(dataset_name, labels)
+        if not has_scored_objects(labels, sample_slivers):  # The sample has no ground truth to score.
             if per_row:
                 row_path = sample_row_path(save_path, index)
                 os.makedirs(os.path.dirname(row_path), exist_ok=True)
@@ -3385,6 +3405,12 @@ def evaluate_samples(
             # The ground truth has no severed objects either, so predicting one is not a false positive.
             seg = drop_severed_objects(seg, GT_MIN_SIZE_2D.get(dataset_name, 0))
         else:
+            if sample_slivers is not None:
+                # The slivers of cut objects are scored neither in the ground truth nor in the segmentation. The
+                # score with them is kept next to it, to compare with the results from before 2026-11-23.
+                msa_with_slivers = float(mean_segmentation_accuracy(seg, labels))
+                labels, seg, n_slivers = exclude_slivers(labels, seg, sample_slivers)
+                slivers.append((n_slivers, msa_with_slivers))
             misses.append(genuine_misses(labels, seg))
 
         if per_row:
@@ -3394,7 +3420,9 @@ def evaluate_samples(
             tmp_path = f"{row_path}.{os.getpid()}.tmp"
             row = run_dataset_evaluation([labels], [seg], dataset_name, tmp_path)
             if misses:
-                row["unmatched"], row["genuine_misses"] = misses[0]
+                row["unmatched"], row["genuine_misses"] = misses.pop()
+            if slivers:
+                row["gt_slivers"], row["mSA_with_slivers"] = slivers.pop()
             row.to_csv(tmp_path, index=False)
             os.replace(tmp_path, row_path)
         else:
@@ -3408,9 +3436,12 @@ def evaluate_samples(
             # The aggregate metric hides which objects went missing.
             results["unmatched"] = sum(count[0] for count in misses)
             results["genuine_misses"] = sum(count[1] for count in misses)
+        if dataset_name in SLIVER_DATASETS and ndim == 3:
+            results["gt_slivers"] = sum(count for count, _ in slivers)
+            results["mSA_with_slivers"] = float(np.mean([msa for _, msa in slivers])) if slivers else np.nan
     else:
         row_paths = [sample_row_path(save_path, index) for index in range(n_samples(dataset_name, data_root))]
-        missing = [path for path in row_paths if not os.path.exists(path)]
+        missing = [path for path in row_paths if not result_is_current(path, dataset_name)]
         if missing:
             scored = f"sample {sample_index}" if shard is None else f"shard {shard[0]} of {shard[1]}"
             print(f"Scored {scored}. {len(missing)} of {len(row_paths)} rows are still missing.")
@@ -3420,7 +3451,7 @@ def evaluate_samples(
         if len({tuple(frame.columns) for frame in frames if "skipped" not in frame}) > 1:
             raise RuntimeError(f"The sample rows of '{save_path}' hold different metrics. Re-score the older rows.")
         rows = pd.concat(frames, ignore_index=True).drop(columns="skipped", errors="ignore")
-        counts = [column for column in ("unmatched", "genuine_misses") if column in rows]
+        counts = [column for column in ("unmatched", "genuine_misses", "gt_slivers") if column in rows]
         results = rows.drop(columns=counts).mean().to_frame().T
         for column in counts:
             results[column] = int(rows[column].sum())
@@ -3627,6 +3658,15 @@ EVAL_CROPS = _read_crops("eval_crops.json")
 TUNING_CROPS = _read_crops("tuning_crops.json")
 
 
+def _read_sliver_sizes():
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "sliver_sizes.json")) as f:
+        return json.load(f)["datasets"]
+
+
+# The size bound of the slivers per dataset and split ('test', 'val'), see SLIVER_FRACTION and `exclude_slivers`.
+SLIVER_SIZES = _read_sliver_sizes()
+
+
 def crops_2d(dataset_name, raw_path, split):
     """Return the (crop start, crop shape) pairs for one image: its fixed crops, or (None, None) for no fixed crop.
 
@@ -3764,6 +3804,121 @@ def drop_severed_objects(labels, min_size):
     if severed.size == 0:
         return labels
     return np.where(np.isin(labels, severed), 0, labels).astype(labels.dtype)
+
+
+def object_sizes(labels):
+    """Return the ids of the objects of a label array, without zero, and their sizes."""
+    if labels.size == 0:
+        return np.array([], dtype="int64"), np.array([], dtype="int64")
+    if np.issubdtype(labels.dtype, np.integer) and labels.min() >= 0 and labels.max() <= 4 * labels.size:
+        # Counting is linear in the size of the array, sorting it (np.unique) is not.
+        sizes = np.bincount(labels.ravel().astype(np.intp, copy=False))
+        ids = np.nonzero(sizes)[0]
+        ids = ids[ids != 0]
+        return ids, sizes[ids]
+    return np.unique(labels[labels != 0], return_counts=True)
+
+
+def cut_objects(labels):
+    """Return the ids of the objects that touch a face of a volume."""
+    faces = (labels[0], labels[-1], labels[:, 0], labels[:, -1], labels[:, :, 0], labels[:, :, -1])
+    cut = np.unique(np.concatenate([np.unique(face) for face in faces]))
+    return cut[cut != 0]
+
+
+def _small_cut_objects(labels, min_size):
+    """Return the ids of the objects that touch a face of the volume and have fewer than 'min_size' voxels."""
+    cut = cut_objects(labels)
+    if cut.size == 0 or min_size <= 0:
+        return cut[:0]
+    ids, sizes = object_sizes(labels)
+    return np.intersect1d(cut, ids[sizes < min_size])
+
+
+def sliver_min_size(dataset_name, split="test"):
+    """Return the size in voxels below which a cut object of a dataset is a sliver, see SLIVER_SIZES."""
+    try:
+        return SLIVER_SIZES[dataset_name][split]["min_size"]
+    except KeyError:
+        raise RuntimeError(
+            f"sliver_sizes.json has no size for the {split} split of '{dataset_name}'. "
+            f"Measure it with 'parameter_search.py prepare --sliver_sizes -d {dataset_name}'."
+        )
+
+
+def find_slivers(labels, min_size):
+    """Find the slivers in the ground truth of a volume: the pieces a crop face left of an object outside the crop.
+
+    A sliver touches a face of the volume and has fewer than 'min_size' voxels. Both conditions are needed, like
+    in `drop_severed_objects`: small objects inside the volume are whole, and large cut objects are scored.
+
+    Args:
+        labels: The ground-truth labels of a volume, shape (Z, Y, X).
+        min_size: The size bound of the slivers in voxels, see `sliver_min_size`.
+
+    Returns:
+        The size bound, the mask of the slivers and their number.
+    """
+    slivers = _small_cut_objects(labels, min_size)
+    mask = np.isin(labels, slivers) if slivers.size else np.zeros(labels.shape, dtype="bool")
+    return min_size, mask, int(slivers.size)
+
+
+def dataset_slivers(dataset_name, labels, split="test"):
+    """Return the slivers of a ground truth (see `find_slivers`), or None if the dataset is scored with them."""
+    if dataset_name not in SLIVER_DATASETS or labels.ndim != 3:
+        return None
+    return find_slivers(labels, sliver_min_size(dataset_name, split))
+
+
+def has_scored_objects(labels, slivers=None):
+    """Return whether a ground truth holds an object that is scored, i.e. one that is no sliver."""
+    if slivers is None or slivers[2] == 0:
+        return bool(labels.max() > 0)
+    return bool(labels[~slivers[1]].max() > 0)
+
+
+def exclude_slivers(labels, seg, slivers):
+    """Leave the slivers of a volume out of its ground truth and of a segmentation of it.
+
+    The slivers of the ground truth are not scored: they are cleared in the ground truth, and so is the
+    segmentation in their place, so that neither the piece predicted there nor a neighbour that reaches into it
+    counts. The segmentation is then filtered like the ground truth: its objects that touch a face of the volume
+    and are smaller than the bound of the slivers are dropped, so that a predicted sliver is no false positive.
+
+    Args:
+        labels: The ground-truth labels of the volume, shape (Z, Y, X).
+        seg: The segmentation of the volume.
+        slivers: The result of `find_slivers` for 'labels'. A caller that scores many segmentations against the
+            same ground truth computes it once.
+
+    Returns:
+        The ground truth and the segmentation without slivers, and the number of ground-truth slivers.
+    """
+    min_size, mask, n_slivers = slivers
+    if n_slivers:
+        labels = np.where(mask, 0, labels).astype(labels.dtype, copy=False)
+        seg = np.where(mask, 0, seg).astype(seg.dtype, copy=False)
+    small = _small_cut_objects(seg, min_size)
+    if small.size:
+        seg = np.where(np.isin(seg, small), 0, seg).astype(seg.dtype, copy=False)
+    return labels, seg, n_slivers
+
+
+def result_is_current(path, dataset_name):
+    """Return whether a result CSV, of a dataset or of one of its samples, is stored and scored like the dataset is now.
+
+    The results of the datasets in SLIVER_DATASETS hold the column 'gt_slivers' (the number of ground-truth slivers
+    left out) since they are scored without slivers, and 'mSA_with_slivers', the score from before. A result without
+    'gt_slivers' was scored with the slivers and is computed again.
+    """
+    if not os.path.exists(path):
+        return False
+    if dataset_name not in SLIVER_DATASETS:
+        return True
+    with open(path) as f:
+        columns = f.readline().strip().split(",")
+    return "gt_slivers" in columns or "skipped" in columns
 
 
 def severed_objects(gt, max_span=2):

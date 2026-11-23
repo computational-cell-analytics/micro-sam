@@ -93,8 +93,8 @@ def test_score_image_forwards_the_scored_region(monkeypatch):
     seg, labels, valid_roi = _volume_with_unannotated_object()
     seen = []
 
-    def fake_metrics(seg, labels, metric_mode, border_min_size=0, valid_roi=None, labelled_only=False):
-        seen.append((valid_roi, labelled_only))
+    def fake_metrics(seg, labels, metric_mode, border_min_size=0, valid_roi=None, labelled_only=False, slivers=None):
+        seen.append((valid_roi, labelled_only, slivers))
         return {"msa": 1.0}
 
     monkeypatch.setattr(parameter_search, "compute_metrics", fake_metrics)
@@ -105,7 +105,10 @@ def test_score_image_forwards_the_scored_region(monkeypatch):
         "foreground_weight": 0.9, "min_size": 0,
     }]
     parameter_search.score_image(prediction, labels, "sparse", params, n_threads=1, valid_roi=valid_roi)
-    assert len(seen) == 1 and seen[0][0] is valid_roi and seen[0][1] is False
+    assert len(seen) == 1 and seen[0][0] is valid_roi and seen[0][1] is False and seen[0][2] is None
+    slivers = (10.0, labels == 0, 0)
+    parameter_search.score_image(prediction, labels, "sparse", params, n_threads=1, slivers=slivers)
+    assert seen[1][2] is slivers
 
 
 def test_tile_starts_adds_edge_tiles_only_for_half_a_tile_of_new_data():
@@ -114,6 +117,159 @@ def test_tile_starts_adds_edge_tiles_only_for_half_a_tile_of_new_data():
     starts = parameter_search.tile_starts(region, (32, 512, 512), edge_aligned=True)
     # z: 8 slices rest (< 16), y: 466 px rest (>= 256), x: 136 px rest (< 256).
     assert starts == [(0, 0, 10), (0, 466, 10)]
+
+
+def test_centered_tile_starts_reproduce_the_test_crops():
+    import common
+
+    # The annotated boxes of two plantseg_root test volumes. No crop of them is below the object count floor.
+    _, starts = common.EVAL_CROPS["plantseg_root"]
+    shapes = {"Movie1_t00045_crop_gt.h5": (200, 450, 1000), "Movie2_T00020_crop_gt.h5": (353, 450, 1590)}
+    for volume, shape in shapes.items():
+        region = tuple(slice(0, size) for size in shape)
+        tiles = parameter_search.tile_starts(region, (32, 512, 512), centered=True)
+        assert tiles == [start for start, _ in starts[volume]]
+    with pytest.raises(ValueError):
+        parameter_search.tile_starts(region, (32, 512, 512), edge_aligned=True, centered=True)
+
+
+def test_spread_tiles_samples_every_volume_over_its_object_counts():
+    # (object count, volume, start): 'a' has 8 tiles with 10 to 80 objects and one near-empty tile, 'b' 2 tiles.
+    tiles = [(10 * (i + 1), "a", (32 * i, 0, 0)) for i in range(8)] + [(1, "a", (256, 0, 0))]
+    tiles += [(30, "b", (0, 0, 0)), (60, "b", (32, 0, 0))]
+    chosen = parameter_search.spread_tiles(tiles, max_tiles=5)
+    # 'b' gets one tile, 'a' the other four: the ones at evenly spaced ranks of its 8 tiles above the floor.
+    assert chosen == [("a", (32, 0, 0)), ("a", (96, 0, 0)), ("a", (160, 0, 0)), ("a", (224, 0, 0)), ("b", (32, 0, 0))]
+    # All tiles above the floor stay if they fit.
+    assert len(parameter_search.spread_tiles(tiles, max_tiles=20)) == 10
+
+
+def test_plantseg_root_and_nucverse3d_tune_on_tiles_placed_like_the_test_crops():
+    import common
+
+    for dataset, n_volumes in (("plantseg_root", 2), ("nucverse3d", 3)):
+        _, starts = common.TUNING_CROPS[dataset]
+        assert len(starts) == n_volumes and all(starts.values())
+        assert sum(len(crops) for crops in starts.values()) == 10
+    # The glia slab is one of the ten nucverse3d crops instead of one of three.
+    assert len(common.TUNING_CROPS["nucverse3d"][1]["C2_M01.h5"]) == 1
+
+
+def _volume_with_slivers():
+    import numpy as np
+
+    # Three objects of 6 x 10 x 10 voxels inside the volume, and the sliver of a fourth one on the first slice.
+    labels = np.zeros((16, 40, 40), dtype="uint32")
+    labels[4:10, 2:12, 2:12] = 1
+    labels[4:10, 2:12, 14:24] = 2
+    labels[4:10, 14:24, 2:12] = 3
+    labels[:1, 26:36, 26:36] = 4  # 100 voxels; the median object has 600.
+    return labels
+
+
+def test_find_slivers_needs_a_small_object_on_a_face(monkeypatch):
+    import common
+
+    labels = _volume_with_slivers()
+    labels[6, 30, 30] = 5  # A speck inside the volume is no sliver.
+    labels[10:16, 2:12, 26:36] = 6  # Neither is a large object that a face cuts.
+    min_size, mask, n_slivers = common.find_slivers(labels, 60)
+    assert n_slivers == 0 and not mask.any()  # The cut piece of 100 voxels is above the bound.
+
+    labels[:1, 26:36, 31:36] = 0  # 50 voxels are left of it.
+    min_size, mask, n_slivers = common.find_slivers(labels, 60)
+    assert min_size == 60 and n_slivers == 1 and (mask == (labels == 4)).all()
+    assert common.has_scored_objects(labels, (min_size, mask, n_slivers))
+    assert not common.has_scored_objects(labels * (labels == 4), common.find_slivers(labels * (labels == 4), 60))
+
+    # The bound of a dataset is the one measured for its split (sliver_sizes.json).
+    monkeypatch.setattr(common, "SLIVER_SIZES", {"plantseg_root": {"test": {"min_size": 60}, "val": {"min_size": 40}}})
+    assert common.dataset_slivers("plantseg_root", labels)[2] == 1
+    assert common.dataset_slivers("plantseg_root", labels, split="val")[2] == 0
+    assert common.dataset_slivers("lucchi", labels) is None  # The EM organelle volumes keep their scoring.
+    with pytest.raises(RuntimeError, match="prepare --sliver_sizes"):
+        common.dataset_slivers("nucverse3d", labels)
+
+
+def test_every_dataset_scored_without_slivers_has_a_measured_bound():
+    import common
+
+    for dataset in common.SLIVER_DATASETS:
+        assert common.sliver_min_size(dataset) > 0
+    for dataset in parameter_search.IN_DOMAIN_CELLS["3d"]:
+        entry = common.SLIVER_SIZES[dataset]["val"]
+        assert entry["min_size"] == pytest.approx(common.SLIVER_FRACTION * entry["median_size"], abs=0.1)
+        assert entry["n_crops"] == common.n_samples(dataset, common.DATA_ROOT, split="val")
+
+
+def test_exclude_slivers_scores_neither_the_sliver_nor_what_is_predicted_in_its_place():
+    import numpy as np
+    import common
+
+    labels = _volume_with_slivers()
+    labels[:1, 26:36, 31:36] = 0
+    seg = labels.copy()
+    seg[seg == 4] = 0
+    seg[:1, 26:36, 26:33] = 7   # A prediction that covers the sliver and 20 voxels next to it.
+    seg[15:, 2:8, 2:8] = 8      # A predicted sliver on the opposite face.
+    seg[4:10, 14:24, 14:24] = 9  # A false positive inside the volume stays.
+
+    without = parameter_search.compute_metrics(seg.copy(), labels, "sparse")
+    scored = parameter_search.compute_metrics(seg.copy(), labels, "sparse", slivers=common.find_slivers(labels, 60))
+    assert "gt_slivers" not in without and scored["gt_slivers"] == 1
+    # Three matches and the false positive inside the volume: 3 / 4. With the slivers the predicted sliver on the
+    # opposite face is a second false positive, and the sliver of the ground truth a fourth match.
+    assert scored["sa50"] == pytest.approx(3 / 4)
+    assert without["sa50"] == pytest.approx(4 / 6)
+
+    gt, out, n_slivers = common.exclude_slivers(labels, seg, common.find_slivers(labels, 60))
+    assert n_slivers == 1 and set(np.unique(gt)) == {0, 1, 2, 3} and set(np.unique(out)) == {0, 1, 2, 3, 9}
+    # The search finds the slivers of the tuning volumes that are scored without them, and only of those.
+    assert parameter_search.tuning_config("plantseg_root", "ais")["slivers"]
+    assert not parameter_search.tuning_config("cremi", "ais")["slivers"]
+    assert not parameter_search.tuning_config("lucchi", "ais")["slivers"]
+
+
+def test_results_scored_with_slivers_are_not_current(tmp_path):
+    import common
+
+    old, new, skipped = tmp_path / "old.csv", tmp_path / "new.csv", tmp_path / "skipped.csv"
+    pd.DataFrame([{"mSA": 0.3, "SA50": 0.5}]).to_csv(old, index=False)
+    pd.DataFrame([{"mSA": 0.4, "SA50": 0.6, "gt_slivers": 3}]).to_csv(new, index=False)
+    pd.DataFrame([{"skipped": True}]).to_csv(skipped, index=False)
+    assert not common.result_is_current(str(old), "nucverse3d")
+    assert common.result_is_current(str(new), "nucverse3d") and common.result_is_current(str(skipped), "nucverse3d")
+    assert common.result_is_current(str(old), "livecell") and common.result_is_current(str(old), "lucchi")
+    assert not common.result_is_current(str(tmp_path / "missing.csv"), "livecell")
+
+    # The same for a stored sweep of the search.
+    sweep, config = tmp_path / "sweep.csv", {"grid": {"min_size": [50]}, "criterion": "msa", "slivers": True}
+    pd.DataFrame([{"min_size": 50, "msa_mean": 0.3}]).to_csv(sweep, index=False)
+    assert not parameter_search.sweep_cache_is_current(sweep, config)
+    assert parameter_search.sweep_cache_is_current(sweep, {**config, "slivers": False})
+    pd.DataFrame([{"min_size": 50, "msa_mean": 0.3, "gt_slivers_mean": 2.0}]).to_csv(sweep, index=False)
+    assert parameter_search.sweep_cache_is_current(sweep, config)
+
+
+def test_evaluate_samples_scores_the_volumes_without_slivers(tmp_path, monkeypatch):
+    import common
+
+    labels = _volume_with_slivers()
+    labels[:1, 26:36, 31:36] = 0
+    seg = labels.copy()
+    seg[seg == 4] = 0  # The sliver is not segmented.
+    monkeypatch.setattr(common, "SLIVER_SIZES", {"nucverse3d": {"test": {"min_size": 60}}})
+    monkeypatch.setattr(common, "n_samples", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(common, "load_data", lambda *args, **kwargs: iter([(labels.astype("float32"), labels, None)]))
+    results = {}
+    for dataset in ("nucverse3d", "lucchi"):
+        save_path = str(tmp_path / f"{dataset}.csv")
+        results[dataset] = common.evaluate_samples(lambda raw: seg.copy(), dataset, "data", save_path, "test")
+        assert common.result_is_current(save_path, dataset)
+    assert results["nucverse3d"]["mSA"].iloc[0] == pytest.approx(1.0)
+    assert results["nucverse3d"]["gt_slivers"].iloc[0] == 1
+    assert results["nucverse3d"]["mSA_with_slivers"].iloc[0] == pytest.approx(0.75)
+    assert results["lucchi"]["mSA"].iloc[0] == pytest.approx(0.75) and "gt_slivers" not in results["lucchi"]
 
 
 def test_compute_metrics_ignores_label_zero_in_the_cremi_score():
@@ -188,6 +344,8 @@ def test_cartocell_is_ranked_by_sa50_on_the_test_like_volumes(tmp_path):
     # A sweep that was ranked by mSA holds no SA50 column and is recomputed.
     row = {key: values[0] for key, values in config["grid"].items()}
     old, new = tmp_path / "old.csv", tmp_path / "new.csv"
+    # cartocell is scored without slivers (common.SLIVER_DATASETS), which a current sweep records.
+    row["gt_slivers_mean"] = 0.0
     pd.DataFrame([{**row, "msa_mean": 0.1, "msa_std": 0.0}]).to_csv(old, index=False)
     pd.DataFrame([{**row, "msa_mean": 0.1, "sa50_mean": 0.3}]).to_csv(new, index=False)
     assert not parameter_search.sweep_cache_is_current(old, config)

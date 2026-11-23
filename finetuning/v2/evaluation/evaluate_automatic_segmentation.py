@@ -31,7 +31,7 @@ from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASET_SPACING, MODEL_TYPES, MODES, VOLUME_SPEED_OPTIONS, build_model,
     check_data_download, evaluate_samples, has_val_split, load_apg_overrides, postprocess_unisam2, predict_unisam2,
-    pad_to_min_shape, read_tuned_params, resolve_checkpoint_identity, use_tmpdir_for_embeddings,
+    pad_to_min_shape, read_tuned_params, resolve_checkpoint_identity, result_is_current, use_tmpdir_for_embeddings,
 )
 
 # The 2d datasets whose test images are smaller than their training images at the same pixel size. They are
@@ -140,7 +140,7 @@ def run_evaluation(
         experiment_folder, "results", f"{dataset_name}_micro_sam2_{model_type}_{mode}_{tag}.csv"
     )
     save_path = legacy_path if checkpoint_id is None else legacy_path[:-4] + f"_ckpt-{checkpoint_id}.csv"
-    if os.path.exists(save_path):
+    if result_is_current(save_path, dataset_name):
         print(f"Results already stored at '{save_path}'.")
         return pd.read_csv(save_path)
     if checkpoint_id is not None and os.path.exists(legacy_path):

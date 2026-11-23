@@ -1,0 +1,425 @@
+{
+ "rule": "The size bound of the slivers per dataset and split, measured by 'parameter_search.py prepare --sliver_sizes': 'min_size' is 0.1 of the median size of the ground-truth objects in all crops of the split (test: the test crops, val: the tuning crops of the parameter search). An object that touches a face of its crop and has fewer voxels is left out of the scoring, in the ground truth and in the segmentation (common.exclude_slivers); 'n_slivers' counts these objects in the ground truth.",
+ "datasets": {
+  "bbbc032": {
+   "test": {
+    "min_size": 4871.2,
+    "median_size": 48712.0,
+    "n_objects": 122,
+    "n_slivers": 18,
+    "n_crops": 18
+   },
+   "val": {
+    "min_size": 6.4,
+    "median_size": 64.0,
+    "n_objects": 5,
+    "n_slivers": 0,
+    "n_crops": 1
+   }
+  },
+  "bbbc033": {
+   "test": {
+    "min_size": 8262.8,
+    "median_size": 82628.0,
+    "n_objects": 26,
+    "n_slivers": 4,
+    "n_crops": 4
+   }
+  },
+  "bbbc050": {
+   "test": {
+    "min_size": 115.1,
+    "median_size": 1151.0,
+    "n_objects": 672,
+    "n_slivers": 81,
+    "n_crops": 76
+   },
+   "val": {
+    "min_size": 184.0,
+    "median_size": 1840.0,
+    "n_objects": 1268,
+    "n_slivers": 57,
+    "n_crops": 121
+   }
+  },
+  "blastospim": {
+   "test": {
+    "min_size": 1041.0,
+    "median_size": 10410.5,
+    "n_objects": 980,
+    "n_slivers": 48,
+    "n_crops": 72
+   },
+   "val": {
+    "min_size": 1522.0,
+    "median_size": 15220.0,
+    "n_objects": 231,
+    "n_slivers": 5,
+    "n_crops": 10
+   }
+  },
+  "cartocell": {
+   "test": {
+    "min_size": 153.4,
+    "median_size": 1534.0,
+    "n_objects": 3901,
+    "n_slivers": 252,
+    "n_crops": 68
+   },
+   "val": {
+    "min_size": 148.8,
+    "median_size": 1488.5,
+    "n_objects": 410,
+    "n_slivers": 29,
+    "n_crops": 9
+   }
+  },
+  "celegans_atlas": {
+   "test": {
+    "min_size": 85.0,
+    "median_size": 850.0,
+    "n_objects": 3102,
+    "n_slivers": 194,
+    "n_crops": 14
+   },
+   "val": {
+    "min_size": 76.8,
+    "median_size": 767.5,
+    "n_objects": 684,
+    "n_slivers": 30,
+    "n_crops": 3
+   }
+  },
+  "cshaper": {
+   "test": {
+    "min_size": 1003.1,
+    "median_size": 10031.0,
+    "n_objects": 2601,
+    "n_slivers": 411,
+    "n_crops": 105
+   },
+   "val": {
+    "min_size": 643.5,
+    "median_size": 6435.0,
+    "n_objects": 2040,
+    "n_slivers": 286,
+    "n_crops": 54
+   }
+  },
+  "densecell": {
+   "test": {
+    "min_size": 5115.7,
+    "median_size": 51157.0,
+    "n_objects": 13,
+    "n_slivers": 4,
+    "n_crops": 1
+   },
+   "val": {
+    "min_size": 18870.9,
+    "median_size": 188709.0,
+    "n_objects": 8,
+    "n_slivers": 2,
+    "n_crops": 1
+   }
+  },
+  "embedseg_mouse_skull": {
+   "test": {
+    "min_size": 2092.8,
+    "median_size": 20928.5,
+    "n_objects": 40,
+    "n_slivers": 7,
+    "n_crops": 2
+   },
+   "val": {
+    "min_size": 2239.1,
+    "median_size": 22391.0,
+    "n_objects": 31,
+    "n_slivers": 8,
+    "n_crops": 1
+   }
+  },
+  "embedseg_organoid": {
+   "test": {
+    "min_size": 4242.6,
+    "median_size": 42425.5,
+    "n_objects": 192,
+    "n_slivers": 0,
+    "n_crops": 11
+   },
+   "val": {
+    "min_size": 6851.2,
+    "median_size": 68512.0,
+    "n_objects": 99,
+    "n_slivers": 0,
+    "n_crops": 11
+   }
+  },
+  "embedseg_platy_ish": {
+   "test": {
+    "min_size": 152.8,
+    "median_size": 1528.0,
+    "n_objects": 123,
+    "n_slivers": 9,
+    "n_crops": 2
+   },
+   "val": {
+    "min_size": 129.3,
+    "median_size": 1293.5,
+    "n_objects": 74,
+    "n_slivers": 6,
+    "n_crops": 1
+   }
+  },
+  "embedseg_platy_nuclei": {
+   "test": {
+    "min_size": 125.7,
+    "median_size": 1257.0,
+    "n_objects": 390,
+    "n_slivers": 3,
+    "n_crops": 2
+   },
+   "val": {
+    "min_size": 144.7,
+    "median_size": 1446.5,
+    "n_objects": 152,
+    "n_slivers": 1,
+    "n_crops": 1
+   }
+  },
+  "gonuclear": {
+   "test": {
+    "min_size": 508.1,
+    "median_size": 5081.0,
+    "n_objects": 4337,
+    "n_slivers": 534,
+    "n_crops": 18
+   },
+   "val": {
+    "min_size": 480.6,
+    "median_size": 4806.0,
+    "n_objects": 270,
+    "n_slivers": 32,
+    "n_crops": 1
+   }
+  },
+  "morphonet_celegans": {
+   "test": {
+    "min_size": 472.5,
+    "median_size": 4724.5,
+    "n_objects": 2584,
+    "n_slivers": 73,
+    "n_crops": 25
+   }
+  },
+  "morphonet_patiria": {
+   "test": {
+    "min_size": 565.7,
+    "median_size": 5657.0,
+    "n_objects": 489,
+    "n_slivers": 1,
+    "n_crops": 4
+   },
+   "val": {
+    "min_size": 554.1,
+    "median_size": 5540.5,
+    "n_objects": 166,
+    "n_slivers": 2,
+    "n_crops": 1
+   }
+  },
+  "mouse_embryo": {
+   "test": {
+    "min_size": 347.8,
+    "median_size": 3477.5,
+    "n_objects": 3128,
+    "n_slivers": 275,
+    "n_crops": 81
+   },
+   "val": {
+    "min_size": 314.9,
+    "median_size": 3149.0,
+    "n_objects": 2152,
+    "n_slivers": 183,
+    "n_crops": 22
+   }
+  },
+  "mouse_embryo_membrane": {
+   "test": {
+    "min_size": 577.1,
+    "median_size": 5770.5,
+    "n_objects": 962,
+    "n_slivers": 259,
+    "n_crops": 7
+   },
+   "val": {
+    "min_size": 930.7,
+    "median_size": 9307.0,
+    "n_objects": 699,
+    "n_slivers": 177,
+    "n_crops": 3
+   }
+  },
+  "mucic_mda231": {
+   "test": {
+    "min_size": 200.4,
+    "median_size": 2003.5,
+    "n_objects": 596,
+    "n_slivers": 0,
+    "n_crops": 12
+   },
+   "val": {
+    "min_size": 185.2,
+    "median_size": 1852.0,
+    "n_objects": 373,
+    "n_slivers": 0,
+    "n_crops": 12
+   }
+  },
+  "nis3d": {
+   "test": {
+    "min_size": 240.3,
+    "median_size": 2403.0,
+    "n_objects": 261,
+    "n_slivers": 33,
+    "n_crops": 2
+   },
+   "val": {
+    "min_size": 500.6,
+    "median_size": 5006.0,
+    "n_objects": 171,
+    "n_slivers": 13,
+    "n_crops": 1
+   }
+  },
+  "nucverse3d": {
+   "test": {
+    "min_size": 329.8,
+    "median_size": 3297.5,
+    "n_objects": 3612,
+    "n_slivers": 463,
+    "n_crops": 54
+   },
+   "val": {
+    "min_size": 299.9,
+    "median_size": 2999.5,
+    "n_objects": 632,
+    "n_slivers": 73,
+    "n_crops": 10
+   }
+  },
+  "nus_organoids": {
+   "test": {
+    "min_size": 398.1,
+    "median_size": 3981.0,
+    "n_objects": 201,
+    "n_slivers": 0,
+    "n_crops": 4
+   },
+   "val": {
+    "min_size": 400.0,
+    "median_size": 3999.5,
+    "n_objects": 168,
+    "n_slivers": 1,
+    "n_crops": 3
+   }
+  },
+  "parhyale_regen": {
+   "test": {
+    "min_size": 200.7,
+    "median_size": 2007.0,
+    "n_objects": 1741,
+    "n_slivers": 0,
+    "n_crops": 6
+   }
+  },
+  "phmamm": {
+   "test": {
+    "min_size": 482.5,
+    "median_size": 4824.5,
+    "n_objects": 6188,
+    "n_slivers": 905,
+    "n_crops": 70
+   },
+   "val": {
+    "min_size": 652.6,
+    "median_size": 6526.0,
+    "n_objects": 976,
+    "n_slivers": 140,
+    "n_crops": 10
+   }
+  },
+  "plantseg_ovules": {
+   "test": {
+    "min_size": 863.2,
+    "median_size": 8632.0,
+    "n_objects": 25052,
+    "n_slivers": 5586,
+    "n_crops": 218
+   },
+   "val": {
+    "min_size": 1036.3,
+    "median_size": 10363.0,
+    "n_objects": 563,
+    "n_slivers": 135,
+    "n_crops": 2
+   }
+  },
+  "plantseg_root": {
+   "test": {
+    "min_size": 4217.1,
+    "median_size": 42171.0,
+    "n_objects": 1931,
+    "n_slivers": 619,
+    "n_crops": 98
+   },
+   "val": {
+    "min_size": 4916.0,
+    "median_size": 49159.5,
+    "n_objects": 164,
+    "n_slivers": 58,
+    "n_crops": 10
+   }
+  },
+  "pnas_arabidopsis": {
+   "test": {
+    "min_size": 675.9,
+    "median_size": 6759.0,
+    "n_objects": 43130,
+    "n_slivers": 6209,
+    "n_crops": 118
+   },
+   "val": {
+    "min_size": 680.2,
+    "median_size": 6802.0,
+    "n_objects": 5065,
+    "n_slivers": 743,
+    "n_crops": 20
+   }
+  },
+  "vibrio_cholerae": {
+   "test": {
+    "min_size": 78.1,
+    "median_size": 781.0,
+    "n_objects": 2229,
+    "n_slivers": 175,
+    "n_crops": 5
+   }
+  },
+  "wing_disc": {
+   "test": {
+    "min_size": 5036.7,
+    "median_size": 50367.0,
+    "n_objects": 231,
+    "n_slivers": 17,
+    "n_crops": 2
+   },
+   "val": {
+    "min_size": 2666.7,
+    "median_size": 26667.0,
+    "n_objects": 217,
+    "n_slivers": 14,
+    "n_crops": 2
+   }
+  }
+ }
+}

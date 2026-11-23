@@ -143,6 +143,9 @@ python evaluate_decoder.py report -e <root>/evaluation/<checkpoint>   # the tune
   same test samples and crops (`common.load_data`, `eval_crops.json`), padding, upscaling, tiling of large images
   (384 + 2 x 64 pixels), postprocessing (`postprocess_unisam2`) and metrics. The decoder model has the input and
   output convention of the UniSAM2 model, so it runs through the same code.
+- The light microscopy volumes and densecell are scored without slivers since 2026-11-23, see `TUNING_DATA.md`.
+  Results from before are not compared with results from after: `report` lists these datasets apart, and
+  `reference summary` lists the reference results that still need `reference submit`.
 - The only difference to the reference: volumes are predicted in blocks of 10 + 2 x 2 = 14 slices, the number of
   slices of the training (`--z_tile`, `--z_halo`; the reference uses 4 + 2 x 2). These blocks need about 9.1 GiB
   of GPU memory and `PYTORCH_ALLOC_CONF=expandable_segments:True` (set by the script).
@@ -153,10 +156,12 @@ python evaluate_decoder.py report -e <root>/evaluation/<checkpoint>   # the tune
     (`experiments/v6_cells_registry_evaluation{,_crops32,_isotropic}/results`, a later folder replaces the result of
     an earlier one, as for the figure tables), without the datasets whose test set-up changed since
     (`REFERENCE_RECOMPUTED`): `platynereis_cells` and `synapsenet_compartments` (now multicut and CREMI score) and
-    `cartocell` (six test volumes moved into tuning).
-  - `submit` recomputes these three with the command of the registry evaluation
+    `cartocell` (six test volumes moved into tuning). The volumes that are scored without slivers
+    (`common.SLIVER_DATASETS`, 23 of the evaluated datasets) are not copied either.
+  - `submit` recomputes the datasets that are not copied and have no result with the current scoring, with the
+    command of the registry evaluation
     (`evaluate_automatic_segmentation.py -m hvit_t --mode ais --skip_tuning -c <hvit_t_cells_decoder>`) and the
-    current code; `summary` rewrites the table.
+    current code; `summary` rewrites the table and lists the results that were scored with slivers.
   - With `--n_samples`, the report compares on the same samples, using the per-sample rows of the reference.
 - Postprocessing parameters: without `--params` the library defaults of `hvit_t_cells` (`model_type="hvit_t"`, see
   `DEFAULT_MODEL_TYPE`), which were tuned for the previous decoder (results `..._ais_default_...`). With `--params`
@@ -310,6 +315,12 @@ The v6 search tuned the 3D parameters on one 32x512x512 center crop per validati
   split does not hold, and get no tile.
 - The tiles of the low-scoring datasets (v6 best mSA < 0.3) are scored with Hiera-U and hvit_t_cells on a compact
   grid (`score` / `submit`, `report`) before the tiles are chosen.
+- plantseg_root and nucverse3d tune on tiles that are placed like their test crops (user, 2026-11-23;
+  `tune_set.TEST_LIKE`): `candidates` adds the tiles centered in the tuning region (`tile_starts(centered=True)`,
+  the placement of `eval_crops.json`), and `write` takes up to 10 of them with `parameter_search.spread_tiles`
+  (without the tiles below 20 % of the median object count; every volume in proportion to its tiles; within a
+  volume at evenly spaced ranks of the object count). Their center crops did not represent the test crops, see
+  `TUNING_DATA.md`.
 
 Subcommands: `candidates` (tiles + label statistics, CPU), `score` / `submit` (GPU), `report`, `write [--picks]`.
 Outputs: `<root>/param_analysis/tune_set/` (`candidates.csv`, `scores/<model>/`, `predictions/<model>/` as float16,
