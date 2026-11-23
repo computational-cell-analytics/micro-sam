@@ -315,12 +315,17 @@ The v6 search tuned the 3D parameters on one 32x512x512 center crop per validati
   split does not hold, and get no tile.
 - The tiles of the low-scoring datasets (v6 best mSA < 0.3) are scored with Hiera-U and hvit_t_cells on a compact
   grid (`score` / `submit`, `report`) before the tiles are chosen.
-- plantseg_root and nucverse3d tune on tiles that are placed like their test crops (user, 2026-11-23;
+- plantseg_root, nucverse3d, gonuclear, celegans_atlas and embedseg_platy_nuclei tune on tiles that are placed
+  like their test crops (user, 2026-11-23;
   `tune_set.TEST_LIKE`): `candidates` adds the tiles centered in the tuning region (`tile_starts(centered=True)`,
   the placement of `eval_crops.json`), and `write` takes up to 10 of them with `parameter_search.spread_tiles`
   (without the tiles below 20 % of the median object count; every volume in proportion to its tiles; within a
   volume at evenly spaced ranks of the object count). Their center crops did not represent the test crops, see
-  `TUNING_DATA.md`.
+  `TUNING_DATA.md`. nis3d and densecell take all edge-aligned tiles of their slab (`write`, the default choice).
+  The 3D tuning set has 105 crops; `TUNING_DATA.md` lists them and the steps for running the search and the
+  evaluations again.
+- `tune_decoder.py` stores the tuning crops with the predictions of a dataset and stops if they are not the
+  current ones (the predictions are stored by sample index).
 
 Subcommands: `candidates` (tiles + label statistics, CPU), `score` / `submit` (GPU), `report`, `write [--picks]`.
 Outputs: `<root>/param_analysis/tune_set/` (`candidates.csv`, `scores/<model>/`, `predictions/<model>/` as float16,

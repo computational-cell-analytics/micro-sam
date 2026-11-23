@@ -83,24 +83,72 @@ Update 2026-11-23 (after the comparison of the epoch 25 checkpoint with the refe
   - The EM organelle volumes keep their scoring, so the results of the EM organelle models are not touched. The
     dense datasets are scored by the CREMI score, which has no objects to leave out.
 
-Not done yet:
-- The larger 3D tuning set of `tune_set.py` (up to 10 tiles per dataset) is written to `tuning_crops.json` only
-  for `plantseg_root` and `nucverse3d`: the other 3D datasets still tune on one center crop per tuning volume (the
-  counts below).
-- No search ran with the tuning data and the scoring of 2026-11-23 yet, and nothing is rescored: the reference
-  (`evaluate_decoder.py reference summary` lists 23 datasets for `reference submit`), the test results of the
-  epoch 25 checkpoint for these datasets, and the 3D light microscopy results of the baselines in the figure
-  tables (`evaluate_automatic_baselines.py` scores through the same `common.evaluate_samples`).
+- The other 3D datasets with more tuning data are extended to at most 10 crops (user, 2026-11-23); the 3D tuning
+  set has 105 crops (66 before 2026-11-23):
+  - `gonuclear` (1 -> 10), `celegans_atlas` (3 -> 10) and `embedseg_platy_nuclei` (1 -> 3) take tiles placed like
+    their test crops, like `plantseg_root` and `nucverse3d` (`tune_set.TEST_LIKE`).
+  - `nis3d` (1 -> 4) and `densecell` (1 -> 4) take all edge-aligned tiles of their slab: it holds one tile of
+    512 pixels without overlap, the same as the center crop. The `nis3d` tiles overlap by 46 pixels, the
+    `densecell` tiles (15 slices, 800 x 800) by 224.
+  - Unchanged: `pnas_arabidopsis` (20), `embedseg_organoid` (11) and `phmamm` (10) keep one center crop per volume,
+    `cartocell` its 9 tiles placed by hand. `wing_disc` (2), `embedseg_mouse_skull` (1) and `embedseg_platy_ish`
+    (1) have no further tile.
+- `tune_decoder.py` refuses stored predictions that belong to other tuning crops (they are stored by sample
+  index), and a search that is started again runs the sweeps of a later stage again if their combinations changed
+  (`parameter_search.sweep_has_params`).
+
+Open:
 - The dense search of the new decoder includes `platynereis_cells` and `synapsenet_compartments`; the dense defaults
   of the previous decoder (the reference) were tuned on neurites only.
 - The figure tables (collector script of the baselines) read mSA for cartocell.
+
+## Next steps: rerunning the search and the evaluations
+
+Nothing ran with the tuning data and the scoring of 2026-11-23 yet. `<root>` is
+`/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/decoder_training`, `<ckpt>` the staged checkpoint, e.g.
+`hiera_u_hvit_t_cells_epoch25_1b75589f`. Commands run in `finetuning/v2/decoders`; the Slurm options used so far
+are in `README.md` (search drivers and test arrays on `grete:preemptible`, 10 GB slice, `--requeue`).
+
+1. Check the measured sizes: `sliver_sizes.json` has to be measured again after any change of test or tuning
+   crops (`python ../evaluation/parameter_search.py prepare --sliver_sizes --threads 4 [-d <datasets>]`, 5
+   minutes). It is current for the crops of this commit; a test in `test/test_parameter_search.py` checks the number
+   of tuning crops it was measured on.
+2. Search, per setting (`tune_decoder.py predict`, then `search`; or `submit` for both as Slurm jobs):
+   - 3D: use a new session for a checkpoint that was searched before. The session of the epoch 25 checkpoint
+     (`<root>/tuning/<ckpt>/3d`) holds predictions of the old crops for 7 datasets, which `tune_decoder.py`
+     refuses, and sweeps scored with slivers. Either move that folder aside or pass `-e <new session>` to
+     `predict` and `search` (`submit` has no such option). 105 tiles instead of 66, and the sliver scoring adds
+     about 7 %: expect about 1.7 times the earlier search, which took 24 h on 8 threads plus 7 h on 64 threads.
+   - 2D: the stored session can continue. `predict` adds `orgline` (515 images), `search` reuses the sweeps of the
+     other 30 datasets, sweeps `orgline` and runs the later stages again where the best combinations change.
+   - Dense: the stored session can continue. The sweeps of `liconn` and `xpress` are no longer read; the later
+     stages run again where the best combinations change. The earlier search took 2 h.
+   - A checkpoint that was not searched before needs nothing special.
+3. Test of the checkpoint with the new parameters: `evaluate_decoder.py submit --checkpoint <staged checkpoint>
+   -e <new folder> --data <setting> --params <session>/best_parameters.json`, one array per setting. Use a new
+   evaluation folder: a stored `..._ais_tuned_...` result is taken as done whatever parameters it was computed
+   with. Only the results of the volumes scored without slivers are recognised as outdated.
+4. Reference (micro-sam2 hvit_t, library defaults): `evaluate_decoder.py reference submit` recomputes the 23
+   datasets that `reference summary` lists (137 array tasks), then `reference summary`. Before using it, compare
+   the column `mSA_with_slivers` of the recomputed results with the mSA of the copied results
+   (`reference_hvit_t/sources.json` names them): the copies come from three registry runs
+   (`v6_cells_registry_evaluation{,_crops32,_isotropic}`) with two checkpoint ids, and the recomputation has to
+   reproduce them before the scores without slivers are compared.
+5. Report: `evaluate_decoder.py report -e <new folder>`. It lists the datasets where only one of the two results
+   is scored without slivers instead of comparing them.
+6. Not part of this folder: the 3D light microscopy results of the baselines and of the other micro-sam2 models in
+   the figure tables were scored with slivers. `evaluate_automatic_baselines.py` and
+   `evaluate_automatic_segmentation.py` compute them again when they are run on the same folders
+   (`common.result_is_current`); until then these tables and the new results differ in the scoring.
+7. Optional: the diagnostics of the loss investigation (`<root>/evaluation/diag_epoch25_*`) were scored with
+   slivers as well.
 
 ## Settings
 
 | setting | segmentation | ranked by | tuning datasets | tuning samples |
 |---|---|---|---|---|
 | 2D | flow | mSA | 31 | 3609 |
-| 3D | flow | mSA (13 datasets), SA50 (1 dataset) | 14 | 81 |
+| 3D | flow | mSA (13 datasets), SA50 (1 dataset) | 14 | 105 |
 | dense (3D EM) | multicut | CREMI | 6 | 19 |
 
 Tuning samples are images (2D) or crops of up to 32 x 512 x 512 (3D, dense). OOD datasets are never tuned on.
@@ -154,12 +202,12 @@ Tuning samples are images (2D) or crops of up to 32 x 512 x 512 (3D, dense). OOD
 | `wing_disc` | 2 | mSA | center crop per volume | fluorescence cells |
 | `embedseg_organoid` | 11 | mSA | center crop per volume | fluorescence cells |
 | `embedseg_mouse_skull` | 1 | mSA | center crop per volume | fluorescence nuclei |
-| `embedseg_platy_nuclei` | 1 | mSA | center crop per volume | fluorescence nuclei |
-| `nis3d` | 1 | mSA | center crop per volume | fluorescence nuclei |
-| `celegans_atlas` | 3 | mSA | center crop per volume | fluorescence nuclei |
-| `gonuclear` | 1 | mSA | center crop per volume | fluorescence nuclei |
+| `embedseg_platy_nuclei` | 3 | mSA | pinned tiles, placed like the test crops | fluorescence nuclei |
+| `nis3d` | 4 | mSA | pinned tiles, all tiles of the slab | fluorescence nuclei |
+| `celegans_atlas` | 10 | mSA | pinned tiles, placed like the test crops | fluorescence nuclei |
+| `gonuclear` | 10 | mSA | pinned tiles, placed like the test crops | fluorescence nuclei |
 | `nucverse3d` | 10 | mSA | pinned tiles, placed like the test crops | fluorescence nuclei |
-| `densecell` | 1 | mSA | center crop per volume | not in a panel |
+| `densecell` | 4 | mSA | pinned tiles, all tiles of the slab | not in a panel |
 | `embedseg_platy_ish` | 1 | mSA | center crop per volume | not in a panel |
 
 ### Dense (multicut, CREMI score)

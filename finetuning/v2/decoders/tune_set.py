@@ -43,8 +43,10 @@ MAX_TILES = 10
 # without the tiles that hold far fewer objects than the median tile. Their center crops did not represent the
 # test crops: the ones of plantseg_root sit in the dense core of the root (36 and 46 cells, 72 of the 98 test crops
 # hold at most 20), and nucverse3d had one crop per collection, so that the glia slab was a third of the tuning data
-# (2 of its 54 test crops).
-TEST_LIKE = ("plantseg_root", "nucverse3d")
+# (2 of its 54 test crops). gonuclear, celegans_atlas and embedseg_platy_nuclei had one center crop per volume and
+# take more tiles the same way. The other datasets take the edge-aligned tiles with the most objects
+# (`select_tiles`); of these only nis3d and densecell are written, which take all tiles of their slab.
+TEST_LIKE = ("plantseg_root", "nucverse3d", "gonuclear", "celegans_atlas", "embedseg_platy_nuclei")
 MIN_OBJECT_SIZE = 10  # Voxels; smaller label fragments are not counted as objects in the statistics.
 # The hvit_t cells defaults for volumes (micro_sam/_model_settings.py).
 DEFAULTS_3D = {

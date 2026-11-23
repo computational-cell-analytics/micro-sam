@@ -775,6 +775,15 @@ def sweep_cache_is_current(csv_path, config):
     return True
 
 
+def sweep_has_params(csv_path, params_list):
+    """Return whether a stored sweep scored exactly the combinations of 'params_list'."""
+    path = per_image_path(csv_path)
+    if not os.path.exists(path):
+        return False
+    stored = json.loads(str(np.load(path)["params"]))
+    return {json.dumps(p, sort_keys=True) for p in stored} == {json.dumps(p, sort_keys=True) for p in params_list}
+
+
 def shard_output_path(output_dir, dataset_name, shard_index=0, num_shards=1):
     """The CSV a shard writes to: the canonical path when unsharded, a per-shard path otherwise."""
     if num_shards <= 1:
@@ -919,7 +928,17 @@ def tune_parameters(
         cached_path = csv_path
     elif num_shards <= 1 and checkpoint_id is not None and os.path.exists(legacy_path):
         cached_path = legacy_path
-    if cached_path is not None and sweep_cache_is_current(cached_path, config):
+    ndim, postproc_mode = config["ndim"], config["mode"]
+    params_list = sweep_params_list(config, params_file)
+    if num_shards > 1:
+        params_list = shard_params_list(params_list, shard_index, num_shards, postproc_mode, ndim)
+
+    is_current = cached_path is not None and sweep_cache_is_current(cached_path, config)
+    if is_current and params_file is not None and not sweep_has_params(cached_path, params_list):
+        # The combos of a later stage follow the best ones of the stage before, which change with the datasets.
+        print(f"Ignoring the cached sweep at '{cached_path}'. It scored other combinations than '{params_file}'.")
+        is_current = False
+    if is_current:
         if num_shards > 1:
             print(f"Loading the finished shard at '{csv_path}'.")
             return None
@@ -927,11 +946,6 @@ def tune_parameters(
         print(f"Loading the finished sweep at '{cached_path}'.")
         report_best(pd.read_csv(cached_path), dataset_name, config)
         return params
-
-    ndim, postproc_mode = config["ndim"], config["mode"]
-    params_list = sweep_params_list(config, params_file)
-    if num_shards > 1:
-        params_list = shard_params_list(params_list, shard_index, num_shards, postproc_mode, ndim)
 
     border_min_size = GT_MIN_SIZE_2D.get(dataset_name, 0) if ndim == 2 else 0
     total = n_samples(dataset_name, data_root, split="val")
@@ -1180,11 +1194,20 @@ def sweep_csv(context, sweep, root=None):
 
 
 def sweep_is_done(context, sweep):
-    """Whether a sweep is stored. A sweep that was scored with slivers does not count for a dataset without them."""
+    """Whether a sweep is stored, with the current scoring and for the combinations it is asked for.
+
+    A sweep that was scored with slivers does not count for a dataset that is scored without them.
+    """
     csv_path = sweep_csv(context, sweep)
     if not (os.path.exists(csv_path) and os.path.exists(per_image_path(csv_path))):
         return False
-    return sweep["dataset"] not in SLIVER_DATASETS or "gt_slivers_mean" in pd.read_csv(csv_path, nrows=0).columns
+    if sweep["dataset"] in SLIVER_DATASETS and "gt_slivers_mean" not in pd.read_csv(csv_path, nrows=0).columns:
+        return False
+    if sweep["params_file"] is None:
+        return True
+    # A stage that was swept for other combinations, e.g. before the datasets of the search changed, runs again.
+    with open(sweep["params_file"]) as f:
+        return sweep_has_params(csv_path, json.load(f))
 
 
 def prediction_cache(context, sweep):

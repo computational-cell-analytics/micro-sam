@@ -1,4 +1,6 @@
+import os
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -153,6 +155,14 @@ def test_plantseg_root_and_nucverse3d_tune_on_tiles_placed_like_the_test_crops()
         assert sum(len(crops) for crops in starts.values()) == 10
     # The glia slab is one of the ten nucverse3d crops instead of one of three.
     assert len(common.TUNING_CROPS["nucverse3d"][1]["C2_M01.h5"]) == 1
+    # The other datasets with more tuning data are extended as well, to at most 10 crops.
+    counts = {"gonuclear": 10, "celegans_atlas": 10, "embedseg_platy_nuclei": 3, "nis3d": 4, "densecell": 4}
+    for dataset, n_crops in counts.items():
+        assert sum(len(crops) for crops in common.TUNING_CROPS[dataset][1].values()) == n_crops
+    n_tuning_crops = sum(
+        common.n_samples(dataset, common.DATA_ROOT, split="val") for dataset in parameter_search.IN_DOMAIN_CELLS["3d"]
+    )
+    assert n_tuning_crops == 105
 
 
 def _volume_with_slivers():
@@ -249,6 +259,32 @@ def test_results_scored_with_slivers_are_not_current(tmp_path):
     assert parameter_search.sweep_cache_is_current(sweep, {**config, "slivers": False})
     pd.DataFrame([{"min_size": 50, "msa_mean": 0.3, "gt_slivers_mean": 2.0}]).to_csv(sweep, index=False)
     assert parameter_search.sweep_cache_is_current(sweep, config)
+
+
+def test_a_stored_stage_sweep_counts_only_for_its_own_combinations(tmp_path):
+    import json
+
+    csv_path = str(tmp_path / "livecell.csv")
+    combos = [{"min_size": 50, "boundary_weight": 0.5}, {"min_size": 100, "boundary_weight": 0.5}]
+    assert not parameter_search.sweep_has_params(csv_path, combos)  # Nothing is stored.
+    pd.DataFrame([{**combo, "msa_mean": 0.3} for combo in combos]).to_csv(csv_path, index=False)
+    parameter_search.save_per_image(csv_path, combos, [0, 1], [[0.3, 0.4], [0.2, 0.5]], "msa")
+    assert parameter_search.sweep_has_params(csv_path, combos[::-1])
+    assert not parameter_search.sweep_has_params(csv_path, combos[:1])
+    assert not parameter_search.sweep_has_params(csv_path, [*combos, {"min_size": 200, "boundary_weight": 0.5}])
+
+    # The search asks for a stage sweep with the file of its combinations.
+    params_file = tmp_path / "combos.json"
+    context = {"lock": threading.Lock(), "identities": {"hvit_t_cells": "checksum"}}
+    sweep = parameter_search.make_sweep("hvit_t_cells", "ais", "2d", "livecell", str(tmp_path), {}, str(params_file))
+    stored = parameter_search.sweep_csv(context, sweep)
+    os.makedirs(os.path.dirname(stored))
+    pd.DataFrame([{**combo, "msa_mean": 0.3} for combo in combos]).to_csv(stored, index=False)
+    parameter_search.save_per_image(stored, combos, [0, 1], [[0.3, 0.4], [0.2, 0.5]], "msa")
+    params_file.write_text(json.dumps(combos))
+    assert parameter_search.sweep_is_done(context, sweep)
+    params_file.write_text(json.dumps([{"min_size": 50, "boundary_weight": 1.0}]))
+    assert not parameter_search.sweep_is_done(context, sweep)
 
 
 def test_evaluate_samples_scores_the_volumes_without_slivers(tmp_path, monkeypatch):

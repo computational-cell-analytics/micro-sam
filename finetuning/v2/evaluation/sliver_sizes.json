@@ -83,11 +83,11 @@
     "n_crops": 14
    },
    "val": {
-    "min_size": 76.8,
-    "median_size": 767.5,
-    "n_objects": 684,
-    "n_slivers": 30,
-    "n_crops": 3
+    "min_size": 74.4,
+    "median_size": 744.0,
+    "n_objects": 1859,
+    "n_slivers": 145,
+    "n_crops": 10
    }
   },
   "cshaper": {
@@ -115,11 +115,11 @@
     "n_crops": 1
    },
    "val": {
-    "min_size": 18870.9,
-    "median_size": 188709.0,
-    "n_objects": 8,
-    "n_slivers": 2,
-    "n_crops": 1
+    "min_size": 2632.8,
+    "median_size": 26328.0,
+    "n_objects": 45,
+    "n_slivers": 10,
+    "n_crops": 4
    }
   },
   "embedseg_mouse_skull": {
@@ -179,11 +179,11 @@
     "n_crops": 2
    },
    "val": {
-    "min_size": 144.7,
-    "median_size": 1446.5,
-    "n_objects": 152,
-    "n_slivers": 1,
-    "n_crops": 1
+    "min_size": 147.0,
+    "median_size": 1470.0,
+    "n_objects": 359,
+    "n_slivers": 2,
+    "n_crops": 3
    }
   },
   "gonuclear": {
@@ -195,11 +195,11 @@
     "n_crops": 18
    },
    "val": {
-    "min_size": 480.6,
-    "median_size": 4806.0,
-    "n_objects": 270,
-    "n_slivers": 32,
-    "n_crops": 1
+    "min_size": 558.0,
+    "median_size": 5580.0,
+    "n_objects": 1032,
+    "n_slivers": 129,
+    "n_crops": 10
    }
   },
   "morphonet_celegans": {
@@ -284,11 +284,11 @@
     "n_crops": 2
    },
    "val": {
-    "min_size": 500.6,
-    "median_size": 5006.0,
-    "n_objects": 171,
-    "n_slivers": 13,
-    "n_crops": 1
+    "min_size": 455.6,
+    "median_size": 4556.0,
+    "n_objects": 295,
+    "n_slivers": 31,
+    "n_crops": 4
    }
   },
   "nucverse3d": {

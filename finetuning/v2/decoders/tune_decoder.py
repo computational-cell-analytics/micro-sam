@@ -99,6 +99,38 @@ def cache_dir(experiment_folder, checksum, dataset):
     return os.path.join(experiment_folder, "predictions", MODEL, checksum, dataset)
 
 
+def tuning_crops_id(search_common, dataset):
+    """The pinned tuning crops of a dataset (None without pinned crops), which its stored predictions belong to."""
+    if dataset not in search_common.TUNING_CROPS:
+        return None
+    shape, samples = search_common.TUNING_CROPS[dataset]
+    return {
+        "crop_shape": list(shape),
+        "starts": {name: [list(start) for start, _ in crops] for name, crops in samples.items()},
+    }
+
+
+def check_predictions(search_common, marker, dataset):
+    """Stop if the stored predictions of a dataset belong to other tuning crops than the current ones.
+
+    The predictions are stored by the index of their sample, so those of other crops would be scored against the
+    wrong labels. A marker from before 2026-11-23 does not name its crops; for volumes it is compared by the number
+    of predictions.
+    """
+    with open(marker) as f:
+        stored = json.load(f)
+    if "crops" in stored:
+        current = stored["crops"] == tuning_crops_id(search_common, dataset)
+    else:
+        n_samples = search_common.n_samples(dataset, search_common.DATA_ROOT, split="val")
+        current = dataset not in search_common.DATASETS_3D or stored["n_predictions"] == n_samples
+    if not current:
+        raise SystemExit(
+            f"The stored predictions of '{dataset}' belong to other tuning crops ({os.path.dirname(marker)}). "
+            "Use a new session folder (-e), or remove these predictions and the sweeps of the dataset in the session."
+        )
+
+
 def predict_command(args):
     """Predict the tuning samples of every dataset of a setting and store the predictions for the sweeps."""
     import torch
@@ -120,6 +152,7 @@ def predict_command(args):
     for dataset in context["datasets"][args.data]:
         marker = os.path.join(cache_dir(context["experiment_folder"], checksum, dataset), COMPLETE)
         if os.path.exists(marker):
+            check_predictions(search_common, marker, dataset)
             print(f"{dataset}: predictions are complete.")
             continue
         if model is None:
@@ -141,7 +174,10 @@ def predict_command(args):
         if n_predictions == 0:
             raise RuntimeError(f"No prediction was written for '{dataset}'.")
         with open(marker, "w") as f:
-            json.dump({"n_predictions": n_predictions, "subsample": options["subsample"], "checksum": checksum}, f)
+            json.dump({
+                "n_predictions": n_predictions, "subsample": options["subsample"], "checksum": checksum,
+                "crops": tuning_crops_id(search_common, dataset),
+            }, f)
         print(f"{dataset}: {n_predictions} predictions ({time.time() - t0:.0f} s)", flush=True)
 
 
@@ -153,6 +189,7 @@ def sweep_command(args):
     # A sweep skips the samples it cannot load a prediction for, so an incomplete cache would go unnoticed.
     if not os.path.exists(marker):
         raise SystemExit(f"The predictions of '{args.dataset}' are not complete ({marker}). Run 'predict' first.")
+    check_predictions(search_common, marker, args.dataset)
     if args.cache_only:
         return
     search.tune_parameters(

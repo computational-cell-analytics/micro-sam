@@ -1579,6 +1579,225 @@
      ]
     ]
    }
+  },
+  "gonuclear": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "10 tiles of 1 volumes, holding 16-234 objects; tune_set.py: tiles placed like the test crops, spread evenly over the object counts of each volume.",
+   "starts": {
+    "1139.h5": [
+     [
+      12,
+      48,
+      560
+     ],
+     [
+      76,
+      48,
+      560
+     ],
+     [
+      76,
+      560,
+      560
+     ],
+     [
+      108,
+      560,
+      560
+     ],
+     [
+      140,
+      48,
+      48
+     ],
+     [
+      140,
+      48,
+      560
+     ],
+     [
+      172,
+      48,
+      48
+     ],
+     [
+      172,
+      560,
+      48
+     ],
+     [
+      204,
+      48,
+      48
+     ],
+     [
+      204,
+      560,
+      48
+     ]
+    ]
+   }
+  },
+  "celegans_atlas": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "10 tiles of 3 volumes, holding 81-252 objects; tune_set.py: tiles placed like the test crops, spread evenly over the object counts of each volume.",
+   "starts": {
+    "cnd1threeL1_1229061.tif": [
+     [
+      38,
+      0,
+      58
+     ],
+     [
+      38,
+      0,
+      570
+     ],
+     [
+      70,
+      0,
+      58
+     ],
+     [
+      70,
+      0,
+      570
+     ]
+    ],
+    "pha4A7L1_1213061.tif": [
+     [
+      38,
+      0,
+      22
+     ],
+     [
+      38,
+      0,
+      534
+     ],
+     [
+      70,
+      0,
+      22
+     ]
+    ],
+    "pha4I2L_0408071.tif": [
+     [
+      38,
+      0,
+      87
+     ],
+     [
+      38,
+      0,
+      599
+     ],
+     [
+      70,
+      0,
+      87
+     ]
+    ]
+   }
+  },
+  "embedseg_platy_nuclei": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "3 tiles of 1 volumes, holding 101-151 objects; tune_set.py: tiles placed like the test crops, spread evenly over the object counts of each volume.",
+   "starts": {
+    "dataset_hdf5_300_0.tif": [
+     [
+      8,
+      74,
+      94
+     ],
+     [
+      40,
+      74,
+      94
+     ],
+     [
+      72,
+      74,
+      94
+     ]
+    ]
+   }
+  },
+  "nis3d": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "4 tiles of 1 volumes, holding 57-93 objects; tune_set.py: round-robin over volumes, most objects first.",
+   "starts": {
+    "data.tif": [
+     [
+      158,
+      0,
+      0
+     ],
+     [
+      158,
+      0,
+      475
+     ],
+     [
+      158,
+      466,
+      0
+     ],
+     [
+      158,
+      466,
+      475
+     ]
+    ]
+   }
+  },
+  "densecell": {
+   "crop_shape": [
+    32,
+    512,
+    512
+   ],
+   "note": "4 tiles of 1 volumes, holding 7-14 objects; tune_set.py: round-robin over volumes, most objects first.",
+   "starts": {
+    "densecell_train.h5": [
+     [
+      35,
+      0,
+      0
+     ],
+     [
+      35,
+      0,
+      288
+     ],
+     [
+      35,
+      288,
+      0
+     ],
+     [
+      35,
+      288,
+      288
+     ]
+    ]
+   }
   }
  }
 }
