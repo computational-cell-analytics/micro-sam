@@ -23,7 +23,7 @@ model (`finetuning/v2/generalist/train_joint.py`, `micro_sam.v2.training.train_j
 | Targets | Geodesic directed distances with boundaries: foreground, three directed distances, boundary (the instance channel of the joint targets is not used) |
 | Loss and metric | `DirectedDistanceLoss(mask_distances_in_bg=True, with_boundaries=True, boundary_dice_weight=0.5)` |
 | Optimizer | AdamW, default weight decay (0.01) |
-| Scheduler | `ReduceLROnPlateau(mode="min", factor=0.9, patience=10)` on the validation loss, per epoch |
+| Scheduler | `ReduceLROnPlateau(mode="min", factor=0.9, patience=10)` on the validation loss, per epoch (`--scheduler_patience`) |
 | Precision | bfloat16 autocast |
 | Epochs | 75 for hvit_t (73 hvit_s, 82 hvit_b, 79 hvit_l) |
 | Gradient clipping, early stopping | none |
@@ -60,7 +60,8 @@ python submit_decoder_training.py train --batch_size_2d <B> --z_slice <Z> --n_jo
   validation pass with the loaders and extrapolates the duration of the training. Results: `calibration/`.
 - `train_decoder.py` runs the training. `--resume` continues from the latest checkpoint up to the total number of
   epochs.
-- All jobs go to `grete-h100:shared` with one H100 and run from a frozen copy of this folder.
+- All jobs go to `grete-h100:shared` by default (`--partition`, `--account` and `--env` select another queue,
+  account and environment), with one H100, and run from a frozen copy of this folder.
 
 ## Calibration results and runs
 
@@ -98,6 +99,7 @@ Runs:
 | Run | Settings | Jobs |
 |---|---|---|
 | `hiera_u_hvit_t_cells` | 2D batch 40, z = 14, lr 1e-4, 75 epochs | 17348080 - 17348083 (chain of four 48 h jobs, submitted 2026-11-16) |
+| `c3f2_hvit_t_cells` | as `hiera_u_hvit_t_cells`, but scheduler patience 6 | 17486495 - 17486498 (chain of four 48 h jobs on `kisski-h100`, submitted 2026-11-23) |
 
 Job 17348080 ran out of host memory (160 GB) on 2026-11-18 in the validation after its fourth epoch; the
 checkpoints of epoch 3 are kept (validation loss 0.422, 0.374, 0.364). The datasets take about 14 GB in the main
@@ -114,6 +116,21 @@ affected: the checkpoint of epoch 25 gives the same predictions with the torch-e
 (`c5e7087f`) and with the refactored one (maximal difference 6e-7). `DecoderTrainer` now assigns the optimizer
 state by parameter name and stores the names in the checkpoints. Job 17479058 was appended to the chain.
 Validation loss up to epoch 26: best 0.329 (epoch 25), 0.332 - 0.335 for epochs 17 - 26 otherwise.
+
+The C3F2 run (the ConvNeXt-style decoder, 2.17 M parameters) uses the settings of the Hiera-U run, except for the
+patience of `ReduceLROnPlateau` (`--scheduler_patience 6` instead of 10). It runs on the KISSKI H100 nodes from the
+other account, which cannot write to the output folder above, so its outputs are in
+`/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/decoder_training_kisski`:
+
+```bash
+python submit_decoder_training.py train --decoder c3f2 --batch_size_2d 40 --z_slice 14 --scheduler_patience 6 \
+    --n_jobs 4 --partition kisski-h100 --account kisski_usam2_pape --env main \
+    --root /mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/decoder_training_kisski
+```
+
+No separate calibration was run for it. Training steps on random data (local 10 GiB MIG slice, 2026-11-23) need
+about 80 % of the memory of Hiera-U at the same time per step (2D batch 4: 6.7 vs. 8.4 GiB, 3D z = 4: 7.0 vs.
+8.7 GiB), so batch 40 and z = 14 fit on a H100.
 
 ## Evaluation
 

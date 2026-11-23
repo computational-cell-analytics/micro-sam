@@ -23,6 +23,8 @@ def main():
     parser.add_argument("--batch_size_3d", type=int, default=1)
     parser.add_argument("--n_epochs", type=int, default=None, help="By default the epochs of the joint training.")
     parser.add_argument("--lr", type=float, default=common.LEARNING_RATE)
+    parser.add_argument("--scheduler_patience", type=int, default=common.SCHEDULER_PATIENCE,
+                        help="The patience of ReduceLROnPlateau, in epochs.")
     parser.add_argument("--dataset_choice", default="all")
     parser.add_argument("--n_workers", type=int, default=8)
     parser.add_argument("--label_trafo_threads", type=int, default=6)
@@ -49,7 +51,8 @@ def main():
 
     run_info = {
         **vars(args), "name": name, "batch_size_2d": batch_size_2d, "z_slice": z_slice, "n_epochs": n_epochs,
-        "boundary_dice_weight": common.BOUNDARY_DICE_WEIGHT, "code": common.code_versions(),
+        "boundary_dice_weight": common.BOUNDARY_DICE_WEIGHT,
+        "scheduler_factor": common.SCHEDULER_FACTOR, "code": common.code_versions(),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "train_loader": common.describe_loader(train_loader), "val_loader": common.describe_loader(val_loader),
     }
@@ -62,6 +65,9 @@ def main():
         decoder=args.decoder, n_epochs=n_epochs, lr=args.lr, save_root=args.save_root,
         save_every_kth_epoch=args.save_every_kth_epoch, resume=args.resume,
         boundary_dice_weight=common.BOUNDARY_DICE_WEIGHT,
+        scheduler_kwargs={
+            "mode": "min", "factor": common.SCHEDULER_FACTOR, "patience": args.scheduler_patience,
+        },
     )
 
 

@@ -212,6 +212,19 @@ class TestDecoderTraining(unittest.TestCase):
                     self.assertEqual(exp_avg.shape, param.shape)
                     self.assertTrue(torch.equal(exp_avg.cpu(), expected[name]), name)
 
+    def test_scheduler_settings(self):
+        from micro_sam.v2.training import get_decoder_trainer
+
+        trainer = get_decoder_trainer("test-decoder", self.model, None, None, device=self.device)
+        self.assertEqual(trainer.lr_scheduler.patience, 10)
+        self.assertEqual(trainer.lr_scheduler.factor, 0.9)
+
+        trainer = get_decoder_trainer(
+            "test-decoder", self.model, None, None, device=self.device,
+            scheduler_kwargs={"mode": "min", "factor": 0.9, "patience": 6},
+        )
+        self.assertEqual(trainer.lr_scheduler.patience, 6)
+
     def test_loss_ignores_instance_channel(self):
         from micro_sam.v2.training.decoder_training import DecoderLoss
 

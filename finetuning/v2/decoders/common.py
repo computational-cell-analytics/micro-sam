@@ -15,6 +15,9 @@ SAVE_ROOT = os.environ.get(
 # except for the learning rate: the decoder is trained from scratch, with the rate of the decoder experiments.
 LEARNING_RATE = 1e-4
 BOUNDARY_DICE_WEIGHT = 0.5
+# ReduceLROnPlateau on the validation loss, per epoch. The patience can be set per run.
+SCHEDULER_FACTOR = 0.9
+SCHEDULER_PATIENCE = 10
 N_EPOCHS = {"hvit_t": 75, "hvit_s": 73, "hvit_b": 82, "hvit_l": 79}
 # The batch size for 2D and the number of slices for 3D of the joint training, per GPU.
 JOINT_BATCH_SETTINGS = {"hvit_t": (14, 14), "hvit_s": (12, 14), "hvit_b": (10, 10), "hvit_l": (8, 8)}

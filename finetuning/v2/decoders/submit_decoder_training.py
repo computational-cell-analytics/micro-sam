@@ -1,4 +1,4 @@
-"""Submit the calibration and the training of a decoder to a H100 of the shared queue.
+"""Submit the calibration and the training of a decoder to a H100 (default: the shared queue of grete).
 
 Every job runs from a frozen copy of this folder (<root>/jobs/code_<timestamp>), so that later edits cannot change
 a pending or running job. The sbatch script is kept next to it.
@@ -23,20 +23,20 @@ import common
 
 HEADER = """#!/bin/bash
 #SBATCH --job-name={job_name}
-#SBATCH -p grete-h100:shared
+#SBATCH -p {partition}
 #SBATCH -G H100:1
 #SBATCH -c {cpus}
 #SBATCH --mem={mem}
 #SBATCH -t {time}
 #SBATCH --constraint=inet
-#SBATCH -A nim00007
+#SBATCH -A {account}
 #SBATCH -o {root}/logs/slurm/{job_name}_%j.out
 #SBATCH -e {root}/logs/slurm/{job_name}_%j.err
 {extra}
 set -eo pipefail
 source ~/.bashrc
 set -u
-micromamba activate new-stack
+micromamba activate {env}
 export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export MALLOC_ARENA_MAX=2
@@ -54,10 +54,14 @@ def freeze_code(root):
     return code, stamp
 
 
-def submit(root, code, job_name, commands, time_limit, cpus, mem, extra="", dry_run=False):
+def submit(
+    root, code, job_name, commands, time_limit, cpus, mem, extra="", dry_run=False,
+    partition="grete-h100:shared", account="nim00007", env="new-stack",
+):
     os.makedirs(os.path.join(root, "logs", "slurm"), exist_ok=True)
     script = HEADER.format(
         job_name=job_name, root=root, code=code, time=time_limit, cpus=cpus, mem=mem, extra=extra,
+        partition=partition, account=account, env=env,
     ) + "\n".join(commands) + "\n"
     script_path = os.path.join(root, "jobs", f"{job_name}_{os.path.basename(code)[len('code_'):]}.sh")
     with open(script_path, "w") as f:
@@ -81,6 +85,11 @@ def main():
     parser.add_argument("--z_slices", type=int, nargs="+", default=[14],
                         help="The numbers of slices for the data check of the calibration.")
     parser.add_argument("--n_epochs", type=int, default=None)
+    parser.add_argument("--scheduler_patience", type=int, default=None,
+                        help="The patience of ReduceLROnPlateau for the training. Default: see common.py.")
+    parser.add_argument("--partition", default="grete-h100:shared", help="E.g. 'kisski-h100'.")
+    parser.add_argument("--account", default="nim00007")
+    parser.add_argument("--env", default="new-stack", help="The micromamba environment.")
     parser.add_argument("--n_workers", type=int, default=8)
     parser.add_argument("--label_trafo_threads", type=int, default=6)
     parser.add_argument("--cpus", type=int, default=48)
@@ -99,7 +108,10 @@ def main():
     code, _ = freeze_code(args.root)
     workers = f"--n_workers {args.n_workers} --label_trafo_threads {args.label_trafo_threads}"
     model = f"--model_type {args.model_type} --decoder {args.decoder}"
-    resources = {"cpus": args.cpus, "mem": args.mem, "dry_run": args.dry_run}
+    resources = {
+        "cpus": args.cpus, "mem": args.mem, "dry_run": args.dry_run,
+        "partition": args.partition, "account": args.account, "env": args.env,
+    }
 
     if args.mode == "calibrate":
         commands = []
@@ -126,6 +138,8 @@ def main():
     )
     if args.n_epochs is not None:
         command += f" --n_epochs {args.n_epochs}"
+    if args.scheduler_patience is not None:
+        command += f" --scheduler_patience {args.scheduler_patience}"
     previous = args.after
     for i in range(args.n_jobs):
         resume = args.resume or i > 0
