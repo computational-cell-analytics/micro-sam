@@ -1,4 +1,5 @@
 """Submit the calibration and the training of a decoder to a H100 (default: the shared queue of grete).
+Other queues and GPUs: '--partition', '--gpu' and '--constraint'.
 
 Every job runs from a frozen copy of this folder (<root>/jobs/code_<timestamp>), so that later edits cannot change
 a pending or running job. The sbatch script is kept next to it.
@@ -24,11 +25,11 @@ import common
 HEADER = """#!/bin/bash
 #SBATCH --job-name={job_name}
 #SBATCH -p {partition}
-#SBATCH -G H100:1
+#SBATCH -G {gpu}
 #SBATCH -c {cpus}
 #SBATCH --mem={mem}
 #SBATCH -t {time}
-#SBATCH --constraint=inet
+#SBATCH --constraint={constraint}
 #SBATCH -A {account}
 #SBATCH -o {root}/logs/slurm/{job_name}_%j.out
 #SBATCH -e {root}/logs/slurm/{job_name}_%j.err
@@ -56,12 +57,12 @@ def freeze_code(root):
 
 def submit(
     root, code, job_name, commands, time_limit, cpus, mem, extra="", dry_run=False,
-    partition="grete-h100:shared", account="nim00007", env="new-stack",
+    partition="grete-h100:shared", account="nim00007", env="new-stack", gpu="H100:1", constraint="inet",
 ):
     os.makedirs(os.path.join(root, "logs", "slurm"), exist_ok=True)
     script = HEADER.format(
         job_name=job_name, root=root, code=code, time=time_limit, cpus=cpus, mem=mem, extra=extra,
-        partition=partition, account=account, env=env,
+        partition=partition, account=account, env=env, gpu=gpu, constraint=constraint,
     ) + "\n".join(commands) + "\n"
     script_path = os.path.join(root, "jobs", f"{job_name}_{os.path.basename(code)[len('code_'):]}.sh")
     with open(script_path, "w") as f:
@@ -87,7 +88,12 @@ def main():
     parser.add_argument("--n_epochs", type=int, default=None)
     parser.add_argument("--scheduler_patience", type=int, default=None,
                         help="The patience of ReduceLROnPlateau for the training. Default: see common.py.")
-    parser.add_argument("--partition", default="grete-h100:shared", help="E.g. 'kisski-h100'.")
+    parser.add_argument("--partition", default="grete-h100:shared",
+                        help="E.g. 'kisski-h100'. Several partitions (comma-separated): the first one with a free GPU.")
+    parser.add_argument("--gpu", default="H100:1",
+                        help="The GPU request, e.g. 'A100:1', or '1' for any GPU type that fulfills the constraint.")
+    parser.add_argument("--constraint", default="inet",
+                        help="The node features, e.g. 'inet&80gb_vram' for GPUs with at least 80 GB (A100 or H100).")
     parser.add_argument("--account", default="nim00007")
     parser.add_argument("--env", default="new-stack", help="The micromamba environment.")
     parser.add_argument("--n_workers", type=int, default=8)
@@ -111,6 +117,7 @@ def main():
     resources = {
         "cpus": args.cpus, "mem": args.mem, "dry_run": args.dry_run,
         "partition": args.partition, "account": args.account, "env": args.env,
+        "gpu": args.gpu, "constraint": args.constraint,
     }
 
     if args.mode == "calibrate":

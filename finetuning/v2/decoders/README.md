@@ -61,7 +61,9 @@ python submit_decoder_training.py train --batch_size_2d <B> --z_slice <Z> --n_jo
 - `train_decoder.py` runs the training. `--resume` continues from the latest checkpoint up to the total number of
   epochs.
 - All jobs go to `grete-h100:shared` by default (`--partition`, `--account` and `--env` select another queue,
-  account and environment), with one H100, and run from a frozen copy of this folder.
+  account and environment), with one H100, and run from a frozen copy of this folder. `--gpu` and `--constraint`
+  select another GPU, e.g. `--partition kisski-h100,kisski --gpu 1 --constraint "inet&80gb_vram"` for the first
+  free H100 or A100 with 80 GB.
 
 ## Calibration results and runs
 
@@ -99,7 +101,8 @@ Runs:
 | Run | Settings | Jobs |
 |---|---|---|
 | `hiera_u_hvit_t_cells` | 2D batch 40, z = 14, lr 1e-4, 75 epochs | 17348080 - 17348083 (chain of four 48 h jobs, submitted 2026-11-16) |
-| `c3f2_hvit_t_cells` | as `hiera_u_hvit_t_cells`, but scheduler patience 6 | 17486495 - 17486498 (chain of four 48 h jobs on `kisski-h100`, submitted 2026-11-23) |
+| `c3f2_hvit_t_cells` | as `hiera_u_hvit_t_cells`, but scheduler patience 6 | 17497912, 17497913, 17497915, 17497923 (chain of four 48 h jobs on `grete-h100:shared`, submitted 2026-11-23) |
+| `c3f2_hvit_t_cells` (KISSKI) | the same, in the output folder of the KISSKI account | 17486495 - 17486498 (chain of four 48 h jobs on `kisski-h100`, submitted 2026-11-23) |
 
 Job 17348080 ran out of host memory (160 GB) on 2026-11-18 in the validation after its fourth epoch; the
 checkpoints of epoch 3 are kept (validation loss 0.422, 0.374, 0.364). The datasets take about 14 GB in the main
@@ -118,11 +121,16 @@ state by parameter name and stores the names in the checkpoints. Job 17479058 wa
 Validation loss up to epoch 26: best 0.329 (epoch 25), 0.332 - 0.335 for epochs 17 - 26 otherwise.
 
 The C3F2 run (the ConvNeXt-style decoder, 2.17 M parameters) uses the settings of the Hiera-U run, except for the
-patience of `ReduceLROnPlateau` (`--scheduler_patience 6` instead of 10). It runs on the KISSKI H100 nodes from the
-other account, which cannot write to the output folder above, so its outputs are in
-`/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/decoder_training_kisski`:
+patience of `ReduceLROnPlateau` (`--scheduler_patience 6` instead of 10). It was submitted twice on 2026-11-23, with
+the same settings and to different output folders, so the two chains are independent trainings of the same run:
 
 ```bash
+# grete-h100:shared, account nim00007, environment new-stack and the output folder above (the defaults).
+python submit_decoder_training.py train --decoder c3f2 --batch_size_2d 40 --z_slice 14 --scheduler_patience 6 \
+    --n_jobs 4
+
+# The KISSKI H100 nodes from the other account, which cannot write to the output folder above. Outputs:
+# /mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/decoder_training_kisski
 python submit_decoder_training.py train --decoder c3f2 --batch_size_2d 40 --z_slice 14 --scheduler_patience 6 \
     --n_jobs 4 --partition kisski-h100 --account kisski_usam2_pape --env main \
     --root /mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/decoder_training_kisski
@@ -130,7 +138,8 @@ python submit_decoder_training.py train --decoder c3f2 --batch_size_2d 40 --z_sl
 
 No separate calibration was run for it. Training steps on random data (local 10 GiB MIG slice, 2026-11-23) need
 about 80 % of the memory of Hiera-U at the same time per step (2D batch 4: 6.7 vs. 8.4 GiB, 3D z = 4: 7.0 vs.
-8.7 GiB), so batch 40 and z = 14 fit on a H100.
+8.7 GiB), so batch 40 and z = 14 fit on a H100. The same check in the `new-stack` environment (training,
+checkpoint, reloading and resuming with `c3f2`) passed with 6.5 and 6.9 GiB.
 
 ## Evaluation
 
