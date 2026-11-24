@@ -12,6 +12,9 @@ a pending or running job. The sbatch script is kept next to it.
 '--n_jobs' jobs: the first one starts the training (or resumes it with '--resume'), each further job resumes from
 the latest checkpoint after the previous job ended. A job that finds a finished training exits immediately.
 Use '--dry-run' to only write the scripts.
+
+A job that requests an A100 ('--gpu A100:1') writes to '<root>_a100' instead of '<root>', so that a chain on A100s
+and a chain on H100s with otherwise the same arguments can be pending or running at the same time.
 """
 
 import argparse
@@ -53,6 +56,15 @@ def freeze_code(root):
     code = os.path.join(root, "jobs", f"code_{stamp}")
     shutil.copytree(os.path.dirname(os.path.abspath(__file__)), code, ignore=shutil.ignore_patterns("__pycache__"))
     return code, stamp
+
+
+def get_root(root, gpu):
+    """Get the output folder for a GPU request: '<root>_a100' for A100s, 'root' otherwise (H100s)."""
+    gpu_type = gpu.split(":")[0].lower()
+    suffix = "_a100"
+    if gpu_type == "a100" and not root.rstrip("/").endswith(suffix):
+        return root.rstrip("/") + suffix
+    return root
 
 
 def submit(
@@ -106,9 +118,12 @@ def main():
     parser.add_argument("--resume", action="store_true", help="Let the first training job resume.")
     parser.add_argument("--after", default=None, help="A job that has to end before the first job starts.")
     parser.add_argument("--skip_data_check", action="store_true")
-    parser.add_argument("--root", default=common.SAVE_ROOT)
+    parser.add_argument("--root", default=common.SAVE_ROOT,
+                        help="The output folder. A request for an A100 ('--gpu A100:1') writes to '<root>_a100'.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    args.root = get_root(args.root, args.gpu)
+    print(f"Output folder: {args.root}")
 
     os.makedirs(os.path.join(args.root, "jobs"), exist_ok=True)
     code, _ = freeze_code(args.root)
