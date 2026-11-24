@@ -103,6 +103,8 @@ Runs:
 | `hiera_u_hvit_t_cells` | 2D batch 40, z = 14, lr 1e-4, 75 epochs | 17348080 - 17348083 (chain of four 48 h jobs, submitted 2026-11-16) |
 | `c3f2_hvit_t_cells` | as `hiera_u_hvit_t_cells`, but scheduler patience 6 | 17497912, 17497913, 17497915, 17497923 (chain of four 48 h jobs on `grete-h100:shared`, submitted 2026-11-23) |
 | `c3f2_hvit_t_cells` (KISSKI) | the same, in the output folder of the KISSKI account | 17486495 - 17486498 (chain of four 48 h jobs on `kisski-h100`, submitted 2026-11-23) |
+| `c3f2_hvit_t_cells` (A100) | the same, on an A100 with 80 GB, in `decoder_training_a100` | 17511094, 17511096, 17511098, 17511100 (chain of four 48 h jobs on `grete:shared`, submitted 2026-11-24) |
+| `c3f2_hvit_t_cells` (KISSKI, A100) | the same, on an A100 with 80 GB, in `decoder_training_kisski_a100` | 17501954 - 17501957 (chain of four 48 h jobs on `kisski`, submitted 2026-11-23) |
 
 Job 17348080 ran out of host memory (160 GB) on 2026-11-18 in the validation after its fourth epoch; the
 checkpoints of epoch 3 are kept (validation loss 0.422, 0.374, 0.364). The datasets take about 14 GB in the main
@@ -121,8 +123,9 @@ state by parameter name and stores the names in the checkpoints. Job 17479058 wa
 Validation loss up to epoch 26: best 0.329 (epoch 25), 0.332 - 0.335 for epochs 17 - 26 otherwise.
 
 The C3F2 run (the ConvNeXt-style decoder, 2.17 M parameters) uses the settings of the Hiera-U run, except for the
-patience of `ReduceLROnPlateau` (`--scheduler_patience 6` instead of 10). It was submitted twice on 2026-11-23, with
-the same settings and to different output folders, so the two chains are independent trainings of the same run:
+patience of `ReduceLROnPlateau` (`--scheduler_patience 6` instead of 10). It was submitted four times (2026-11-23 and
+2026-11-24) with the same settings and to different output folders, because the wait for a H100 was not
+foreseeable. The chains are independent trainings of the same run:
 
 ```bash
 # grete-h100:shared, account nim00007, environment new-stack and the output folder above (the defaults).
@@ -134,7 +137,26 @@ python submit_decoder_training.py train --decoder c3f2 --batch_size_2d 40 --z_sl
 python submit_decoder_training.py train --decoder c3f2 --batch_size_2d 40 --z_slice 14 --scheduler_patience 6 \
     --n_jobs 4 --partition kisski-h100 --account kisski_usam2_pape --env main \
     --root /mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/decoder_training_kisski
+
+# A100 with 80 GB on grete:shared. Outputs: <root>_a100 (set by the script for '--gpu A100:1').
+python submit_decoder_training.py train --decoder c3f2 --batch_size_2d 40 --z_slice 14 --scheduler_patience 6 \
+    --n_jobs 4 --partition grete:shared --gpu A100:1 --constraint "inet&80gb_vram" --mem 160G
 ```
+
+The KISSKI account has a chain on A100s as well (`--partition kisski --gpu A100:1 --constraint "inet&80gb_vram"`
+and the arguments of its H100 chain). Notes on the A100 chains:
+
+- Expected duration (not measured): 2.7 - 3.3 h per epoch instead of about 2.1 h, i.e. 200 - 250 h for 75 epochs,
+  more than the four jobs of the chain cover (about 60 - 70 epochs). The chain was reduced from six jobs on purpose
+  (jobs 17511101 and 17511102 were cancelled): the validation loss of Hiera-U was on a plateau from epoch 17 on, so
+  the last epochs are not expected to matter; jobs can be appended with `--resume --after <job>`. The duration
+  assumes training steps that are 1.5 - 2 times slower than on a H100; the waiting for the 2D loader and the
+  validation (about 40 % of an epoch on the H100) do not scale with the GPU.
+- Expected GPU memory for 2D batch 40: about 55 GiB of 80 GiB (80 % of the 68 GiB of Hiera-U), not measured.
+- The `grete:shared` chain requests 160 GB instead of 250 GB of host memory: the Hiera-U jobs with restarted
+  workers peaked at 99 GiB (`[memory]` lines of jobs 17348081 and 17348083), and the A100 nodes with a busy GPU had
+  70 - 90 GB free on 2026-11-24, so that 250 GB only fits after two jobs on the same node ended.
+- Once one chain trains, cancel the others or keep them as repetitions.
 
 No separate calibration was run for it. Training steps on random data (local 10 GiB MIG slice, 2026-11-23) need
 about 80 % of the memory of Hiera-U at the same time per step (2D batch 4: 6.7 vs. 8.4 GiB, 3D z = 4: 7.0 vs.
@@ -295,6 +317,50 @@ Run for `best.pt` after 25 epochs (2026-11-21; staged as `hiera_u_hvit_t_cells_e
   the table.
 - Checks before the submission (small grids, 1-3 samples of two datasets per setting, scratch folder): prediction,
   all stages of the search, the test run with the resulting parameters and the report ran for all three settings.
+
+### Search and test of a checkpoint as a few jobs
+
+`submit_checkpoint_evaluation.py` replaces the job arrays above (255 test tasks of 2-5 minutes for the epoch 25
+checkpoint) by one job per setting that runs the whole pipeline on one 10 GB slice of `grete:preemptible`:
+predictions of the tuning data, search on the CPUs of the job, test with the parameters it found. The 2d and 3d
+settings have a second job that takes tasks of the same search (`tune_decoder.py worker`) and scores the other half
+of the test samples. A fifth job computes the reference results that have no result with the current scoring.
+
+```bash
+python submit_checkpoint_evaluation.py --checkpoint <root>/checkpoints/hiera_u_hvit_t_cells/best.pt [--dry-run]
+python evaluate_decoder.py reference summary
+python evaluate_decoder.py report -e <root>/evaluation/<staged checkpoint>
+```
+
+- No job waits for the result of another one; the second 3d job only waits for the start of the first
+  (`--dependency=after`) and ends after 3 h without an open task. All jobs have `--requeue` and continue after a
+  preemption: prediction markers, finished sweeps and the per-sample result rows (`--n_shards`) are kept, and a
+  search with a result is not started again.
+- Sizes (`JOBS`): 2d 2 x 32 CPUs / 48 GB, 3d 2 x 32 CPUs / 64 GB, dense 16 CPUs / 40 GB, reference 4 CPUs /
+  32 GB. Measured for the epoch 29 checkpoint: 3d search 970 core hours (19.7 h with the two jobs, 42 GB peak),
+  3d test 2 h per job, dense 5.7 h in total, reference 7.2 h. The 2d search needs 1200 - 1400 core hours (the
+  epoch 25 search: 591 in the driver and 568 in its four worker jobs), too much for one job of 32 CPUs in 48 h.
+
+Run for `best.pt` after 29 epochs (2026-11-23; staged as `hiera_u_hvit_t_cells_epoch29_9a812c61`, checksum
+`9a812c61a8bc6bd2859c46dccb157249`, validation loss 0.325), the first run with the tuning pools, the 105 3D crops
+and the scoring without slivers of 2026-11-23:
+
+| Job | Steps | Slurm job |
+|---|---|---|
+| `deceval_2d_epoch29_9a812c61` | predict, search, test of 48 datasets | 17502288 |
+| `deceval_3d_epoch29_9a812c61_0` | predict, search, test of 23 datasets | 17502291 |
+| `deceval_3d_epoch29_9a812c61_1` | tasks of the 3d search, test of 23 datasets | 17502292 |
+| `deceval_dense_epoch29_9a812c61` | predict, search, test of 15 datasets | 17502293 |
+| `decref_hvit_t` | reference (hvit_t, defaults) for the 23 volumes scored without slivers | 17502296 |
+| `deceval_2d_epoch29_9a812c61_worker` | tasks of the 2d search, test of the 48 datasets in reverse order | 17533378 |
+
+State 2026-11-24 21:30: 3d, dense and reference done (no failed dataset); the 2d search had 283 of the 527 tasks
+of its first stage after 23 h, so 17533378 was added (script in the code folder of the run). The recomputed
+reference reproduces the earlier scores with slivers within 0.001 mSA (densecell, one volume: 0.327 against 0.335).
+
+Logs: `<root>/evaluation/hiera_u_hvit_t_cells_epoch29_9a812c61/logs/slurm/` and
+`<root>/evaluation/reference_hvit_t/logs/slurm/`. Before the recomputed reference is used, compare its column
+`mSA_with_slivers` with the mSA of the earlier results (`TUNING_DATA.md`, "Next steps").
 
 ## Post-processing parameter search: offline analysis
 
