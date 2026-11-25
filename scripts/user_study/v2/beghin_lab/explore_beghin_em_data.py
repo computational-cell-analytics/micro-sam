@@ -76,6 +76,10 @@ check_border_seed: test the background seed of segment_cells_volume (the mask vo
 volume seed the resin around the spheroid, their region is set to zero) on slabs of s0, compare the block-wise version
 to the watershed of the whole slab and both to a tissue mask from the texture of the raw.
 
+export_segmentations: write the cells ('segment_cells_volume --border_seed --nuclei joined') and their nuclei
+(join_nucleus_fragments) as one OME-Zarr with two multiscale label images on the levels of the raw, next to the data
+(EXPORT_PATH).
+
 check_cells_volume: run the block-wise stages of segment_cells_volume on the inputs of the cell crop and compare them
 to the result of watershed_cell_crop.
 
@@ -246,6 +250,8 @@ TISSUE_SURFACE_MARGIN = 8
 # The pyramids of the volume segmentations (downsample_segmentations): '<name>/s<level>' for the levels above the one
 # a segmentation was computed at. The segmentations themselves stay where they are (SEGMENTATION_SOURCES).
 SEGMENTATION_PYRAMID_PATH = os.path.join(VOLUME_PREDICTION_DIR, "segmentation_pyramids.zarr")
+# The export of the cells and nuclei (export_segmentations), at the top level of the data folder of the Beghin lab.
+EXPORT_PATH = os.path.join(os.path.dirname(DATA_DIR), "PF_Dish_C_pin3new_Spheroid3_segmentation.ome.zarr")
 SEGMENTATION_PYRAMID_CHUNKS = (64, 256, 256)
 # The nuclei the decoder misses, segmented from one point each (segment_nuclei_from_prompts). The points are a napari
 # points layer saved as csv (index, z, y, x in voxels of NUCLEUS_POINTS_LEVEL of the raw). Each nucleus is segmented in
@@ -1523,6 +1529,97 @@ def downsample_segmentations(num_workers, max_level=len(DOWNSCALE_FACTORS), name
             copy(subsampled, array, block_shape=SEGMENTATION_PYRAMID_CHUNKS, num_workers=num_workers)
             print(f"{name} s{level} {array.shape} in {time.time() - t0:.0f} s", flush=True)
             previous = array
+
+
+def _to_uint16(labels):
+    return labels.astype("uint16")
+
+
+def export_segmentations(output_path=EXPORT_PATH, nuclei="joined", num_workers=1):
+    """Export the cells and their nuclei as an OME-Zarr with two multiscale label images, 'cells' and 'nuclei'.
+
+    The cells are those of 'segment_cells_volume --border_seed' for the given nuclei (computed at s0), the nuclei
+    those of get_nuclei_path(nuclei) (computed at s1). Both have the levels s0 - s3 of the raw (the same shapes,
+    DOWNSCALE_FACTORS), as uint16 with the shards and chunks of the raw: the nuclei at s0 are those of s1 repeated
+    twice in y and x, and each level above the one a segmentation was computed at takes the first voxel of each
+    block of the level below (as the pyramids of downsample_segmentations and the label images of the raw). So the
+    voxel i of a level is the voxel factor * i of s0, in both images, and a cell has the id of its nucleus.
+
+    The attributes of the root list the sources and the notes on the nuclei: the prompted nuclei that are only
+    seeds for their cell and not full nuclei ('seed_only'), and the nuclei joined from fragments ('joined').
+
+    Args:
+        output_path: The path of the OME-Zarr. It must not exist.
+        nuclei: The nuclei, see get_nuclei_path.
+        num_workers: The number of threads.
+    """
+    from bioimage_py.copy import copy
+    from bioimage_py.wrapper import SimpleTransformationSource
+
+    assert not os.path.exists(output_path), f"{output_path} exists."
+    zarr.config.set({"threading.max_workers": num_workers})
+    cells_path, nuclei_path = get_cell_volume_path(0, border_seed=True, nuclei=nuclei), get_nuclei_path(nuclei)
+    cells_group, nuclei_group = zarr.open_group(cells_path, mode="r"), zarr.open_group(nuclei_path, mode="r")
+    assert "segmentation" in cells_group.attrs["done_stages"], cells_path
+    assert cells_group.attrs["params"]["nuclei"] == nuclei_path, cells_group.attrs["params"]["nuclei"]
+    nuclei_s1 = nuclei_group["segmentation"]
+    # Per image: level -> source, for the levels that are not subsampled from the level below.
+    sources = {
+        "cells": {0: cells_group["segmentation"]},
+        "nuclei": {0: repeat_labels(nuclei_s1, DOWNSCALE_FACTORS[0]), 1: nuclei_s1},
+    }
+    shape = tuple(cells_group["segmentation"].shape)
+    assert tuple(sources["nuclei"][0].shape) == shape, (sources["nuclei"][0].shape, shape)
+
+    root = zarr.open_group(output_path, mode="w", zarr_format=3)
+    # Labels compress best with byte shuffle, the ids are piecewise constant.
+    compressor = BloscCodec(cname="zstd", clevel=5, shuffle="shuffle")
+    Subsampled = _get_subsampled_source_class()
+    num_levels = len(DOWNSCALE_FACTORS) + 1
+    for name, level_sources in sources.items():
+        group = root.create_group(name)
+        previous = None
+        for level in range(num_levels):
+            t0 = time.time()
+            source = level_sources.get(level)
+            if source is None:
+                source = Subsampled(previous, DOWNSCALE_FACTORS[level - 1])
+            level_shape = tuple(source.shape)
+            if level > 0:
+                expected = get_downsampled_shape(previous.shape, DOWNSCALE_FACTORS[level - 1])
+                assert level_shape == expected, (level_shape, expected)
+            array = group.create_array(
+                f"s{level}", shape=level_shape, dtype="uint16", shards=SHARD_SHAPE, chunks=CHUNK_SHAPE,
+                compressors=compressor, fill_value=0, dimension_names=["z", "y", "x"],
+            )
+            # Every block writes whole shards.
+            copy(
+                SimpleTransformationSource(source, _to_uint16, dtype="uint16"), array, block_shape=SHARD_SHAPE,
+                num_workers=num_workers,
+            )
+            print(f"{name} s{level} {level_shape} in {time.time() - t0:.0f} s", flush=True)
+            previous = array
+        multiscale = get_multiscale(name, num_levels, "nearest")
+        group.attrs["ome"] = {"version": "0.5", "multiscales": [multiscale], "image-label": {"version": "0.5"}}
+
+    nuclei_attrs = dict(nuclei_group.attrs)
+    root.attrs.update({
+        "raw": OUTPUT_PATH, "voxel_size_s0": list(VOXEL_SIZE), "cells": cells_path, "nuclei": nuclei_path,
+        "description": (
+            "Cells and nuclei of the whole spheroid, instance labels (0 is background). A cell has the id of its "
+            "nucleus. 'nuclei' was segmented at s1 (its s0 is s1 repeated twice in y and x), 'cells' at s0 by a "
+            "watershed seeded with the nuclei. Written by export_segmentations of "
+            "micro-sam/scripts/user_study/v2/beghin_lab/explore_beghin_em_data.py."
+        ),
+        "seed_only": [
+            {"id": obj["id"], "comment": obj["comment"]} for obj in nuclei_attrs.get("objects", []) if obj["seed_only"]
+        ],
+        "joined": [
+            {"id": obj["id"], "fragments": obj["fragments"], "comments": obj["comments"]}
+            for obj in nuclei_attrs.get("joined", [])
+        ],
+    })
+    print(f"Exported to {output_path}", flush=True)
 
 
 def get_prompted_nuclei_path():
@@ -2955,6 +3052,13 @@ def main():
     border_seed.add_argument("--z_ranges", type=int, nargs="+", default=[368, 496], help="Start and stop, repeated.")
     border_seed.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
 
+    export = subparsers.add_parser(
+        "export_segmentations", help="Export the cells and nuclei as an OME-Zarr with two multiscale label images.",
+    )
+    export.add_argument("--output_path", default=EXPORT_PATH)
+    export.add_argument("--nuclei", default="joined", choices=["watershed", "merged", "joined"])
+    export.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
+
     pyramids = subparsers.add_parser(
         "downsample_segmentations", help="Write the pyramids of the cell and nucleus segmentations up to s3.",
     )
@@ -3063,6 +3167,8 @@ def main():
             args.zarr_path, args.points_path, args.points_level, tuple(args.z_offsets), args.n_negatives,
             args.num_workers,
         )
+    elif args.task == "export_segmentations":
+        export_segmentations(args.output_path, args.nuclei, args.num_workers)
     elif args.task == "check_cells_volume":
         assert len(args.block_shapes) % 3 == 0 and len(args.ws_halos) == len(args.block_shapes)
         check_cells_volume(
