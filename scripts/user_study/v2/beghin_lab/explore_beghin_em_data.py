@@ -59,6 +59,23 @@ downsample_segmentations: write the pyramids of the cell segmentation of segment
 nuclei of watershed_volume (from s1) up to s3, block-wise, taking the first voxel of each block as the label pyramids
 of the OME-Zarr do. View them with view_beghin_em_volume.py.
 
+segment_nuclei_from_prompts: segment the nuclei that watershed_volume misses with the SAM2 video predictor of the
+nuclei model at s1, each prompted with one point of a napari points layer, as a label volume of s1 with new ids.
+Add its pyramid with 'downsample_segmentations --names nuclei_prompted'.
+
+merge_prompted_nuclei: the nuclei of watershed_volume without the fragments of the prompted nuclei, plus the prompted
+nuclei (with their ids). The prompted nuclei of NUCLEUS_SEED_ONLY_POINTS are not full nuclei, only seeds for their
+cells; they are marked in the attributes. 'segment_cells_volume --nuclei merged' uses these nuclei.
+
+join_nucleus_fragments: the nuclei that are still split into several objects in the merged nuclei
+(NUCLEUS_FRAGMENT_GROUPS, each of them also splits its cell) become one object each: the nucleus is segmented again
+with the video predictor, prompted with the centers of its fragments, and joined with the fragments under the lowest
+of their ids. 'segment_cells_volume --nuclei joined' uses these nuclei.
+
+check_border_seed: test the background seed of segment_cells_volume (the mask voxels on the Y and X faces of the
+volume seed the resin around the spheroid, their region is set to zero) on slabs of s0, compare the block-wise version
+to the watershed of the whole slab and both to a tissue mask from the texture of the raw.
+
 check_cells_volume: run the block-wise stages of segment_cells_volume on the inputs of the cell crop and compare them
 to the result of watershed_cell_crop.
 
@@ -205,10 +222,57 @@ CELL_CLOSING_RADIUS = 150.0
 CELL_VOLUME_BLOCK_SHAPE = (128, 1024, 1024)
 CELL_VOLUME_CHUNK_SHAPE = (64, 256, 256)
 CELL_VOLUME_WS_HALO = (32, 256, 256)
+# The seed for the empty space around the spheroid (stage 'background' of segment_cells_blockwise). The cells model
+# predicts most of the resin as foreground with a low boundary, so without it the watershed gives the resin to
+# whichever cell reaches it. No cell touches the Y and X faces of the volume, so the mask voxels of these faces seed
+# the resin; the seed gets CELL_BACKGROUND_SEED_ID in the watershed and its region is set to zero afterwards.
+# The block-wise watershed only reaches a seed within its halo, and the blocks in the center of the volume do not see
+# the faces (on the last 128 slices of s0, 22% of the region of the face seed went to a cell again). So the watershed
+# is repeated with the region of the face seed of the previous pass as seed, which moves it one block inwards per
+# pass: with two passes for the 3 x 3 blocks of s0 in Y and X, less than 0.001% of the mask differs from the
+# watershed of a whole slab. (The region of the face seed in a watershed of the whole volume at a coarse level, eroded
+# by 1 um, as seed instead: 0.2% of the mask differed on the central slab, it cut 170 um^3 off a cell.)
+CELL_BACKGROUND_SEED_ID = 2 ** 32 - 1
+# The check of the background seed (check_border_seed): slabs of s0 over the full Y and X extent, and a tissue mask
+# from the texture of the raw at s2, which does not depend on a model: the local standard deviation in a window of
+# TISSUE_STD_SIZE px (in the plane), thresholded with Otsu, closed, filled and opened (the opening removes the
+# seams of the acquisition tiles).
+BORDER_SEED_CHECK_LEVEL = 0
+TISSUE_LEVEL = 2
+TISSUE_STD_SIZE = 9
+TISSUE_CLOSING_RADIUS = 3
+TISSUE_OPENING_RADIUS = 7
+TISSUE_SURFACE_MARGIN = 8
 # The pyramids of the volume segmentations (downsample_segmentations): '<name>/s<level>' for the levels above the one
 # a segmentation was computed at. The segmentations themselves stay where they are (SEGMENTATION_SOURCES).
 SEGMENTATION_PYRAMID_PATH = os.path.join(VOLUME_PREDICTION_DIR, "segmentation_pyramids.zarr")
 SEGMENTATION_PYRAMID_CHUNKS = (64, 256, 256)
+# The nuclei the decoder misses, segmented from one point each (segment_nuclei_from_prompts). The points are a napari
+# points layer saved as csv (index, z, y, x in voxels of NUCLEUS_POINTS_LEVEL of the raw). Each nucleus is segmented in
+# a crop of NUCLEUS_PROMPT_CROP_SHAPE of s1 around its point (a nucleus spans up to ~110 slices and ~170 px of s1).
+# An existing nucleus with more than NUCLEUS_FRAGMENT_FRACTION of its voxels in a prompted nucleus is a fragment of it.
+NUCLEUS_POINTS_PATH = os.path.join(VOLUME_PREDICTION_DIR, "nuclei_s3_points.csv")
+NUCLEUS_POINTS_LEVEL = 3
+NUCLEUS_PROMPT_CROP_SHAPE = (192, 512, 512)
+NUCLEUS_FRAGMENT_FRACTION = 0.5
+# The points (rows of the points file) without a full nucleus: rounded cells without a clear nucleus in the raw, where
+# the prompted mask is only a part of the cell interior and changes with the prompts. They are merged into the nuclei
+# (merge_prompted_nuclei) as seeds for their cells, but must not be used as nucleus segmentations.
+NUCLEUS_SEED_ONLY_POINTS = (1, 2)
+# The nuclei that are split into several objects in the merged nuclei, found by the user in the cells from them
+# (2026-11-25): the ids of the fragments of each nucleus. join_nucleus_fragments makes one object of each group.
+NUCLEUS_FRAGMENT_GROUPS = ((169, 170, 196), (192, 240), (215, 216, 241), (64, 65))
+# The fragments that are not used as a prompt, with the reason. They are still joined with their group.
+NUCLEUS_FRAGMENT_NO_PROMPT = {
+    169: (
+        "Not a part of the nucleus: the cap of the cell above the nucleus (slices 446 - 456 of s1, the nucleus starts "
+        "at 461). With its center as a prompt the mask covers the cytoplasm of the cap. Only a seed for the cell."
+    ),
+}
+NUCLEUS_SEED_ONLY_COMMENT = (
+    "Not a full nucleus: a rounded cell without a clear nucleus in the raw, the mask is a part of the cell interior "
+    "and changes with the prompts. Only a seed for the cell."
+)
 # The over-segmentation of the graph watershed: 3d AIS with half the default density threshold (more seeds) and the
 # boundary prediction added to the height map (boundary_weight), so that the fragments end on the predicted
 # boundaries, including the nuclear envelope. min_size is in voxels of s1 and scaled to the voxel size of a level.
@@ -1176,38 +1240,76 @@ def watershed_cell_crop(levels, closing_radius=CELL_CLOSING_RADIUS):
         )
 
 
+def get_border_faces(shape):
+    """The index of each of the Y and X faces of a volume."""
+    return (
+        (slice(None), 0), (slice(None), shape[1] - 1), (slice(None), slice(None), 0),
+        (slice(None), slice(None), shape[2] - 1),
+    )
+
+
+def add_border_seed(seeds, mask, seed_id=CELL_BACKGROUND_SEED_ID):
+    """Set the mask voxels without a seed on the Y and X faces of a seed volume to seed_id, in place."""
+    for face in get_border_faces(seeds.shape):
+        view = seeds[face]
+        view[(view == 0) & mask[face]] = seed_id
+
+
+def _add_background_seed(seeds, background):
+    return np.where((seeds == 0) & (background > 0), CELL_BACKGROUND_SEED_ID, seeds).astype("uint64")
+
+
+def _is_background_seed(segmentation):
+    return (segmentation == CELL_BACKGROUND_SEED_ID).astype("uint8")
+
+
+def _remove_background_seed(segmentation):
+    return np.where(segmentation == CELL_BACKGROUND_SEED_ID, 0, segmentation).astype(segmentation.dtype)
+
+
 def segment_cells_blockwise(
     foreground, boundary, nuclei, outputs, voxel_size, num_workers, block_shape=CELL_VOLUME_BLOCK_SHAPE,
     ws_halo=CELL_VOLUME_WS_HALO, expand_distance=CELL_EXPAND_DISTANCE, closing_radius=CELL_CLOSING_RADIUS,
-    stages=("seeds", "mask", "segmentation"), on_stage_done=None,
+    stages=None, on_stage_done=None,
 ):
     """The cell segmentation of watershed_cell_crop, block-wise with bioimage-py and bioimage-cpp.
 
-    Three stages, each written into its output before the next one starts:
+    The stages, each written into its output before the next one starts:
     - seeds: the nuclei expanded by expand_distance (expand_nuclei on each block with the halo of the distance).
     - mask: foreground > CELL_FOREGROUND_THRESHOLD closed with a ball of closing_radius (close_mask on each block with
       the halo of twice the radius). Both are exact: a voxel of a block only depends on the voxels within the halo.
+    - background (only if the outputs have 'background'): the seed for the resin around the spheroid, the mask
+      voxels without a seed on the Y and X faces of the volume.
     - segmentation: the seeded watershed of bioimage-py on the boundary prediction within the mask, with ws_halo.
+      With the background seed it is repeated with the region of the background seed of the previous pass as seed,
+      so that the seed reaches the blocks that do not see the faces (one more block per pass, so half the number of
+      blocks in Y or X passes). The region is kept in 'background' and set to zero in the segmentation.
 
     Args:
         foreground: The foreground prediction (a source, e.g. a zarr array).
         boundary: The boundary prediction.
         nuclei: The nuclei on the same voxel grid (a source, see repeat_labels).
-        outputs: The writable output arrays for 'seeds' (uint64), 'mask' (uint8) and 'segmentation' (uint64).
+        outputs: The writable output arrays for 'seeds' (uint64), 'mask' (uint8) and 'segmentation' (uint64), and
+            optionally 'background' (uint8).
         voxel_size: The ZYX voxel size in nanometer.
         num_workers: The number of threads.
         block_shape: The block shape of all stages; the chunks of the outputs must divide it.
         ws_halo: The halo of the watershed.
         expand_distance: The expansion of the nuclei in nanometer.
         closing_radius: The radius of the closing in nanometer.
-        stages: The stages to run.
+        stages: The stages to run, by default all.
         on_stage_done: Called with the name of each stage once it is written.
     """
     from functools import partial
     from bioimage_py.copy import copy
     from bioimage_py.segmentation import watershed
-    from bioimage_py.wrapper import SimpleTransformationWithHaloSource, ThresholdSource
+    from bioimage_py.wrapper import (
+        MultiTransformationSource, SimpleTransformationSource, SimpleTransformationWithHaloSource, ThresholdSource,
+    )
 
+    use_background = "background" in outputs
+    if stages is None:
+        stages = ("seeds", "mask") + (("background",) if use_background else ()) + ("segmentation",)
     timings = {}
     if "seeds" in stages:
         t0 = time.time()
@@ -1232,12 +1334,39 @@ def segment_cells_blockwise(
         if on_stage_done is not None:
             on_stage_done("mask")
 
+    if "background" in stages:
+        t0 = time.time()
+        for face in get_border_faces(outputs["background"].shape):
+            free = (np.asarray(outputs["seeds"][face]) == 0) & (np.asarray(outputs["mask"][face]) > 0)
+            outputs["background"][face] = np.maximum(np.asarray(outputs["background"][face]), free.astype("uint8"))
+        timings["background"] = time.time() - t0
+        if on_stage_done is not None:
+            on_stage_done("background")
+
     if "segmentation" in stages:
         t0 = time.time()
-        watershed(
-            boundary, outputs["seeds"], outputs["segmentation"], halo=ws_halo, mask=outputs["mask"],
-            block_shape=block_shape, num_workers=num_workers,
-        )
+        seeds, n_passes = outputs["seeds"], 1
+        if use_background:
+            seeds = MultiTransformationSource(_add_background_seed, seeds, outputs["background"], dtype="uint64")
+            n_passes = math.ceil(max(math.ceil(sh / bs) for sh, bs in zip(seeds.shape[1:], block_shape[1:])) / 2)
+        for _ in range(n_passes):
+            watershed(
+                boundary, seeds, outputs["segmentation"], halo=ws_halo, mask=outputs["mask"],
+                block_shape=block_shape, num_workers=num_workers,
+            )
+            if use_background:
+                # The region of the background seed is the seed of the next pass. A pass that stops leaves a
+                # part of it in 'background', which is a valid seed for the run that continues.
+                copy(
+                    SimpleTransformationSource(outputs["segmentation"], _is_background_seed, dtype="uint8"),
+                    outputs["background"], block_shape=block_shape, num_workers=num_workers,
+                )
+        if use_background:
+            # In place: every block reads and writes its own voxels only.
+            copy(
+                SimpleTransformationSource(outputs["segmentation"], _remove_background_seed), outputs["segmentation"],
+                block_shape=block_shape, num_workers=num_workers,
+            )
         timings["segmentation"] = time.time() - t0
         if on_stage_done is not None:
             on_stage_done("segmentation")
@@ -1248,17 +1377,46 @@ def _close_mask_uint8(mask, voxel_size, radius):
     return close_mask(mask, voxel_size, radius).astype("uint8")
 
 
-def get_cell_volume_path(level):
-    return os.path.join(VOLUME_PREDICTION_DIR, f"cells_s{level}_segmentation.zarr")
+def get_merged_nuclei_path():
+    return os.path.join(VOLUME_PREDICTION_DIR, "nuclei_s1_merged.zarr")
 
 
-def segment_cells_volume(level, num_workers, block_shape=CELL_VOLUME_BLOCK_SHAPE, ws_halo=CELL_VOLUME_WS_HALO):
+def get_joined_nuclei_path():
+    return os.path.join(VOLUME_PREDICTION_DIR, "nuclei_s1_joined.zarr")
+
+
+def get_nuclei_path(nuclei="watershed"):
+    """The group with the nuclei of s1: those of watershed_volume ('watershed'), of merge_prompted_nuclei ('merged')
+    or of join_nucleus_fragments ('joined'). Each one builds on the one before."""
+    paths = {
+        "watershed": get_watershed_path(1, "nuclei"), "merged": get_merged_nuclei_path(),
+        "joined": get_joined_nuclei_path(),
+    }
+    return paths[nuclei]
+
+
+def get_cell_volume_path(level, border_seed=False, nuclei="watershed"):
+    name = f"cells_s{level}_segmentation{'' if nuclei == 'watershed' else f'_{nuclei}_nuclei'}"
+    return os.path.join(VOLUME_PREDICTION_DIR, f"{name}{'_border_seed' if border_seed else ''}.zarr")
+
+
+def segment_cells_volume(
+    level, num_workers, block_shape=CELL_VOLUME_BLOCK_SHAPE, ws_halo=CELL_VOLUME_WS_HALO, border_seed=False,
+    nuclei="watershed",
+):
     """Segment the cells of a whole scale level, block-wise (segment_cells_blockwise).
+
+    With border_seed, the resin around the spheroid gets its own seed, from the Y and X faces of the volume, and
+    its region is set to zero (stage 'background', CELL_BACKGROUND_SEED_ID); the result goes to its own group, with
+    the region in 'background'. With nuclei 'merged' or 'joined', the nuclei are those of merge_prompted_nuclei or
+    of join_nucleus_fragments (get_nuclei_path); the result also goes to its own group. The cells of the nuclei that
+    are only seeds (attribute 'seed_only') are full cells.
 
     The inputs are the cell predictions of predict_volume (target 'cells') and the nuclei of watershed_volume at s1,
     repeated to the voxel grid of the level. The seeds, the mask and the segmentation are zarr arrays of the group
-    get_cell_volume_path(level) with chunks of CELL_VOLUME_CHUNK_SHAPE, which divide block_shape. A stage that is
-    written is recorded in the attributes, so a run that stops continues with the next stage.
+    get_cell_volume_path(level, border_seed, nuclei) with chunks of CELL_VOLUME_CHUNK_SHAPE, which divide
+    block_shape. A stage that is written is recorded in the attributes, so a run that stops continues with the next
+    stage.
     """
     zarr.config.set({"threading.max_workers": num_workers})
     predictions = zarr.open_group(get_volume_prediction_path(level, "cells"), mode="r")
@@ -1267,31 +1425,37 @@ def segment_cells_volume(level, num_workers, block_shape=CELL_VOLUME_BLOCK_SHAPE
     assert len(done_slabs) == n_slabs, f"The cell predictions of s{level} are incomplete: {len(done_slabs)} / {n_slabs}"
     foreground, boundary = predictions["foreground"], predictions["boundary"]
     factor = [f1 // f for f1, f in zip(get_level_factor(1), get_level_factor(level))]
-    nuclei = repeat_labels(zarr.open_group(get_watershed_path(1, "nuclei"), mode="r")["segmentation"], factor)
+    nuclei_path = get_nuclei_path(nuclei)
+    nuclei_source = repeat_labels(zarr.open_group(nuclei_path, mode="r")["segmentation"], factor)
     shape = tuple(foreground.shape)
-    assert tuple(nuclei.shape) == shape, (nuclei.shape, shape)
+    assert tuple(nuclei_source.shape) == shape, (nuclei_source.shape, shape)
     voxel_size = get_level_voxel_size(level)
 
     assert all(b % c == 0 for b, c in zip(block_shape, CELL_VOLUME_CHUNK_SHAPE)), block_shape
-    out = zarr.open_group(get_cell_volume_path(level), mode="a", zarr_format=3)
+    out = zarr.open_group(get_cell_volume_path(level, border_seed, nuclei), mode="a", zarr_format=3)
     params = {
-        "predictions": get_volume_prediction_path(level, "cells"), "nuclei": get_watershed_path(1, "nuclei"),
+        "predictions": get_volume_prediction_path(level, "cells"), "nuclei": nuclei_path,
         "level": level, "voxel_size": list(voxel_size), "foreground_threshold": CELL_FOREGROUND_THRESHOLD,
         "expand_distance": CELL_EXPAND_DISTANCE, "closing_radius": CELL_CLOSING_RADIUS,
         "block_shape": list(block_shape), "ws_halo": list(ws_halo),
     }
+    if border_seed:
+        params["border_seed"] = True
     if "params" in out.attrs:
-        assert out.attrs["params"] == params, f"{get_cell_volume_path(level)} was written with other parameters."
+        assert out.attrs["params"] == params, f"{out.store} was written with other parameters."
     out.attrs["params"] = params
     compressor = BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle")
     outputs = {
         name: out.require_array(
             name, shape=shape, dtype=dtype, chunks=CELL_VOLUME_CHUNK_SHAPE, compressors=compressor, fill_value=0,
             dimension_names=["z", "y", "x"],
-        ) for name, dtype in (("seeds", "uint64"), ("mask", "uint8"), ("segmentation", "uint64"))
+        ) for name, dtype in (
+            ("seeds", "uint64"), ("mask", "uint8"), ("background", "uint8"), ("segmentation", "uint64"),
+        ) if border_seed or name != "background"
     }
     done = list(out.attrs.get("done_stages", []))
-    stages = [stage for stage in ("seeds", "mask", "segmentation") if stage not in done]
+    all_stages = ("seeds", "mask") + (("background",) if border_seed else ()) + ("segmentation",)
+    stages = [stage for stage in all_stages if stage not in done]
 
     def on_stage_done(stage):
         done.append(stage)
@@ -1299,27 +1463,38 @@ def segment_cells_volume(level, num_workers, block_shape=CELL_VOLUME_BLOCK_SHAPE
         print(f"s{level}: {stage} written", flush=True)
 
     timings = segment_cells_blockwise(
-        foreground, boundary, nuclei, outputs, voxel_size, num_workers, block_shape=block_shape, ws_halo=ws_halo,
-        stages=stages, on_stage_done=on_stage_done,
+        foreground, boundary, nuclei_source, outputs, voxel_size, num_workers, block_shape=block_shape,
+        ws_halo=ws_halo, stages=stages, on_stage_done=on_stage_done,
     )
     print(f"s{level}: cells segmented, {', '.join(f'{k} in {v:.0f} s' for k, v in timings.items())}", flush=True)
 
 
 def get_segmentation_sources():
     """The volume segmentations: name -> (path of the zarr group, array name, the level it was computed at)."""
-    return {
+    sources = {
         "cells": (get_cell_volume_path(0), "segmentation", 0),
         "nuclei": (get_watershed_path(1, "nuclei"), "segmentation", 1),
     }
+    if os.path.exists(get_prompted_nuclei_path()):
+        sources["nuclei_prompted"] = (get_prompted_nuclei_path(), "segmentation", 1)
+    if os.path.exists(get_border_seed_check_path()):
+        sources["cells_border_seed"] = (get_border_seed_check_path(), "segmentation", BORDER_SEED_CHECK_LEVEL)
+    for nuclei in ("merged", "joined"):
+        if os.path.exists(get_nuclei_path(nuclei)):
+            sources[f"nuclei_{nuclei}"] = (get_nuclei_path(nuclei), "segmentation", 1)
+        path = get_cell_volume_path(0, border_seed=True, nuclei=nuclei)
+        if os.path.exists(path):
+            sources[f"cells_{nuclei}_nuclei_border_seed"] = (path, "segmentation", 0)
+    return sources
 
 
-def downsample_segmentations(num_workers, max_level=len(DOWNSCALE_FACTORS)):
+def downsample_segmentations(num_workers, max_level=len(DOWNSCALE_FACTORS), names=None):
     """Write the pyramids of the volume segmentations up to max_level, block-wise (uint16).
 
     Each level takes the first voxel of each block of DOWNSCALE_FACTORS of the level below (SubsampledSource copied
     with bioimage-py), as write_label_pyramid does for the label images of the OME-Zarr. So the voxel i of a level of
     the cells is the voxel factor * i of s0 (no translation on the grid of s0), the voxel i of a level of the nuclei
-    the voxel factor * i of s1 (the translation of s1 of the raw).
+    the voxel factor * i of s1 (the translation of s1 of the raw). With names, only these segmentations are written.
     """
     from bioimage_py.copy import copy
 
@@ -1328,6 +1503,8 @@ def downsample_segmentations(num_workers, max_level=len(DOWNSCALE_FACTORS)):
     compressor = BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle")
     Subsampled = _get_subsampled_source_class()
     for name, (path, key, source_level) in get_segmentation_sources().items():
+        if names is not None and name not in names:
+            continue
         source = zarr.open_group(path, mode="r")[key]
         group = out.require_group(name)
         group.attrs.update({"source": os.path.join(path, key), "source_level": source_level})
@@ -1346,6 +1523,549 @@ def downsample_segmentations(num_workers, max_level=len(DOWNSCALE_FACTORS)):
             copy(subsampled, array, block_shape=SEGMENTATION_PYRAMID_CHUNKS, num_workers=num_workers)
             print(f"{name} s{level} {array.shape} in {time.time() - t0:.0f} s", flush=True)
             previous = array
+
+
+def get_prompted_nuclei_path():
+    return os.path.join(VOLUME_PREDICTION_DIR, "nuclei_s1_prompted.zarr")
+
+
+def convert_points(points, level, target_level):
+    """Map points (N, 3) in voxels of a level of the raw to voxels of another level.
+
+    The levels are mean downsampled, so the center of the voxel i of a level is at factor * i + (factor - 1) / 2 in
+    voxels of s0 (the translation of the OME metadata).
+    """
+    factor, target = np.array(get_level_factor(level)), np.array(get_level_factor(target_level))
+    return (np.asarray(points) * factor + (factor - 1) / 2 - (target - 1) / 2) / target
+
+
+def get_label_centers(labels, voxel_size):
+    """The center of each object of a label volume: the voxel of it closest to its centroid (in nanometer)."""
+    centers = {}
+    for label_id, bb in enumerate(ndimage.find_objects(labels), 1):
+        if bb is None:
+            continue
+        coords = np.argwhere(labels[bb] == label_id) + [b.start for b in bb]
+        distances = (((coords - coords.mean(axis=0)) * voxel_size) ** 2).sum(axis=1)
+        centers[label_id] = coords[np.argmin(distances)]
+    return centers
+
+
+def segment_from_points(predictor, volume, embeddings, prompts):
+    """Segment one object with the SAM2 video predictor, conditioned on points in one or several slices.
+
+    Args:
+        predictor: The video predictor.
+        volume: The volume the embeddings were computed for, (Z, Y, X).
+        embeddings: Its embeddings.
+        prompts: One (slice, points (N, 2) in y and x, labels (N,)) per conditioned slice.
+
+    Returns:
+        The mask of the propagation through the whole volume, in both directions.
+    """
+    from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
+
+    segmenter = PromptableSegmentation3D(predictor, volume, embeddings)
+    for frame, points, labels in prompts:
+        segmenter.add_prompt_set(
+            frame_id=int(frame), points=np.array(points, dtype="float32"),
+            point_labels=np.array(labels, dtype="int32"), object_id=1,
+        )
+    video_segments = segmenter.propagate_prompts()
+    segmenter.reset_predictor()
+    mask = np.zeros(volume.shape, dtype=bool)
+    for frame, per_object in video_segments.items():
+        mask[frame] = np.asarray(per_object[1]).squeeze()[:volume.shape[1], :volume.shape[2]]
+    return mask
+
+
+def get_component(mask, point):
+    """The connected component of a mask that holds a point (empty if the point is not in the mask)."""
+    return get_components(mask, [point])
+
+
+def get_components(mask, points):
+    """The connected components of a mask that hold one of the points (empty if no point is in the mask)."""
+    labels, _ = ndimage.label(mask)
+    label_ids = {int(labels[tuple(point)]) for point in points} - {0}
+    return np.isin(labels, list(label_ids)) if label_ids else np.zeros_like(mask)
+
+
+def segment_nuclei_from_prompts(
+    zarr_path, points_path=NUCLEUS_POINTS_PATH, points_level=NUCLEUS_POINTS_LEVEL, z_offsets=(0,), n_negatives=0,
+    num_workers=1,
+):
+    """Segment the nuclei that watershed_volume misses from one point each, with the nuclei model at s1.
+
+    Each point is a positive prompt in its slice of the inverted raw. The SAM2 video predictor propagates it through
+    a crop of NUCLEUS_PROMPT_CROP_SHAPE around the point in both directions, and the nucleus is the connected
+    component of the result that holds the point: the propagation can jump to another nucleus once the prompted one
+    ends, which is not connected to it. The existing nuclei that lie mostly in a prompted nucleus are fragments of
+    it (a missed nucleus is often found in a few slices or tiles); they are recorded as 'replaces'.
+
+    The nuclei get the ids after those of watershed_volume, in the order of the points, and are written into a
+    label volume of s1 ('segmentation' of get_prompted_nuclei_path()).
+
+    The two variants of the prompts did not improve the result on the first five points (nuclei_s3_points.csv): the
+    three nuclei with a faint but visible envelope come out the same in every variant (IoU > 0.87 with the single
+    point), the two rounded cells without a clear nucleus stay unstable in all of them.
+    - z_offsets: the point is also set in the slices shifted by these offsets (the same y and x).
+    - n_negatives: the centers of the nearest existing nuclei that are not fragments of the prompted one are added
+      as negative points, projected onto each prompted slice. This needs the result of the single point to find the
+      fragments and to drop the negatives that fall into the nucleus itself. They lower the confidence and fragment
+      the mask, and with five slices one nucleus leaked into its neighbor.
+
+    Args:
+        zarr_path: The OME-Zarr with the raw data.
+        points_path: The csv of the napari points layer (index, z, y, x).
+        points_level: The scale level of the raw the points are given in.
+        z_offsets: The slices to prompt, relative to the slice of the point.
+        n_negatives: The number of negative points per prompted slice.
+        num_workers: The number of threads for reading the existing nuclei.
+    """
+    from micro_sam.v2.util import precompute_image_embeddings
+
+    level, target = 1, "nuclei"
+    voxel_size = np.array(get_level_voxel_size(level))
+    raw = zarr.open_array(os.path.join(zarr_path, f"s{level}"), mode="r")
+    existing = zarr.open_group(get_watershed_path(level, target), mode="r")["segmentation"]
+    shape = raw.shape
+    points = np.loadtxt(points_path, delimiter=",", skiprows=1, ndmin=2)[:, 1:]
+    points = np.round(convert_points(points, points_level, level)).astype(int)
+    assert all((points[:, i] >= 0).all() and (points[:, i] < shape[i]).all() for i in range(3)), points
+
+    slabs = [slice(z, z + WS_BLOCK_SHAPE[0]) for z in range(0, shape[0], WS_BLOCK_SHAPE[0])]
+    with ThreadPoolExecutor(num_workers) as pool:
+        max_id = int(max(pool.map(lambda slab: existing[slab].max(), slabs)))
+
+    predictor, _ = get_predictor_and_segmenter(model_type=MODELS[target], segmentation_mode="apg", ndim=3)
+    out = zarr.open_group(get_prompted_nuclei_path(), mode="w", zarr_format=3)
+    segmentation = out.create_array(
+        "segmentation", shape=shape, dtype="uint64", chunks=WS_BLOCK_SHAPE, fill_value=0,
+        compressors=BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle"), dimension_names=["z", "y", "x"],
+    )
+    # The neighbors of a nucleus at the border of the crop have their center outside of it.
+    margin = (64, 128, 128)
+    records = []
+    for index, point in enumerate(points):
+        t0 = time.time()
+        nucleus_id = max_id + 1 + index
+        point = [int(p) for p in point]
+        starts = [min(max(p - cs // 2, 0), sh - cs) for p, cs, sh in zip(point, NUCLEUS_PROMPT_CROP_SHAPE, shape)]
+        bb = tuple(slice(start, start + cs) for start, cs in zip(starts, NUCLEUS_PROMPT_CROP_SHAPE))
+        local = tuple(int(p - start) for p, start in zip(point, starts))
+        outer = tuple(slice(max(b.start - m, 0), min(b.stop + m, sh)) for b, m, sh in zip(bb, margin, shape))
+        offset = np.array([b.start - o.start for b, o in zip(bb, outer)])
+        neighbors = existing[outer]
+        neighbors_crop = neighbors[tuple(slice(o, o + cs) for o, cs in zip(offset, NUCLEUS_PROMPT_CROP_SHAPE))]
+
+        volume = 255 - raw[bb]
+        embeddings = precompute_image_embeddings(predictor, volume, ndim=3, verbose=False)
+        with embeddings:
+            mask = segment_from_points(predictor, volume, embeddings, [(local[0], [local[1:]], [1])])
+            mask = get_component(mask, local)
+            ids, counts = np.unique(neighbors_crop[mask], return_counts=True)
+            sizes = dict(zip(*np.unique(neighbors, return_counts=True)))
+            fragments = [
+                int(i) for i, count in zip(ids, counts) if i > 0 and count > NUCLEUS_FRAGMENT_FRACTION * sizes[i]
+            ]
+            if tuple(z_offsets) != (0,) or n_negatives > 0:
+                centers = {
+                    i: center - offset for i, center in get_label_centers(neighbors, voxel_size).items()
+                    if i not in fragments
+                }
+                nearest = sorted(centers.values(), key=lambda c: (((c - np.array(local)) * voxel_size) ** 2).sum())
+                prompts = []
+                for z_offset in z_offsets:
+                    z = local[0] + z_offset
+                    prompt_points, prompt_labels = [local[1:]], [1]
+                    for _, y, x in nearest[:n_negatives]:
+                        inside = 0 <= y < volume.shape[1] and 0 <= x < volume.shape[2]
+                        if inside and not mask[z, y, x]:
+                            prompt_points.append((y, x))
+                            prompt_labels.append(0)
+                    prompts.append((z, prompt_points, prompt_labels))
+                mask = get_component(segment_from_points(predictor, volume, embeddings, prompts), local)
+
+        current = segmentation[bb]
+        free = mask & (current == 0)
+        current[free] = nucleus_id
+        segmentation[bb] = current
+        coords = np.nonzero(mask.any(axis=(1, 2)))[0]
+        z_extent = [int(coords.min()) + starts[0], int(coords.max()) + starts[0]] if len(coords) > 0 else None
+        covered = float((neighbors_crop[mask] > 0).mean()) if mask.any() else 0.0
+        records.append({
+            "id": nucleus_id, "point": point, "size": int(mask.sum()), "z_extent": z_extent,
+            "replaces": fragments, "fraction_in_existing": covered, "n_written": int(free.sum()),
+        })
+        print(
+            f"Nucleus {nucleus_id} at {records[-1]['point']} (ZYX of s{level}): {mask.sum()} voxels, slices "
+            f"{z_extent}, {covered:.2f} of it in existing nuclei, replaces {fragments}, in {time.time() - t0:.0f} s",
+            flush=True,
+        )
+    out.attrs.update({
+        "model_type": MODELS[target], "level": level, "voxel_size": list(voxel_size), "inverted": True,
+        "points_path": points_path, "points_level": points_level, "crop_shape": list(NUCLEUS_PROMPT_CROP_SHAPE),
+        "z_offsets": list(z_offsets), "n_negatives": n_negatives, "nuclei": get_watershed_path(level, target),
+        "max_existing_id": max_id, "objects": records,
+    })
+
+
+def _merge_nuclei(nuclei, prompted, removed):
+    nuclei = np.where(np.isin(nuclei, removed), 0, nuclei)
+    return np.where(prompted > 0, prompted, nuclei).astype("uint64")
+
+
+def merge_prompted_nuclei(num_workers):
+    """Merge the prompted nuclei of segment_nuclei_from_prompts into the nuclei of watershed_volume (s1).
+
+    The existing nuclei that a prompted nucleus replaces (its fragments, 'replaces' in the attributes of the prompted
+    nuclei) are removed and the prompted nuclei are written with their ids, so all other ids stay the same. The
+    result is the array 'segmentation' of get_merged_nuclei_path(). Its attributes list the removed ids and the
+    prompted nuclei; those of NUCLEUS_SEED_ONLY_POINTS have 'seed_only' and a comment, they are not full nuclei.
+
+    Args:
+        num_workers: The number of threads.
+    """
+    from functools import partial
+    from bioimage_py.copy import copy
+    from bioimage_py.wrapper import MultiTransformationSource
+
+    zarr.config.set({"threading.max_workers": num_workers})
+    nuclei = zarr.open_group(get_watershed_path(1, "nuclei"), mode="r")["segmentation"]
+    prompted_group = zarr.open_group(get_prompted_nuclei_path(), mode="r")
+    prompted = prompted_group["segmentation"]
+    objects = [dict(obj) for obj in prompted_group.attrs["objects"]]
+    removed = sorted(nucleus_id for obj in objects for nucleus_id in obj["replaces"])
+    for index, obj in enumerate(objects):
+        obj["seed_only"] = index in NUCLEUS_SEED_ONLY_POINTS
+        if obj["seed_only"]:
+            obj["comment"] = NUCLEUS_SEED_ONLY_COMMENT
+
+    out = zarr.open_group(get_merged_nuclei_path(), mode="w", zarr_format=3)
+    merged = out.create_array(
+        "segmentation", shape=nuclei.shape, dtype="uint64", chunks=nuclei.chunks, fill_value=0,
+        compressors=BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle"), dimension_names=["z", "y", "x"],
+    )
+    t0 = time.time()
+    source = MultiTransformationSource(partial(_merge_nuclei, removed=removed), nuclei, prompted, dtype="uint64")
+    copy(source, merged, block_shape=nuclei.chunks, num_workers=num_workers)
+    out.attrs.update({
+        "nuclei": get_watershed_path(1, "nuclei"), "prompted": get_prompted_nuclei_path(), "level": 1,
+        "voxel_size": list(get_level_voxel_size(1)), "removed": removed, "objects": objects,
+        "seed_only": [obj["id"] for obj in objects if obj["seed_only"]],
+    })
+    print(f"Merged {[obj['id'] for obj in objects]}, removed {removed}, in {time.time() - t0:.0f} s", flush=True)
+    for obj in objects:
+        if obj["seed_only"]:
+            print(f"Nucleus {obj['id']}: {NUCLEUS_SEED_ONLY_COMMENT}", flush=True)
+
+
+def get_label_boxes(labels, label_ids, num_workers):
+    """The bounding boxes (start and stop per axis) of some objects of a label volume, read in slabs."""
+    n_slices, step = labels.shape[0], WS_BLOCK_SHAPE[0]
+    slabs = [slice(z, min(z + step, n_slices)) for z in range(0, n_slices, step)]
+
+    def get_slab_boxes(slab):
+        data = labels[slab]
+        boxes = {}
+        for label_id in label_ids:
+            coords = np.nonzero(data == label_id)
+            if len(coords[0]) > 0:
+                offset = (slab.start, 0, 0)
+                boxes[label_id] = (
+                    [int(c.min()) + o for c, o in zip(coords, offset)],
+                    [int(c.max()) + 1 + o for c, o in zip(coords, offset)],
+                )
+        return boxes
+
+    boxes = {}
+    with ThreadPoolExecutor(num_workers) as pool:
+        for slab_boxes in pool.map(get_slab_boxes, slabs):
+            for label_id, (start, stop) in slab_boxes.items():
+                previous = boxes.get(label_id, (start, stop))
+                boxes[label_id] = (
+                    [min(a, b) for a, b in zip(previous[0], start)], [max(a, b) for a, b in zip(previous[1], stop)],
+                )
+    return boxes
+
+
+def join_nucleus_fragments(zarr_path, groups=NUCLEUS_FRAGMENT_GROUPS, num_workers=1):
+    """Make one object of each nucleus that is split into fragments in the nuclei of merge_prompted_nuclei (s1).
+
+    The nucleus of each group of fragments is segmented with the SAM2 video predictor of the nuclei model: the
+    center of each fragment (the voxel of it closest to its centroid) is a positive point in its slice of the
+    inverted raw, in a crop of NUCLEUS_PROMPT_CROP_SHAPE around the group, and the nucleus is made of the connected
+    components of the result that hold a point. The fragments of NUCLEUS_FRAGMENT_NO_PROMPT are not used as prompts.
+    The prompted nucleus and all fragments of the group get the lowest id of the group, so all other ids stay the
+    same; voxels of other nuclei are not overwritten. The result is the array 'segmentation' of
+    get_joined_nuclei_path(). Its attributes take over the prompted nuclei of the merged nuclei ('objects',
+    'seed_only') and list the groups ('joined').
+
+    On the four groups of NUCLEUS_FRAGMENT_GROUPS the prompts of single fragments give the same nucleus as all of
+    them together (IoU > 0.95) for three groups. The exception is the fragment 169, see NUCLEUS_FRAGMENT_NO_PROMPT.
+
+    Args:
+        zarr_path: The OME-Zarr with the raw data.
+        groups: The ids of the fragments of each nucleus.
+        num_workers: The number of threads.
+    """
+    from bioimage_py.copy import copy
+    from micro_sam.v2.util import precompute_image_embeddings
+
+    zarr.config.set({"threading.max_workers": num_workers})
+    level, target = 1, "nuclei"
+    voxel_size = np.array(get_level_voxel_size(level))
+    raw = zarr.open_array(os.path.join(zarr_path, f"s{level}"), mode="r")
+    merged_group = zarr.open_group(get_merged_nuclei_path(), mode="r")
+    nuclei = merged_group["segmentation"]
+    shape = raw.shape
+    all_ids = [nucleus_id for group in groups for nucleus_id in group]
+    assert len(set(all_ids)) == len(all_ids), groups
+    boxes = get_label_boxes(nuclei, all_ids, num_workers)
+    assert set(boxes) == set(all_ids), f"Not in the nuclei: {sorted(set(all_ids) - set(boxes))}"
+
+    out = zarr.open_group(get_joined_nuclei_path(), mode="w", zarr_format=3)
+    joined = out.create_array(
+        "segmentation", shape=shape, dtype="uint64", chunks=nuclei.chunks, fill_value=0,
+        compressors=BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle"), dimension_names=["z", "y", "x"],
+    )
+    copy(nuclei, joined, block_shape=nuclei.chunks, num_workers=num_workers)
+
+    predictor, _ = get_predictor_and_segmenter(model_type=MODELS[target], segmentation_mode="apg", ndim=3)
+    records = []
+    for group in groups:
+        t0 = time.time()
+        start = np.min([boxes[nucleus_id][0] for nucleus_id in group], axis=0)
+        stop = np.max([boxes[nucleus_id][1] for nucleus_id in group], axis=0)
+        assert all(stop - start <= NUCLEUS_PROMPT_CROP_SHAPE), f"The group {group} does not fit into the crop."
+        starts = [
+            int(min(max(center - cs // 2, 0), sh - cs))
+            for center, cs, sh in zip((start + stop) // 2, NUCLEUS_PROMPT_CROP_SHAPE, shape)
+        ]
+        bb = tuple(slice(st, st + cs) for st, cs in zip(starts, NUCLEUS_PROMPT_CROP_SHAPE))
+        labels = joined[bb]
+        centers = get_label_centers(labels, voxel_size)
+        prompt_ids = [nucleus_id for nucleus_id in group if nucleus_id not in NUCLEUS_FRAGMENT_NO_PROMPT]
+        prompts = [(centers[nucleus_id][0], [centers[nucleus_id][1:]], [1]) for nucleus_id in prompt_ids]
+
+        volume = 255 - raw[bb]
+        embeddings = precompute_image_embeddings(predictor, volume, ndim=3, verbose=False)
+        with embeddings:
+            mask = segment_from_points(predictor, volume, embeddings, prompts)
+        mask = get_components(mask, [centers[nucleus_id] for nucleus_id in prompt_ids])
+
+        fragments = np.isin(labels, group)
+        other = int((mask & (labels > 0) & ~fragments).sum())
+        fractions = {str(nucleus_id): float(mask[labels == nucleus_id].mean()) for nucleus_id in group}
+        nucleus = (mask & (labels == 0)) | fragments
+        new_id = min(group)
+        labels[nucleus] = new_id
+        joined[bb] = labels
+        coords = np.nonzero(nucleus.any(axis=(1, 2)))[0]
+        record = {
+            "id": new_id, "fragments": [int(nucleus_id) for nucleus_id in group],
+            "prompts": {str(nucleus_id): [int(c + st) for c, st in zip(centers[nucleus_id], starts)]
+                        for nucleus_id in prompt_ids},
+            "size": int(nucleus.sum()), "size_prompted": int(mask.sum()), "size_fragments": int(fragments.sum()),
+            "fragment_fraction_in_prompted": fractions,
+            "n_voxels_in_other_nuclei": other,
+            "z_extent": [int(coords.min()) + starts[0], int(coords.max()) + starts[0]],
+            "comments": {str(i): NUCLEUS_FRAGMENT_NO_PROMPT[i] for i in group if i in NUCLEUS_FRAGMENT_NO_PROMPT},
+        }
+        records.append(record)
+        print(
+            f"Nucleus {new_id} from the fragments {list(group)} (prompts at {prompt_ids}): {record['size']} voxels "
+            f"({record['size_fragments']} in the fragments, {record['size_prompted']} prompted), slices "
+            f"{record['z_extent']}, fraction of the fragments in the prompted nucleus "
+            f"{({k: round(v, 3) for k, v in record['fragment_fraction_in_prompted'].items()})}, {other} prompted "
+            f"voxels in other nuclei (left as they are), in {time.time() - t0:.0f} s", flush=True,
+        )
+        for comment in record["comments"].items():
+            print(f"  Fragment {comment[0]}: {comment[1]}", flush=True)
+    out.attrs.update({
+        "nuclei": get_merged_nuclei_path(), "level": level, "voxel_size": list(voxel_size),
+        "model_type": MODELS[target], "inverted": True, "crop_shape": list(NUCLEUS_PROMPT_CROP_SHAPE),
+        "objects": merged_group.attrs["objects"], "seed_only": merged_group.attrs["seed_only"],
+        "removed": merged_group.attrs["removed"], "joined": records,
+    })
+
+
+def get_border_seed_check_path():
+    return os.path.join(VOLUME_PREDICTION_DIR, f"cells_s{BORDER_SEED_CHECK_LEVEL}_border_seed_check.zarr")
+
+
+def get_tissue_mask(zarr_path, z_range):
+    """A tissue mask of the slices z_range of TISSUE_LEVEL from the texture of the raw alone.
+
+    The resin is smooth and the cells are not: the local standard deviation of the raw in a window of
+    TISSUE_STD_SIZE px in the plane (the sections differ in brightness) is thresholded with Otsu over the whole
+    volume, and each slice is closed, filled (the nuclei are smooth as well) and opened, which removes the seams of
+    the acquisition tiles and the cracks of the resin.
+    """
+    from skimage.filters import threshold_otsu
+    from skimage.morphology import disk
+
+    raw = zarr.open_array(os.path.join(zarr_path, f"s{TISSUE_LEVEL}"), mode="r")[:].astype("float32")
+    size = (1, TISSUE_STD_SIZE, TISSUE_STD_SIZE)
+    mean = ndimage.uniform_filter(raw, size)
+    std = np.sqrt(np.maximum(ndimage.uniform_filter(raw * raw, size) - mean * mean, 0))
+    textured = std[z_range[0]:z_range[1]] > threshold_otsu(std[::2, ::2, ::2])
+    tissue = np.zeros(textured.shape, dtype=bool)
+    for z, plane in enumerate(textured):
+        plane = ndimage.binary_fill_holes(ndimage.binary_closing(plane, disk(TISSUE_CLOSING_RADIUS)))
+        tissue[z] = ndimage.binary_opening(plane, disk(TISSUE_OPENING_RADIUS))
+    return tissue
+
+
+def check_border_seed(zarr_path, z_ranges, num_workers):
+    """Test the background seed of the cell segmentation on slabs of s0 over the full Y and X extent.
+
+    The seeds (expanded nuclei) and the closed mask are those of segment_cells_volume, so only the watershed runs:
+    - reference: the watershed of the whole slab without a background seed.
+    - whole slab: the same with the mask voxels on the Y and X faces as seed, its region set to zero. It shows what
+      the seed does: which cells lose volume, and whether a voxel moves from one cell to another.
+    - block-wise: the stages 'background' and 'segmentation' of segment_cells_blockwise with the blocks and the halo
+      of segment_cells_volume (the face seed propagated over two passes), compared to the whole slab.
+    The block-wise result is then compared to the tissue mask from the texture of the raw (get_tissue_mask), on the
+    grid of TISSUE_LEVEL (the first voxel of each block): the resin that is still in a cell, and the tissue that
+    went to the background, in total and more than TISSUE_SURFACE_MARGIN px inside the tissue. The surface is left
+    out there since the window of the texture widens the tissue, and since the cells have protrusions the cells
+    model does not mark as foreground. The largest pieces of tissue in the background are listed, those of the
+    size of a cell are cells without a nucleus seed.
+
+    The block-wise segmentation and the region of the face seed are written into the slab of two arrays of s0
+    (get_border_seed_check_path()), the numbers into its attributes. View them with
+    'downsample_segmentations --names cells_border_seed' and view_beghin_em_volume.py.
+    """
+    import bioimage_cpp as bic
+    from skimage.morphology import disk
+
+    level = BORDER_SEED_CHECK_LEVEL
+    zarr.config.set({"threading.max_workers": num_workers})
+    voxel_size = get_level_voxel_size(level)
+    source = zarr.open_group(get_cell_volume_path(level), mode="r")
+    boundary_source = zarr.open_group(get_volume_prediction_path(level, "cells"), mode="r")["boundary"]
+    shape = tuple(boundary_source.shape)
+    out = zarr.open_group(get_border_seed_check_path(), mode="a", zarr_format=3)
+    compressor = BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle")
+    arrays = {
+        name: out.require_array(
+            name, shape=shape, dtype=dtype, chunks=CELL_VOLUME_CHUNK_SHAPE, compressors=compressor, fill_value=0,
+            dimension_names=["z", "y", "x"],
+        ) for name, dtype in (("segmentation", "uint64"), ("background", "uint8"))
+    }
+    factor = [f2 // f for f2, f in zip(get_level_factor(TISSUE_LEVEL), get_level_factor(level))]
+    cubic_um = np.prod(voxel_size) / 1e9
+
+    for z0, z1 in z_ranges:
+        t0 = time.time()
+        slab = slice(z0, z1)
+        seeds, mask = source["seeds"][slab].astype("uint32"), source["mask"][slab].astype(bool)
+        boundary = boundary_source[slab].astype("float32")
+        print(f"s{level} z {z0}:{z1}: read in {time.time() - t0:.0f} s, mask {mask.mean():.3f} of the slab", flush=True)
+
+        t0 = time.time()
+        reference = bic.segmentation.watershed(boundary, seeds, mask=mask)
+        face_seeds = seeds.copy()
+        add_border_seed(face_seeds, mask)
+        whole = bic.segmentation.watershed(boundary, face_seeds, mask=mask)
+        del face_seeds
+        region = whole == CELL_BACKGROUND_SEED_ID
+        whole[region] = 0
+        n_ids = int(reference.max()) + 1
+        size_before, size_after = np.bincount(reference.ravel(), minlength=n_ids), np.bincount(whole.ravel())
+        size_after = np.concatenate([size_after, np.zeros(n_ids - len(size_after), dtype=size_after.dtype)])
+        ids = np.nonzero(size_before)[0][1:]
+        shrunk = [
+            (int(i), round(float(size_before[i] * cubic_um)), round(float(size_after[i] * cubic_um)))
+            for i in ids if size_after[i] < 0.99 * size_before[i]
+        ]
+        n_moved = int(((reference != whole) & (whole > 0)).sum())
+        stats = {
+            "mask_fraction": float(mask.mean()), "region_fraction_of_mask": float(region.sum() / mask.sum()),
+            "n_cells": len(ids), "shrunk_cells_id_before_after_um3": shrunk, "n_voxels_moved_between_cells": n_moved,
+            "max_cell_um3_before": float(size_before[ids].max() * cubic_um),
+            "max_cell_um3_after": float(size_after[ids].max() * cubic_um),
+        }
+        print(
+            f"  whole slab ({time.time() - t0:.0f} s): the face seed takes {stats['region_fraction_of_mask']:.3f} of "
+            f"the mask; {len(shrunk)} of {len(ids)} cells lose more than 1% (id, um^3 before, after): {shrunk}; "
+            f"{n_moved} voxels move from one cell to another; largest cell {stats['max_cell_um3_before']:.0f} -> "
+            f"{stats['max_cell_um3_after']:.0f} um^3", flush=True,
+        )
+        del reference
+
+        t0 = time.time()
+        outputs = {
+            "seeds": seeds, "mask": mask.astype("uint8"), "background": np.zeros(seeds.shape, "uint8"),
+            "segmentation": np.zeros(seeds.shape, "uint64"),
+        }
+        segment_cells_blockwise(
+            None, boundary, None, outputs, voxel_size, num_workers, stages=("background", "segmentation"),
+        )
+        blockwise = outputs["segmentation"]
+        stats["blockwise_differs_fraction_of_mask"] = float((blockwise != whole)[mask].mean())
+        print(
+            f"  block-wise ({time.time() - t0:.0f} s): differs from the whole slab in "
+            f"{stats['blockwise_differs_fraction_of_mask']:.6f} of the mask", flush=True,
+        )
+        arrays["segmentation"][slab] = blockwise
+        arrays["background"][slab] = outputs["background"]
+        del boundary, seeds, outputs
+
+        # On the grid of the tissue level: the first voxel of each block of the factor.
+        z_tissue = range(-(-z0 // factor[0]), -(-z1 // factor[0]))
+        sub = (slice(z_tissue.start * factor[0] - z0, None, factor[0]),)
+        sub = sub + tuple(slice(None, None, f) for f in factor[1:])
+        tissue = get_tissue_mask(zarr_path, (z_tissue.start, z_tissue.stop))
+        cells, mask = blockwise[sub] > 0, mask[sub]
+        background = mask & ~cells
+        del blockwise, whole, region
+        cells_before = source["segmentation"][slab][sub] > 0
+        core = np.stack([ndimage.binary_erosion(plane, disk(TISSUE_SURFACE_MARGIN)) for plane in tissue])
+        far = ~np.stack([ndimage.binary_dilation(plane, disk(TISSUE_SURFACE_MARGIN)) for plane in tissue])
+        stats.update({
+            "tissue_fraction": float(tissue.mean()),
+            "cells_outside_tissue_before": float((cells_before & ~tissue).sum() / cells_before.sum()),
+            "cells_outside_tissue_after": float((cells & ~tissue).sum() / cells.sum()),
+            "cells_far_outside_tissue_before": float((cells_before & far).sum() / cells_before.sum()),
+            "cells_far_outside_tissue_after": float((cells & far).sum() / cells.sum()),
+            "resin_mask_to_background": float((background & ~tissue).sum() / (mask & ~tissue).sum()),
+            "tissue_in_background": float((background & tissue).sum() / tissue.sum()),
+            "tissue_core_in_background": float((background & core).sum() / core.sum()),
+        })
+        print(
+            f"  texture: tissue {stats['tissue_fraction']:.3f} of the slab; cell voxels outside the tissue "
+            f"{stats['cells_outside_tissue_before']:.4f} -> {stats['cells_outside_tissue_after']:.4f}, more than "
+            f"{TISSUE_SURFACE_MARGIN} px outside {stats['cells_far_outside_tissue_before']:.4f} -> "
+            f"{stats['cells_far_outside_tissue_after']:.4f}; {stats['resin_mask_to_background']:.4f} of the mask "
+            f"outside the tissue is background now; tissue in the background {stats['tissue_in_background']:.4f}, "
+            f"of the tissue more than {TISSUE_SURFACE_MARGIN} px inside {stats['tissue_core_in_background']:.4f}",
+            flush=True,
+        )
+        # The pieces of tissue in the background, as position in voxels of s1 (the level of the nuclei).
+        tissue_voxel = np.prod(get_level_voxel_size(TISSUE_LEVEL)) / 1e9
+        to_s1 = [f2 // f1 for f2, f1 in zip(get_level_factor(TISSUE_LEVEL), get_level_factor(1))]
+        labels, n_labels = ndimage.label(background & core)
+        sizes = np.bincount(labels.ravel())[1:]
+        pieces = []
+        for label_id in np.argsort(sizes)[::-1][:5] + 1 if n_labels > 0 else []:
+            center = np.array(ndimage.center_of_mass(labels == label_id)) + [z_tissue.start, 0, 0]
+            pieces.append({
+                "um3": round(float(sizes[label_id - 1] * tissue_voxel)),
+                "center_s1": [int(c * f) for c, f in zip(center, to_s1)],
+            })
+        stats["tissue_core_in_background_pieces"] = pieces
+        print(f"  largest pieces of tissue (more than {TISSUE_SURFACE_MARGIN} px inside) in the background: {pieces}",
+              flush=True)
+        slabs = dict(out.attrs.get("slabs", {}))
+        slabs[f"{z0}:{z1}"] = stats
+        out.attrs["slabs"] = slabs
+    out.attrs.update({
+        "level": level, "seeds_and_mask": get_cell_volume_path(level), "block_shape": list(CELL_VOLUME_BLOCK_SHAPE),
+        "ws_halo": list(CELL_VOLUME_WS_HALO),
+    })
 
 
 def check_cells_volume(level=0, num_workers=1, block_shapes=((32, 256, 256),), ws_halos=(CELL_VOLUME_WS_HALO,)):
@@ -2211,11 +2931,45 @@ def main():
     cells_volume = subparsers.add_parser("segment_cells_volume", help="Segment the cells of a whole level block-wise.")
     cells_volume.add_argument("--level", type=int, default=0)
     cells_volume.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
+    cells_volume.add_argument("--border_seed", action="store_true", help="Seed the resin from the Y and X faces.")
+    cells_volume.add_argument(
+        "--nuclei", default="watershed", choices=["watershed", "merged", "joined"],
+        help="The nuclei: of watershed_volume, merge_prompted_nuclei or join_nucleus_fragments.",
+    )
+
+    merge = subparsers.add_parser(
+        "merge_prompted_nuclei", help="Merge the prompted nuclei into the nuclei of s1 and remove their fragments.",
+    )
+    merge.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
+
+    join = subparsers.add_parser(
+        "join_nucleus_fragments", help="Make one object of each nucleus that is split into fragments (prompted).",
+    )
+    join.add_argument("--zarr_path", default=OUTPUT_PATH)
+    join.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
+
+    border_seed = subparsers.add_parser(
+        "check_border_seed", help="Test the background seed of the cells on slabs of s0 and against the raw texture.",
+    )
+    border_seed.add_argument("--zarr_path", default=OUTPUT_PATH)
+    border_seed.add_argument("--z_ranges", type=int, nargs="+", default=[368, 496], help="Start and stop, repeated.")
+    border_seed.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
 
     pyramids = subparsers.add_parser(
         "downsample_segmentations", help="Write the pyramids of the cell and nucleus segmentations up to s3.",
     )
     pyramids.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
+    pyramids.add_argument("--names", nargs="+", default=None, help="Only these segmentations, by default all.")
+
+    prompted = subparsers.add_parser(
+        "segment_nuclei_from_prompts", help="Segment missed nuclei at s1 from the points of a napari points layer.",
+    )
+    prompted.add_argument("--zarr_path", default=OUTPUT_PATH)
+    prompted.add_argument("--points_path", default=NUCLEUS_POINTS_PATH)
+    prompted.add_argument("--points_level", type=int, default=NUCLEUS_POINTS_LEVEL)
+    prompted.add_argument("--z_offsets", type=int, nargs="+", default=[0], help="Slices to prompt, relative.")
+    prompted.add_argument("--n_negatives", type=int, default=0, help="Negative points from the nearest nuclei.")
+    prompted.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
 
     check_volume = subparsers.add_parser(
         "check_cells_volume", help="Compare the block-wise cell segmentation to watershed_cell_crop on the cell crop.",
@@ -2291,9 +3045,24 @@ def main():
     elif args.task == "watershed_cell_crop":
         watershed_cell_crop(args.levels, args.closing_radius)
     elif args.task == "segment_cells_volume":
-        segment_cells_volume(args.level, args.num_workers)
+        segment_cells_volume(
+            args.level, args.num_workers, border_seed=args.border_seed, nuclei=args.nuclei,
+        )
+    elif args.task == "join_nucleus_fragments":
+        join_nucleus_fragments(args.zarr_path, num_workers=args.num_workers)
+    elif args.task == "merge_prompted_nuclei":
+        merge_prompted_nuclei(args.num_workers)
+    elif args.task == "check_border_seed":
+        assert len(args.z_ranges) % 2 == 0, args.z_ranges
+        z_ranges = [tuple(args.z_ranges[i:i + 2]) for i in range(0, len(args.z_ranges), 2)]
+        check_border_seed(args.zarr_path, z_ranges, args.num_workers)
     elif args.task == "downsample_segmentations":
-        downsample_segmentations(args.num_workers)
+        downsample_segmentations(args.num_workers, names=args.names)
+    elif args.task == "segment_nuclei_from_prompts":
+        segment_nuclei_from_prompts(
+            args.zarr_path, args.points_path, args.points_level, tuple(args.z_offsets), args.n_negatives,
+            args.num_workers,
+        )
     elif args.task == "check_cells_volume":
         assert len(args.block_shapes) % 3 == 0 and len(args.ws_halos) == len(args.block_shapes)
         check_cells_volume(
