@@ -1,129 +1,61 @@
-"""Independent segmentation of the frames in a 2D time series."""
-
 from typing import Optional, Tuple, Union
 
-import napari
 import numpy as np
+
+import napari
+
 import torch
-from magicgui import magic_factory
 
 from .. import util
 from . import _widgets as widgets
-from . import util as vutil
-from ._annotator import _AnnotatorBase
-from ._state import AnnotatorState
 from ._tooltips import get_tooltip
-
-
-@magic_factory(call_button="Segment Frame [S]")
-def segment_timeseries_frame(viewer: "napari.viewer.Viewer") -> None:
-    """Segment the current frame's prompts, assigning independent instance IDs."""
-    return widgets._segment_slice(viewer, unique_ids=True)
-
-
-@magic_factory(call_button="Clear Annotations [Shift + C]")
-def clear_frames(viewer: "napari.viewer.Viewer", all_frames: bool = True) -> None:
-    """Clear prompts and interactive segmentations for all or the current frame."""
-    if all_frames:
-        vutil.clear_annotations(viewer)
-    else:
-        layer = viewer.layers["current_object"]
-        frame = int(round(layer.world_to_data(viewer.dims.point)[0]))
-        vutil.clear_annotations_slice(viewer, i=frame)
+from ._state import AnnotatorState
+from .annotator_3d import Annotator3d
+from .util import _initialize_parser, _sync_embedding_widget
 
 
 class AutoSegmentTimeSeriesWidget(widgets.AutoSegmentWidget):
-    """Apply 2D automatic segmentation without merging or tracking across time."""
-
     timeseries = True
 
     def _create_volumetric_switch(self):
-        # Reuse the stack controls of AutoSegmentWidget, with temporal semantics.
         self.apply_to_volume = True
         return self._add_boolean_param(
             "apply_to_volume", self.apply_to_volume, title="Apply to All Frames",
             tooltip=get_tooltip("timeseries", "apply_to_all_frames"),
         )
 
-    def _run_frames(self, kwargs, i=None):
-        widgets._validate_layers(self._viewer, automatic_segmentation=True)
+    def _run_segmentation_3d(self, kwargs):
+        # Segment each frame on its own, without merging objects across frames.
         layer = self._viewer.layers["auto_segmentation"]
-        segmentation = np.zeros_like(layer.data) if i is None else layer.data.copy()
-        frames = range(segmentation.shape[0]) if i is None else [i]
-        offset = int(segmentation.max())
-        kwargs = dict(kwargs)
-        if not self.with_decoder:
-            kwargs["min_mask_region_area"] = self.min_object_size
+        segmentation = np.zeros_like(layer.data)
+        pbar, pbar_signals = widgets._create_pbar_for_threadworker()
+        pbar_signals.pbar_total.emit(segmentation.shape[0])
+        pbar_signals.pbar_description.emit("Segment time series")
 
-        pbar, signals = widgets._create_pbar_for_threadworker()
-        signals.pbar_total.emit(len(frames))
-        signals.pbar_description.emit("Segment time series")
-        try:
-            for frame in frames:
-                seg = widgets._instance_segmentation_impl(self.min_object_size, i=frame, **kwargs)
-                # Each frame's instances have distinct IDs, including after correcting a single frame.
-                seg = seg.astype(segmentation.dtype, copy=True)
-                seg_max = int(seg.max())
-                seg[seg != 0] += offset
-                offset += seg_max
-                segmentation[frame] = seg
-                signals.pbar_update.emit(1)
-        finally:
-            signals.pbar_stop.emit()
+        offset = 0
+        for i in range(segmentation.shape[0]):
+            seg = widgets._instance_segmentation_impl(self.min_object_size, i=i, **kwargs)
+            segmentation[i] = seg
+            segmentation[i][seg != 0] += offset
+            offset = max(offset, int(segmentation[i].max()))
+            pbar_signals.pbar_update.emit(1)
+        pbar_signals.pbar_stop.emit()
 
-        if not np.any(segmentation if i is None else segmentation[i]):
+        if offset == 0:
             self._empty_segmentation_warning()
         layer.data = segmentation
         layer.refresh()
 
-    def _run_segmentation_2d(self, kwargs, i=None):
-        return self._run_frames(kwargs, i=i)
 
-    def _run_segmentation_3d(self, kwargs):
-        return self._run_frames(kwargs)
-
-
-class AnnotatorTimeSeries(_AnnotatorBase):
-    """Napari annotator for grayscale (T, Y, X) or RGB (T, Y, X, C) stacks."""
-
+class AnnotatorTimeSeries(Annotator3d):
     def _get_widgets(self):
+        autosegment = AutoSegmentTimeSeriesWidget(self._viewer, with_decoder=self._with_decoder, volumetric=True)
         return {
-            "segment": segment_timeseries_frame(),
-            "autosegment": AutoSegmentTimeSeriesWidget(
-                self._viewer, with_decoder=AnnotatorState().decoder is not None, volumetric=True,
-            ),
+            "segment": widgets.segment_slice(),
+            "autosegment": autosegment,
             "commit": widgets.commit(),
-            "clear": clear_frames(),
+            "clear": widgets.clear_volume(),
         }
-
-    def __init__(self, viewer: "napari.viewer.Viewer", reset_state: bool = True) -> None:
-        state = AnnotatorState()
-        if reset_state:
-            state.reset_state()
-            state.skip_recomputing_embeddings = False
-        super().__init__(viewer=viewer, ndim=3)
-        state.annotator = self
-        self._set_time_axis()
-
-    def _set_time_axis(self):
-        self._viewer.dims.ndisplay = 2
-        for axis, label in zip(range(self._viewer.dims.ndim - 3, self._viewer.dims.ndim), ("time", "y", "x")):
-            self._viewer.dims.set_axis_label(axis, label)
-
-    def _update_image(self, segmentation_result=None):
-        state = AnnotatorState()
-        if state.skip_recomputing_embeddings or state.image_shape is None:
-            return
-        super()._update_image(segmentation_result=segmentation_result)
-        # Cache predictions per frame so settings can be adjusted without repeating inference.
-        if state.decoder is not None:
-            state.amg_state = vutil._load_is_state(state.embedding_path)
-        else:
-            state.amg_state = vutil._load_amg_state(state.embedding_path)
-        image = self._viewer.layers[state.get_image_name(self._viewer)]
-        for name in ("current_object", "auto_segmentation", "committed_objects", "point_prompts", "prompts"):
-            self._viewer.layers[name].translate = image.translate
-        self._set_time_axis()
 
 
 def annotator_timeseries(
@@ -141,79 +73,74 @@ def annotator_timeseries(
     device: Optional[Union[str, torch.device]] = None,
     prefer_decoder: bool = True,
 ) -> Optional["napari.viewer.Viewer"]:
-    """Start independent segmentation of a 2D time series.
+    """Start the annotation tool for segmenting each frame of a 2d time series independently.
 
     Args:
-        image: Image stack in (T, Y, X) or RGB(A) (T, Y, X, C) order.
-        embedding_path: Path for caching embeddings, or precomputed image embeddings.
-        segmentation_result: Optional initial labels in (T, Y, X) order, loaded into committed_objects.
+        image: The time series in (T, Y, X) or RGB (T, Y, X, C) order.
+        embedding_path: Filepath where to save the embeddings
+            or the precomputed image embeddings computed by `precompute_image_embeddings`.
+        segmentation_result: An initial segmentation to load as the 'committed_objects' layer.
         model_type: The Segment Anything model to use.
-        tile_shape: Optional tile shape for large images.
-        halo: Overlap between tiles.
-        return_viewer: Return the viewer instead of starting the Qt event loop.
-        viewer: An existing napari viewer to use.
-        precompute_amg_state: Precompute automatic segmentation predictions in embedding_path.
-        checkpoint_path: Path to custom SAM weights.
-        decoder_path: Path to custom instance segmentation decoder weights.
-        device: Computational device. By default, select the best available device.
-        prefer_decoder: Use the instance segmentation decoder when available.
+        tile_shape: Shape of tiles for tiled embedding prediction.
+        halo: Shape of the overlap between tiles.
+        return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
+        viewer: The viewer to which the Segment Anything functionality should be added.
+        precompute_amg_state: Whether to precompute the state for automatic segmentation.
+        checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
+        decoder_path: Path to a custom decoder checkpoint from which to load the `micro-sam` decoder.
+        device: The computational device to use for the SAM model.
+        prefer_decoder: Whether to use decoder based instance segmentation if the model has a decoder.
 
     Returns:
-        The napari viewer if return_viewer is True.
-
-    Labels are unique across frames and represent independent instances, without track identities.
+        The napari viewer, only returned if `return_viewer=True`.
     """
-    rgb = image.ndim == 4 and image.shape[-1] in (3, 4)
-    if (image.ndim != 3 and not rgb) or any(size == 0 for size in image.shape):
-        raise ValueError("Expected a time series of shape (T, Y, X) or RGB(A) (T, Y, X, C).")
-    shape = image.shape[:-1] if rgb else image.shape
-    if segmentation_result is not None and segmentation_result.shape != shape:
-        raise ValueError(f"Expected segmentation shape {shape}, got {segmentation_result.shape}.")
-
     state = AnnotatorState()
-    state.reset_state()
-    state.skip_recomputing_embeddings = False
-    state.image_shape = shape
+    state.image_shape = image.shape[:-1] if image.ndim == 4 else image.shape
     state.initialize_predictor(
-        image, model_type=model_type, save_path=embedding_path, ndim=3,
-        tile_shape=tile_shape, halo=halo, precompute_amg_state=precompute_amg_state,
+        image, model_type=model_type, save_path=embedding_path,
+        halo=halo, tile_shape=tile_shape, ndim=3, precompute_amg_state=precompute_amg_state,
         checkpoint_path=checkpoint_path, decoder_path=decoder_path,
         device=device, prefer_decoder=prefer_decoder, use_cli=True,
     )
 
     if viewer is None:
         viewer = napari.Viewer()
-    layer = viewer.add_image(image, name="image", rgb=rgb)
-    state.image_name = layer.name
-    state.image_scale = tuple(layer.scale)
+
+    viewer.add_image(image, name="image")
     annotator = AnnotatorTimeSeries(viewer, reset_state=False)
     annotator._update_image(segmentation_result=segmentation_result)
+
     viewer.window.add_dock_widget(annotator)
-    vutil._sync_embedding_widget(
+    _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=model_type if checkpoint_path is None else state.predictor.model_type,
         save_path=embedding_path, checkpoint_path=checkpoint_path,
         device=device, tile_shape=tile_shape, halo=halo,
     )
-    vutil._sync_autosegment_widget(state.widgets["autosegment"], model_type, checkpoint_path)
+
     if return_viewer:
         return viewer
+
     napari.run()
 
 
 def main():
     """@private"""
-    parser = vutil._initialize_parser(description="Segment the frames of a 2D time series independently.")
+    parser = _initialize_parser(description="Segment each frame of a 2d time series independently.")
     args = parser.parse_args()
     image = util.load_image_data(args.input, key=args.key)
-    segmentation = None if args.segmentation_result is None else util.load_image_data(
-        args.segmentation_result, key=args.segmentation_key,
-    )
+
+    if args.segmentation_result is None:
+        segmentation_result = None
+    else:
+        segmentation_result = util.load_image_data(args.segmentation_result, key=args.segmentation_key)
+
     annotator_timeseries(
-        image, embedding_path=args.embedding_path, segmentation_result=segmentation,
+        image, embedding_path=args.embedding_path, segmentation_result=segmentation_result,
         model_type=args.model_type, tile_shape=args.tile_shape, halo=args.halo,
-        checkpoint_path=args.checkpoint, decoder_path=args.decoder_path, device=args.device,
+        checkpoint_path=args.checkpoint, device=args.device,
         precompute_amg_state=args.precompute_amg_state, prefer_decoder=args.prefer_decoder,
+        decoder_path=args.decoder_path,
     )
 
 

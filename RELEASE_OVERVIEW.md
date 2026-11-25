@@ -1,5 +1,25 @@
 # Release Overview
 
+**New in version 1.8.14**
+
+Fix prompt clearing with napari 0.9.1 to prevent crashes when toggling labels after commit. Preserve point labels and track IDs when clearing individual slices.
+
+**New in version 1.8.13**
+
+Fix pip installations that used a stale Segment Anything release with an incorrect PyTorch image resize. Pip now installs `segment-anything-py>=1.0.1`.
+
+**New in version 1.8.12**
+
+Support napari 0.9, pin `napari<0.10`, and fix the tracking annotator when prompt layers already exist and when selecting box prompts.
+
+**New in version 1.8.11**
+
+Fix stale embeddings and add AIS tests for the BioImage.IO/BioEngine model export.
+
+**New in version 1.8.10**
+
+Support automatic instance segmentation in the bioimage.io model export and add a code of conduct and contributing guide.
+
 **New in version 1.8.9**
 
 Pin `napari<0.9` and minor updates to joint training.

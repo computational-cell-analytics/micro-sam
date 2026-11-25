@@ -6,10 +6,12 @@ dependencies:
     - bioimageio.core >=0.11
     - imagecodecs
     - magicgui
-    - napari >=0.7.1,<0.9
+    - napari >=0.7.1,<0.10
     - natsort
     - pip
     - pooch
+    # pydantic 2.14 breaks the bioimageio.spec wrap serializers that model export uses.
+    - pydantic <2.14
     - pyqt6
     - python-xxhash
     - python-elf >=0.9
@@ -22,7 +24,7 @@ dependencies:
     # or, to enforce a CPU installation, change to
     # - "pytorch=*=cpu*"
     - pytorch >=2.5
-    - segment-anything
+    - segment-anything >=1.0.1
     - torchvision
     - torch_em >=0.9
     - tqdm

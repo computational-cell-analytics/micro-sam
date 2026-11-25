@@ -55,3 +55,4 @@ If you are using `micro_sam` in your research please cite
 - and the original [Segment Anything publication](https://arxiv.org/abs/2304.02643).
 - If you use a `vit-tiny` models, please also cite [Mobile SAM](https://arxiv.org/abs/2306.14289).
 - If you use automatic tracking, please also cite [Trackastra](https://arxiv.org/abs/2405.15700).
+- If you use automatic prompt generation (APG), please also cite [our APG paper](https://openreview.net/forum?id=xFO3DFZN45).

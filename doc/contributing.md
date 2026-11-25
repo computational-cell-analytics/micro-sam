@@ -37,9 +37,9 @@ We use [conda](https://docs.conda.io/en/latest/) to [manage our environments](ht
 
 Now you can create the environment, install user and developer dependencies, and micro-sam as an editable installation:
 ```bash
-conda env create environment.yaml
+conda env create -f environment.yaml
 conda activate sam
-python -m pip install requirements-dev.txt
+python -m pip install -r requirements-dev.txt
 python -m pip install -e .
 ```
 
@@ -55,7 +55,7 @@ $ git checkout -b my-new-feature
 
 We use [google style python docstrings](https://sphinxcontrib-napoleon.readthedocs.io/en/latest/example_google.html) to create documentation for all new code.
 
-You may also find it helpful to look at this [developer guide](#for-developers), which explains the organization of the micro-sam code.
+You may also find it helpful to look at the [Python library documentation](#using-the-python-library), which explains the organization of the micro-sam code.
 
 ## Testing
 

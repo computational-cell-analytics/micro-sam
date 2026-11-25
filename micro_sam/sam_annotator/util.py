@@ -117,8 +117,10 @@ def _initialize_parser(description, with_segmentation_result=True, with_instance
 
 def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
     """@private"""
-    viewer.layers["point_prompts"].data = []
-    viewer.layers["point_prompts"].refresh()
+    point_layer = viewer.layers["point_prompts"]
+    point_layer.selected_data = set(range(len(point_layer.data)))
+    point_layer.remove_selected()
+    point_layer.refresh()
     if "prompts" in viewer.layers:
         # Select all prompts and then remove them.
         # This is how it worked before napari 0.5.
@@ -134,10 +136,10 @@ def clear_annotations(viewer: napari.Viewer, clear_segmentations=True) -> None:
 
 def clear_annotations_slice(viewer: napari.Viewer, i: int, clear_segmentations=True) -> None:
     """@private"""
-    point_prompts = viewer.layers["point_prompts"].data
-    point_prompts = point_prompts[point_prompts[:, 0] != i]
-    viewer.layers["point_prompts"].data = point_prompts
-    viewer.layers["point_prompts"].refresh()
+    point_layer = viewer.layers["point_prompts"]
+    point_layer.selected_data = set(np.flatnonzero(point_layer.data[:, 0] == i))
+    point_layer.remove_selected()
+    point_layer.refresh()
     if "prompts" in viewer.layers:
         prompts = viewer.layers["prompts"].data
         prompts = [prompt for prompt in prompts if not (prompt[:, 0] == i).all()]
