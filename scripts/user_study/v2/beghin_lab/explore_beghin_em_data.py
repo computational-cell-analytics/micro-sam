@@ -55,6 +55,10 @@ segment_cells_volume: the same as watershed_cell_crop for a whole scale level (s
 expanded nuclei of watershed_volume (seeds), the closed foreground mask of the cell predictions of predict_volume
 (mask) and the seeded watershed on their boundary prediction (segmentation).
 
+downsample_segmentations: write the pyramids of the cell segmentation of segment_cells_volume (from s0) and of the
+nuclei of watershed_volume (from s1) up to s3, block-wise, taking the first voxel of each block as the label pyramids
+of the OME-Zarr do. View them with view_beghin_em_volume.py.
+
 check_cells_volume: run the block-wise stages of segment_cells_volume on the inputs of the cell crop and compare them
 to the result of watershed_cell_crop.
 
@@ -201,6 +205,10 @@ CELL_CLOSING_RADIUS = 150.0
 CELL_VOLUME_BLOCK_SHAPE = (128, 1024, 1024)
 CELL_VOLUME_CHUNK_SHAPE = (64, 256, 256)
 CELL_VOLUME_WS_HALO = (32, 256, 256)
+# The pyramids of the volume segmentations (downsample_segmentations): '<name>/s<level>' for the levels above the one
+# a segmentation was computed at. The segmentations themselves stay where they are (SEGMENTATION_SOURCES).
+SEGMENTATION_PYRAMID_PATH = os.path.join(VOLUME_PREDICTION_DIR, "segmentation_pyramids.zarr")
+SEGMENTATION_PYRAMID_CHUNKS = (64, 256, 256)
 # The over-segmentation of the graph watershed: 3d AIS with half the default density threshold (more seeds) and the
 # boundary prediction added to the height map (boundary_weight), so that the fragments end on the predicted
 # boundaries, including the nuclear envelope. min_size is in voxels of s1 and scaled to the voxel size of a level.
@@ -977,6 +985,54 @@ def _get_repeated_source_class():
     return RepeatedSource
 
 
+def _get_subsampled_source_class():
+    """The wrapper that takes every factor-th voxel of a label source along each axis (defined lazily, since it
+    registers itself with bioimage-py)."""
+    from bioimage_py.wrapper.base import WrapperSource, register_wrapper
+
+    if "SubsampledSource" in globals():
+        return globals()["SubsampledSource"]
+
+    @register_wrapper
+    class SubsampledSource(WrapperSource):
+        """Take the first voxel of each block of factor voxels on read (nearest downsampling, as downsample_labels).
+
+        The shape is the ceil of the source shape divided by the factor. Unlike bioimage-py's downsample with
+        order 0, which maps by the ratio of the shapes, the voxel i is exactly the source voxel factor * i.
+        """
+
+        def __init__(self, source, factor):
+            super().__init__(source)
+            self._factor = tuple(int(f) for f in factor)
+            assert len(self._factor) == len(self._source.shape)
+
+        @property
+        def shape(self):
+            return tuple(-(-s // f) for s, f in zip(self._source.shape, self._factor))
+
+        @property
+        def chunks(self):
+            return None
+
+        @property
+        def shards(self):
+            return None
+
+        def _getitem(self, roi):
+            starts = [0 if sl.start is None else int(sl.start) for sl in roi]
+            stops = [sh if sl.stop is None else int(sl.stop) for sl, sh in zip(roi, self.shape)]
+            source_bb = tuple(
+                slice(st * f, min(sp * f, sh)) for st, sp, f, sh in zip(starts, stops, self._factor, self._source.shape)
+            )
+            return np.asarray(self._source[source_bb])[tuple(slice(None, None, f) for f in self._factor)]
+
+        def _params(self):
+            return {"factor": self._factor}
+
+    globals()["SubsampledSource"] = SubsampledSource
+    return SubsampledSource
+
+
 def repeat_labels(labels, factor):
     """A lazy source of labels repeated factor times along each axis (labels of s1 on the grid of s0)."""
     if all(f == 1 for f in factor):
@@ -1247,6 +1303,49 @@ def segment_cells_volume(level, num_workers, block_shape=CELL_VOLUME_BLOCK_SHAPE
         stages=stages, on_stage_done=on_stage_done,
     )
     print(f"s{level}: cells segmented, {', '.join(f'{k} in {v:.0f} s' for k, v in timings.items())}", flush=True)
+
+
+def get_segmentation_sources():
+    """The volume segmentations: name -> (path of the zarr group, array name, the level it was computed at)."""
+    return {
+        "cells": (get_cell_volume_path(0), "segmentation", 0),
+        "nuclei": (get_watershed_path(1, "nuclei"), "segmentation", 1),
+    }
+
+
+def downsample_segmentations(num_workers, max_level=len(DOWNSCALE_FACTORS)):
+    """Write the pyramids of the volume segmentations up to max_level, block-wise (uint16).
+
+    Each level takes the first voxel of each block of DOWNSCALE_FACTORS of the level below (SubsampledSource copied
+    with bioimage-py), as write_label_pyramid does for the label images of the OME-Zarr. So the voxel i of a level of
+    the cells is the voxel factor * i of s0 (no translation on the grid of s0), the voxel i of a level of the nuclei
+    the voxel factor * i of s1 (the translation of s1 of the raw).
+    """
+    from bioimage_py.copy import copy
+
+    zarr.config.set({"threading.max_workers": num_workers})
+    out = zarr.open_group(SEGMENTATION_PYRAMID_PATH, mode="a", zarr_format=3)
+    compressor = BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle")
+    Subsampled = _get_subsampled_source_class()
+    for name, (path, key, source_level) in get_segmentation_sources().items():
+        source = zarr.open_group(path, mode="r")[key]
+        group = out.require_group(name)
+        group.attrs.update({"source": os.path.join(path, key), "source_level": source_level})
+        previous = source
+        for level in range(source_level + 1, max_level + 1):
+            t0 = time.time()
+            subsampled = Subsampled(previous, DOWNSCALE_FACTORS[level - 1])
+            expected = get_downsampled_shape(previous.shape, DOWNSCALE_FACTORS[level - 1])
+            assert subsampled.shape == expected, (subsampled.shape, expected)
+            if f"s{level}" in group:
+                del group[f"s{level}"]
+            array = group.create_array(
+                f"s{level}", shape=subsampled.shape, dtype="uint16", chunks=SEGMENTATION_PYRAMID_CHUNKS,
+                compressors=compressor, fill_value=0, dimension_names=["z", "y", "x"],
+            )
+            copy(subsampled, array, block_shape=SEGMENTATION_PYRAMID_CHUNKS, num_workers=num_workers)
+            print(f"{name} s{level} {array.shape} in {time.time() - t0:.0f} s", flush=True)
+            previous = array
 
 
 def check_cells_volume(level=0, num_workers=1, block_shapes=((32, 256, 256),), ws_halos=(CELL_VOLUME_WS_HALO,)):
@@ -2113,6 +2212,11 @@ def main():
     cells_volume.add_argument("--level", type=int, default=0)
     cells_volume.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
 
+    pyramids = subparsers.add_parser(
+        "downsample_segmentations", help="Write the pyramids of the cell and nucleus segmentations up to s3.",
+    )
+    pyramids.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
+
     check_volume = subparsers.add_parser(
         "check_cells_volume", help="Compare the block-wise cell segmentation to watershed_cell_crop on the cell crop.",
     )
@@ -2188,6 +2292,8 @@ def main():
         watershed_cell_crop(args.levels, args.closing_radius)
     elif args.task == "segment_cells_volume":
         segment_cells_volume(args.level, args.num_workers)
+    elif args.task == "downsample_segmentations":
+        downsample_segmentations(args.num_workers)
     elif args.task == "check_cells_volume":
         assert len(args.block_shapes) % 3 == 0 and len(args.ws_halos) == len(args.block_shapes)
         check_cells_volume(
