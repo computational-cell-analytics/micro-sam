@@ -32,6 +32,32 @@ OME-Zarr as 'labels/nuclei'.
 clean_full: remove the flat, too wide and tile shaped objects of 'labels/nuclei' and add the result to the OME-Zarr
 as 'labels/nuclei_clean'.
 
+watershed_volume: segment the nuclei of the decoder outputs of predict_volume block-wise with bioimage-py: seeds are the
+connected components of foreground - boundary > WS_SEED_THRESHOLD, grown back by a seeded watershed on the boundary
+within foreground > WS_FOREGROUND_THRESHOLD, then the objects below WS_MIN_SIZE voxels are removed.
+
+segment_inverted_crop: predict the decoder outputs and segment the nuclei with 3d AIS on the inverted raw (255 - raw,
+dark membranes as in the training data) of a central crop of INVERTED_CROP_SHAPE at s1, and of the same region at s0.
+
+segment_cell_crop: segment the cells of the inverted central crop of CELL_CROP_SHAPE at s1, and of the same region at
+s0, in two ways: 3d AIS of the cells model, and the SAM2 video predictor of the cells model prompted from the nuclei of
+watershed_volume, with the nucleus center as positive point, alone or with the centers of the CELL_N_NEGATIVES
+nearest nuclei as negative points.
+
+seed_cell_crop: segment the cells of the cell crop from the AIS predictions of segment_cell_crop with the nuclei as
+seeds, in two ways: a watershed on the boundary map seeded with the expanded nuclei, and a graph watershed on an
+over-segmentation, seeded with the fragments that are mostly nucleus.
+
+watershed_cell_crop: the watershed of the expanded nuclei of seed_cell_crop (the chosen method, at s0), with the
+foreground mask closed by CELL_CLOSING_RADIUS first, since the foreground misses the nuclear envelope.
+
+segment_cells_volume: the same as watershed_cell_crop for a whole scale level (s0), block-wise with bioimage-py: the
+expanded nuclei of watershed_volume (seeds), the closed foreground mask of the cell predictions of predict_volume
+(mask) and the seeded watershed on their boundary prediction (segmentation).
+
+check_cells_volume: run the block-wise stages of segment_cells_volume on the inputs of the cell crop and compare them
+to the result of watershed_cell_crop.
+
 render: render candidate 3d views of 'labels/nuclei_clean' off screen with pyvista, in the studio style of Figure 1
 (on a GPU node, e.g. with srun --overlap in a running job).
 
@@ -132,6 +158,59 @@ VOLUME_SLAB_SIZE = 128
 VOLUME_PREDICTION_DIR = os.path.join(
     os.path.dirname(os.path.dirname(SEGMENT_3D_DIR)), "em_spheroids_volume_predictions"
 )
+# The block-wise watershed of the volume predictions (watershed_volume). A halo of (16, 64, 64) with blocks of
+# (64, 256, 256) gives the same result as one whole-array watershed on a 256 x 1024 x 1024 crop of s1.
+WS_SEED_THRESHOLD = 0.5
+WS_FOREGROUND_THRESHOLD = 0.5
+WS_BLOCK_SHAPE = (64, 256, 256)
+WS_HALO = (16, 64, 64)
+# Most seeds of foreground - boundary are small fragments (~500 of ~800 objects of s1 below 1000 voxels), a nucleus
+# at s1 has ~2e5 voxels.
+WS_MIN_SIZE = 2500
+# The central crop for the test on the inverted raw (segment_inverted_crop), ZYX in voxels of s1.
+INVERTED_CROP_SHAPE = (256, 512, 512)
+INVERTED_CROP_DIR = os.path.join(VOLUME_PREDICTION_DIR, "inverted_crop")
+# The central crop for the comparison of the cell segmentation methods (segment_cell_crop), ZYX in voxels of s1. The
+# cells model also gives a much cleaner foreground on the inverted raw, so all cell runs see 255 - raw.
+CELL_CROP_SHAPE = (128, 512, 512)
+CELL_CROP_DIR = os.path.join(VOLUME_PREDICTION_DIR, "cell_crop")
+# The prompts derived from the nuclei: 'positive' prompts each cell with the center of its nucleus, 'negatives' adds
+# the centers of the CELL_N_NEGATIVES nearest nuclei (in nanometer) as negative points.
+CELL_N_NEGATIVES = 6
+CELL_PROMPT_MODES = {"positive": 0, "negatives": CELL_N_NEGATIVES}
+# The cell segmentation seeded from the nuclei (seed_cell_crop). The boundary prediction of the cells model also marks
+# the nuclear envelope: at s1 its ridge spans from ~200 nm inside to ~300 nm outside the nucleus surface, so the
+# nuclei are expanded by CELL_EXPAND_DISTANCE before they seed the watershed on the boundary map.
+CELL_FOREGROUND_THRESHOLD = 0.5
+CELL_EXPAND_DISTANCE = 300.0
+# The foreground of the cells model misses the nuclear envelope: at s0 only ~40 - 70% of the voxels within 100 nm of
+# the nucleus surface are foreground, against > 97% inside the nuclei and ~85% 150 - 400 nm outside. The background
+# there is thin (half thickness median 66 nm, 90th percentile 120 nm) and the background far from the nuclei thick
+# (median 232 nm). A closing with a ball of 150 nm removes ~80% of the background within -300 to 400 nm of the
+# nucleus surface (19.6% -> 4.2%) and ~8% of the background more than 1.5 um from it (33.7% -> 30.9%); larger
+# radii remove little more at the envelope (300 nm: 2.8%) and more of the rest.
+CELL_CLOSING_RADIUS = 150.0
+# The block-wise cell segmentation of a whole level (segment_cells_volume). The expansion and the closing are exact
+# with a halo of their distance (the closing: twice its radius) plus one voxel. The watershed is exact only where the
+# halo reaches the seeds of the cells in a block, a cell spans ~110 slices and ~330 px of s0. On the cell crop of s0
+# (check_cells_volume, blocks of (32, 256, 256)) a halo of (8, 64, 64) assigns 3.9% of the mask differently than
+# the whole-array watershed, (16, 128, 128) 1.7%, (32, 256, 256) 0.7% (whole regions, cut off from their seed), and
+# (64, 384, 384) nothing. The crop has only 128 slices, so the z halo is barely tested there. (32, 256, 256) is the
+# chosen trade-off. With it, a block of (128, 1024, 1024) reads ~3.4x its volume. The outputs have smaller chunks,
+# the block shape is a multiple of them, so every block writes whole chunks.
+CELL_VOLUME_BLOCK_SHAPE = (128, 1024, 1024)
+CELL_VOLUME_CHUNK_SHAPE = (64, 256, 256)
+CELL_VOLUME_WS_HALO = (32, 256, 256)
+# The over-segmentation of the graph watershed: 3d AIS with half the default density threshold (more seeds) and the
+# boundary prediction added to the height map (boundary_weight), so that the fragments end on the predicted
+# boundaries, including the nuclear envelope. min_size is in voxels of s1 and scaled to the voxel size of a level.
+# At s1 no fragment holds more than 10% of two nuclei.
+CELL_OVERSEGMENTATION = {"density_threshold": 40.0, "boundary_weight": 1.0, "min_size": 500}
+# A fragment is a nucleus fragment if more than CELL_NUCLEUS_FRACTION of it belongs to one nucleus. The edges between
+# a nucleus fragment and the fragments that are not one cross the nuclear envelope, which the boundary prediction
+# marks as well, so their weight is multiplied by CELL_NUCLEUS_EDGE_FACTOR.
+CELL_NUCLEUS_FRACTION = 0.5
+CELL_NUCLEUS_EDGE_FACTOR = 0.5
 MIN_OVERLAP = 0.5
 MIN_SIZE = 3e4
 # After stitching: a nucleus spans ~70 slices of s0 and ~300 px in y and x. Objects of at most MAX_FLAT_Z slices are
@@ -396,13 +475,18 @@ def get_volume_prediction_path(level, target):
     return os.path.join(VOLUME_PREDICTION_DIR, f"{target}_s{level}_predictions.zarr")
 
 
-def predict_volume(zarr_path, level, target, z_range=None, slab_size=VOLUME_SLAB_SIZE, batch_size=1):
+def predict_volume(
+    zarr_path, level, target, z_range=None, slab_size=VOLUME_SLAB_SIZE, batch_size=1, channels=PREDICTION_CHANNELS,
+):
     """Save the 3d decoder outputs of a whole scale level, one z slab at a time, as one zarr array per channel.
 
-    The decoder runs as in the 3d segmentation (VOLUME_TILE_SHAPE with VOLUME_HALO). The volume is too large for the
+    The decoder sees the inverted raw (255 - raw, dark membranes as in the training data), which detects many more
+    nuclei than the raw itself (segment_inverted_crop). It runs as in the 3d segmentation (VOLUME_TILE_SHAPE with
+    VOLUME_HALO). The volume is too large for the
     memory as float32, so it is predicted in slabs of slab_size slices. Each slab is read with the z halo of the tile
     grid on both sides and starts on the z grid, so its tiles are the tiles of the whole volume and the result is the
-    same. A slab that is written is recorded in the attributes, so a run that stops can be continued.
+    same. A slab that is written is recorded in the attributes, so a run that stops can be continued. Only the
+    channels are saved (e.g. foreground and boundary for the cells of s0, see segment_cells_volume).
     """
     raw = zarr.open_array(os.path.join(zarr_path, f"s{level}"), mode="r")
     shape = raw.shape
@@ -413,7 +497,7 @@ def predict_volume(zarr_path, level, target, z_range=None, slab_size=VOLUME_SLAB
     out = zarr.open_group(get_volume_prediction_path(level, target), mode="a", zarr_format=3)
     out.attrs.update({
         "model_type": MODELS[target], "scale_level": level, "voxel_size": list(get_level_voxel_size(level)),
-        "tile_shape": list(VOLUME_TILE_SHAPE), "halo": list(VOLUME_HALO), "slab_size": slab_size,
+        "tile_shape": list(VOLUME_TILE_SHAPE), "halo": list(VOLUME_HALO), "slab_size": slab_size, "inverted": True,
     })
     compressor = BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle")
     arrays = {
@@ -421,7 +505,7 @@ def predict_volume(zarr_path, level, target, z_range=None, slab_size=VOLUME_SLAB
             name, shape=shape, dtype="float16", shards=(slab_size, 512, 512),
             chunks=(math.gcd(32, slab_size), 128, 128),
             compressors=compressor, fill_value=0, dimension_names=["z", "y", "x"],
-        ) for name in PREDICTION_CHANNELS
+        ) for name in channels
     }
     _, segmenter = get_predictor_and_segmenter(
         model_type=MODELS[target], segmentation_mode="ais", ndim=3, is_tiled=True,
@@ -436,18 +520,831 @@ def predict_volume(zarr_path, level, target, z_range=None, slab_size=VOLUME_SLAB
         t0 = time.time()
         r0, r1 = max(z0 - context, 0), min(z1 + context, shape[0])
         segmenter.initialize(
-            raw[r0:r1], ndim=3, tile_shape=VOLUME_TILE_SHAPE, halo=VOLUME_HALO, batch_size=batch_size,
+            255 - raw[r0:r1], ndim=3, tile_shape=VOLUME_TILE_SHAPE, halo=VOLUME_HALO, batch_size=batch_size,
         )
         prediction = segmenter.get_state()["prediction"][:, z0 - r0:z1 - r0]
         t_predict = time.time() - t0
         for name, channel in zip(PREDICTION_CHANNELS, prediction):
-            arrays[name][z0:z1] = channel.astype("float16")
+            if name in arrays:
+                arrays[name][z0:z1] = channel.astype("float16")
         segmenter.clear_state()
         done.add(z0)
         out.attrs["done_slabs"] = sorted(done)
         print(
             f"s{level} {target}: z {z0} - {z1} of {shape[0]}, {r1 - r0} slices predicted in {t_predict:.0f} s, "
             f"written in {time.time() - t0 - t_predict:.0f} s", flush=True,
+        )
+
+
+def get_watershed_path(level, target):
+    return os.path.join(VOLUME_PREDICTION_DIR, f"{target}_s{level}_watershed.zarr")
+
+
+def _subtract(foreground, boundary):
+    return foreground.astype("float32") - boundary.astype("float32")
+
+
+def watershed_volume(
+    level, target, num_workers, block_shape=WS_BLOCK_SHAPE, halo=WS_HALO, min_size=WS_MIN_SIZE, filter_only=False,
+):
+    """Segment the decoder outputs of a whole scale level with a seeded watershed, block-wise (bioimage-py).
+
+    The seeds are the connected components of foreground - boundary > WS_SEED_THRESHOLD (the subtraction and the
+    threshold are computed on read). The watershed grows them on the boundary map within the foreground mask, which
+    gives back what the subtraction of the boundary took away. The objects below min_size voxels are removed and the
+    rest relabeled consecutively. The seeds, the watershed and the filtered segmentation are written as uint64 zarr
+    arrays ('seeds', 'watershed', 'segmentation') with chunks of block_shape, so every block writes whole chunks. With
+    filter_only, only the size filter runs again on the saved watershed.
+    """
+    import bioimage_py as bp
+
+    compressor = BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle")
+
+    def create(group, name):
+        if name in group:
+            del group[name]
+        return group.create_array(
+            name, shape=shape, dtype="uint64", chunks=block_shape, compressors=compressor, fill_value=0,
+            dimension_names=["z", "y", "x"],
+        )
+
+    shape = zarr.open_array(os.path.join(get_volume_prediction_path(level, target), "foreground"), mode="r").shape
+    if not filter_only:
+        _seeded_watershed(level, target, num_workers, block_shape, halo, create)
+    out = zarr.open_group(get_watershed_path(level, target), mode="a")
+    t0 = time.time()
+    bp.segmentation.size_filter(
+        out["watershed"], create(out, "segmentation"), min_size=min_size, block_shape=block_shape,
+        num_workers=num_workers,
+    )
+    out.attrs["min_size"] = min_size
+    print(f"s{level} {target}: size filter in {time.time() - t0:.0f} s", flush=True)
+
+
+def _seeded_watershed(level, target, num_workers, block_shape, halo, create):
+    import bioimage_py as bp
+    from bioimage_py.wrapper import MultiTransformationSource, ThresholdSource
+
+    predictions = zarr.open_group(get_volume_prediction_path(level, target), mode="r")
+    foreground, boundary = predictions["foreground"], predictions["boundary"]
+    seed_mask = ThresholdSource(
+        MultiTransformationSource(_subtract, foreground, boundary, dtype="float32"), WS_SEED_THRESHOLD,
+    )
+    mask = ThresholdSource(foreground, WS_FOREGROUND_THRESHOLD)
+
+    out = zarr.open_group(get_watershed_path(level, target), mode="w", zarr_format=3)
+    out.attrs.update({
+        "predictions": get_volume_prediction_path(level, target), "seed_threshold": WS_SEED_THRESHOLD,
+        "foreground_threshold": WS_FOREGROUND_THRESHOLD, "block_shape": list(block_shape), "halo": list(halo),
+        "voxel_size": list(get_level_voxel_size(level)),
+    })
+    arrays = {name: create(out, name) for name in ("seeds", "watershed")}
+    t0 = time.time()
+    bp.segmentation.label(seed_mask, arrays["seeds"], block_shape=block_shape, num_workers=num_workers)
+    t_label = time.time() - t0
+    bp.segmentation.watershed(
+        boundary, arrays["seeds"], arrays["watershed"], halo=halo, mask=mask, block_shape=block_shape,
+        num_workers=num_workers,
+    )
+    print(f"s{level} {target}: seeds in {t_label:.0f} s, watershed in {time.time() - t0 - t_label:.0f} s", flush=True)
+
+
+def get_inverted_crop(level, shape_s1, crop_shape=INVERTED_CROP_SHAPE):
+    """The bounding box of the central crop of crop_shape (voxels of s1) at a scale level up to s1."""
+    starts = [(sh - cs) // 2 for sh, cs in zip(shape_s1, crop_shape)]
+    factor = [f1 // f for f1, f in zip(get_level_factor(1), get_level_factor(level))]
+    return tuple(slice(st * f, (st + cs) * f) for st, cs, f in zip(starts, crop_shape, factor))
+
+
+def get_inverted_crop_path(level, target="nuclei"):
+    return os.path.join(INVERTED_CROP_DIR, f"{target}_s{level}.h5")
+
+
+def segment_ais_3d(raw, target):
+    """The decoder outputs and the 3d AIS segmentation of a volume, with the tiling of predict_volume.
+
+    Returns the prediction (5, Z, Y, X), the segmentation and the times of the prediction and the segmentation.
+    """
+    t0 = time.time()
+    _, segmenter = get_predictor_and_segmenter(
+        model_type=MODELS[target], segmentation_mode="ais", ndim=3, is_tiled=True,
+    )
+    segmenter.initialize(raw, ndim=3, tile_shape=VOLUME_TILE_SHAPE, halo=VOLUME_HALO, batch_size=1)
+    prediction = segmenter.get_state()["prediction"]
+    t_predict = time.time() - t0
+    segmentation = segmenter.generate().astype("uint32")
+    t_segment = time.time() - t0 - t_predict
+    del segmenter
+    return prediction, segmentation, t_predict, t_segment
+
+
+def segment_inverted_crop(zarr_path, levels, target="nuclei"):
+    """Save the decoder outputs and the 3d AIS segmentation of the inverted central crop of each level.
+
+    The decoder runs with the tiling and the normalization of predict_volume, so the inversion is the only
+    difference to the predictions of the whole volume.
+    """
+    os.makedirs(INVERTED_CROP_DIR, exist_ok=True)
+    shape_s1 = zarr.open_array(os.path.join(zarr_path, "s1"), mode="r").shape
+    for level in levels:
+        path = get_inverted_crop_path(level, target)
+        if os.path.exists(path):
+            print(f"{path} exists, skipping s{level}")
+            continue
+        bb = get_inverted_crop(level, shape_s1)
+        raw = 255 - zarr.open_array(os.path.join(zarr_path, f"s{level}"), mode="r")[bb]
+        prediction, segmentation, t_predict, t_segment = segment_ais_3d(raw, target)
+        with h5py.File(path + ".tmp", "w") as f:
+            f.attrs.update({
+                "level": level, "bb_start": [b.start for b in bb], "bb_stop": [b.stop for b in bb],
+                "voxel_size": get_level_voxel_size(level), "model_type": MODELS[target], "inverted": True,
+                "tile_shape": VOLUME_TILE_SHAPE, "halo": VOLUME_HALO,
+                "time_predict": t_predict, "time_segment": t_segment,
+            })
+            f.create_dataset("raw", data=raw, chunks=True, compression="gzip")
+            for name, channel in zip(PREDICTION_CHANNELS, prediction):
+                f.create_dataset(f"prediction/{name}", data=channel.astype("float16"), chunks=True, compression="gzip")
+            f.create_dataset("segmentation", data=segmentation, chunks=True, compression="gzip")
+        os.rename(path + ".tmp", path)
+        n_objects = len(np.unique(segmentation)) - 1
+        print(
+            f"s{level} {target} inverted crop {raw.shape}: predicted in {t_predict:.0f} s, {n_objects} objects "
+            f"segmented in {t_segment:.0f} s", flush=True,
+        )
+        del prediction
+
+
+def get_cell_crop_path(level, method):
+    """The result of a cell segmentation method ('ais' or 'prompts') on the cell crop of a level."""
+    return os.path.join(CELL_CROP_DIR, f"cells_{method}_s{level}.h5")
+
+
+def get_nucleus_prompts_path():
+    return os.path.join(CELL_CROP_DIR, "nucleus_prompts.h5")
+
+
+def get_nucleus_prompts(bb, n_negatives=CELL_N_NEGATIVES, min_size=WS_MIN_SIZE):
+    """Derive the cell prompts from the nuclei of watershed_volume in a crop of s1.
+
+    The nuclei are the parts of the watershed nuclei inside the crop of at least min_size voxels, so a nucleus that
+    the crop cuts is prompted on its part in the crop. The center of a nucleus is the voxel of it closest to its
+    centroid (in nanometer); the centroid itself where it lies inside the nucleus. The prompts of a nucleus are on
+    its center slice, which anchors the propagation: the center as positive point and the centers of the n_negatives
+    nearest nuclei (3d distance in nanometer), projected onto that slice, as negative points. A projected center that
+    falls into the nucleus itself (a neighbor above or below it) is dropped.
+
+    Returns the nuclei (relabeled consecutively), the centers (N, 3) in voxels of s1, and the negative points
+    (M, 4) as object id, z, y and x.
+    """
+    from scipy.spatial import cKDTree
+    from skimage.segmentation import relabel_sequential
+
+    nuclei = zarr.open_group(get_watershed_path(1, "nuclei"), mode="r")["segmentation"][bb]
+    ids, sizes = np.unique(nuclei, return_counts=True)
+    nuclei[~np.isin(nuclei, ids[(ids > 0) & (sizes >= min_size)])] = 0
+    nuclei = relabel_sequential(nuclei)[0].astype("uint32")
+
+    voxel_size = np.array(get_level_voxel_size(1))
+    centers = []
+    for nucleus_id, bb_nucleus in enumerate(ndimage.find_objects(nuclei), 1):
+        coords = np.argwhere(nuclei[bb_nucleus] == nucleus_id) + [b.start for b in bb_nucleus]
+        distances = (((coords - coords.mean(axis=0)) * voxel_size) ** 2).sum(axis=1)
+        centers.append(coords[np.argmin(distances)])
+    centers = np.array(centers)
+
+    n_neighbors = min(n_negatives, len(centers) - 1)
+    negatives, n_dropped = [], 0
+    if n_neighbors > 0:
+        _, neighbors = cKDTree(centers * voxel_size).query(centers * voxel_size, k=n_neighbors + 1)
+        for nucleus_id, (center, row) in enumerate(zip(centers, neighbors), 1):
+            for neighbor in row[1:]:
+                y, x = centers[neighbor, 1:]
+                if nuclei[center[0], y, x] == nucleus_id:
+                    n_dropped += 1
+                    continue
+                negatives.append((nucleus_id, center[0], y, x))
+    negatives = np.array(negatives, dtype="int64").reshape(-1, 4)
+    print(
+        f"{len(centers)} nuclei in the crop, {len(negatives)} negative points, {n_dropped} dropped in the own nucleus",
+        flush=True,
+    )
+    return nuclei, centers, negatives
+
+
+def segment_cells_from_prompts(volume, centers, negatives, modes=CELL_PROMPT_MODES):
+    """Segment one cell per nucleus with the SAM2 video predictor of the cells model, for each prompt mode.
+
+    Every cell is conditioned on the center slice of its nucleus with all its points in one call, and propagated
+    through the whole volume in both directions (no early stop). A single positive point gets the multimask output of
+    SAM2 (the mask with the best predicted IoU), several points one mask. The cells overlap, so they are painted
+    from the largest to the smallest: a smaller cell stays visible where a larger one covers it as well.
+
+    Args:
+        volume: The inverted raw, (Z, Y, X).
+        centers: The nucleus centers (N, 3) in voxels of the volume.
+        negatives: The negative points (M, 4) as object id, z, y and x in voxels of the volume.
+        modes: The prompt modes, the name and whether it uses the negative points.
+
+    Returns:
+        Per mode, the segmentation (object id = nucleus id), the size of each object and the fraction of it that
+        is visible after painting, and the time of the propagation.
+    """
+    from micro_sam.v2.util import precompute_image_embeddings
+    from micro_sam.v2.prompt_based_segmentation import PromptableSegmentation3D
+
+    t0 = time.time()
+    predictor, _ = get_predictor_and_segmenter(model_type=MODELS["cells"], segmentation_mode="apg", ndim=3)
+    embeddings = precompute_image_embeddings(predictor, volume, ndim=3, verbose=True)
+    print(f"Embeddings of {volume.shape} in {time.time() - t0:.0f} s", flush=True)
+
+    results = {}
+    with embeddings:
+        for mode, use_negatives in modes.items():
+            t0 = time.time()
+            segmenter = PromptableSegmentation3D(predictor, volume, embeddings)
+            for nucleus_id, center in enumerate(centers, 1):
+                points, labels = [center[1:]], [1]
+                if use_negatives:
+                    own = negatives[negatives[:, 0] == nucleus_id]
+                    points.extend(own[:, 2:])
+                    labels.extend([0] * len(own))
+                segmenter.add_prompt_set(
+                    frame_id=int(center[0]), points=np.array(points, dtype="float32"),
+                    point_labels=np.array(labels, dtype="int32"), object_id=nucleus_id,
+                )
+            video_segments = segmenter.propagate_prompts()
+            segmenter.reset_predictor()
+
+            masks = {nucleus_id: np.zeros(volume.shape, dtype=bool) for nucleus_id in range(1, len(centers) + 1)}
+            for frame, per_object in video_segments.items():
+                for nucleus_id, mask in per_object.items():
+                    masks[nucleus_id][frame] = np.asarray(mask).squeeze()[:volume.shape[1], :volume.shape[2]]
+            del video_segments
+            sizes = np.array([masks[nucleus_id].sum() for nucleus_id in sorted(masks)])
+            segmentation = np.zeros(volume.shape, dtype="uint32")
+            for nucleus_id in np.argsort(sizes)[::-1] + 1:
+                segmentation[masks[nucleus_id]] = nucleus_id
+            visible = np.bincount(segmentation.ravel(), minlength=len(sizes) + 1)[1:]
+            visible_fraction = np.where(sizes > 0, visible / np.maximum(sizes, 1), 0.0)
+            results[mode] = {
+                "segmentation": segmentation, "size": sizes, "visible_fraction": visible_fraction,
+                "time": time.time() - t0,
+            }
+            print(
+                f"{mode}: {np.sum(sizes > 0)} of {len(sizes)} cells non-empty, median visible fraction "
+                f"{np.median(visible_fraction[sizes > 0]):.2f}, in {time.time() - t0:.0f} s", flush=True,
+            )
+            del masks
+    return results
+
+
+def segment_cell_crop(zarr_path, levels, methods):
+    """Segment the cells of the inverted cell crop of each level with 3d AIS and with prompts from the nuclei.
+
+    The nuclei and their prompts come from s1 (watershed_volume) and are saved once (nucleus_prompts.h5). At s0 the
+    points are mapped to the center of the 2 x 2 voxels of s0 under each voxel of s1. Each level and method is saved
+    in its own h5 file, which a later run skips.
+    """
+    os.makedirs(CELL_CROP_DIR, exist_ok=True)
+    shape_s1 = zarr.open_array(os.path.join(zarr_path, "s1"), mode="r").shape
+    bb_s1 = get_inverted_crop(1, shape_s1, CELL_CROP_SHAPE)
+
+    prompts_path = get_nucleus_prompts_path()
+    if "prompts" in methods and not os.path.exists(prompts_path):
+        nuclei, centers, negatives = get_nucleus_prompts(bb_s1)
+        with h5py.File(prompts_path + ".tmp", "w") as f:
+            f.attrs.update({
+                "bb_start": [b.start for b in bb_s1], "bb_stop": [b.stop for b in bb_s1], "level": 1,
+                "watershed": get_watershed_path(1, "nuclei"), "min_size": WS_MIN_SIZE,
+                "n_negatives": CELL_N_NEGATIVES,
+            })
+            f.create_dataset("nuclei", data=nuclei, chunks=True, compression="gzip")
+            f.create_dataset("centers", data=centers)
+            f.create_dataset("negatives", data=negatives)
+        os.rename(prompts_path + ".tmp", prompts_path)
+
+    for level in levels:
+        bb = get_inverted_crop(level, shape_s1, CELL_CROP_SHAPE)
+        raw = None
+        attrs = {
+            "level": level, "bb_start": [b.start for b in bb], "bb_stop": [b.stop for b in bb],
+            "voxel_size": get_level_voxel_size(level), "model_type": MODELS["cells"], "inverted": True,
+        }
+        for method in methods:
+            path = get_cell_crop_path(level, method)
+            if os.path.exists(path):
+                print(f"{path} exists, skipping s{level} {method}")
+                continue
+            if raw is None:
+                raw = 255 - zarr.open_array(os.path.join(zarr_path, f"s{level}"), mode="r")[bb]
+
+            if method == "ais":
+                prediction, segmentation, t_predict, t_segment = segment_ais_3d(raw, "cells")
+                with h5py.File(path + ".tmp", "w") as f:
+                    f.attrs.update({
+                        **attrs, "tile_shape": VOLUME_TILE_SHAPE, "halo": VOLUME_HALO,
+                        "time_predict": t_predict, "time_segment": t_segment,
+                    })
+                    for name, channel in zip(PREDICTION_CHANNELS, prediction):
+                        f.create_dataset(
+                            f"prediction/{name}", data=channel.astype("float16"), chunks=True, compression="gzip",
+                        )
+                    f.create_dataset("segmentation", data=segmentation, chunks=True, compression="gzip")
+                os.rename(path + ".tmp", path)
+                print(
+                    f"s{level} cells AIS {raw.shape}: {len(np.unique(segmentation)) - 1} objects, predicted in "
+                    f"{t_predict:.0f} s, segmented in {t_segment:.0f} s", flush=True,
+                )
+                del prediction, segmentation
+                continue
+
+            with h5py.File(prompts_path, "r") as f:
+                centers, negatives = f["centers"][:].astype("float32"), f["negatives"][:].astype("float32")
+            factor = np.array([f1 // f for f1, f in zip(get_level_factor(1), get_level_factor(level))])
+            # The z of the points stays an integer (the slice), y and x go to the center of the voxels of the level.
+            centers = centers * factor + (factor - 1) / 2
+            negatives[:, 1:] = negatives[:, 1:] * factor + (factor - 1) / 2
+            centers[:, 0], negatives[:, 1] = np.round(centers[:, 0]), np.round(negatives[:, 1])
+            results = segment_cells_from_prompts(raw, centers, negatives)
+            with h5py.File(path + ".tmp", "w") as f:
+                f.attrs.update({**attrs, "prompts": prompts_path})
+                for mode, result in results.items():
+                    f.create_dataset(
+                        f"segmentation/{mode}", data=result["segmentation"], chunks=True, compression="gzip",
+                    )
+                    f.create_dataset(f"size/{mode}", data=result["size"])
+                    f.create_dataset(f"visible_fraction/{mode}", data=result["visible_fraction"])
+                    f.attrs[f"time_{mode}"] = result["time"]
+            os.rename(path + ".tmp", path)
+            del results
+
+
+def get_cell_seeded_path(level):
+    return os.path.join(CELL_CROP_DIR, f"cells_seeded_s{level}.h5")
+
+
+def _distances(mask, voxel_size):
+    """The distance (nanometer) of every nonzero voxel to the nearest zero voxel, with bioimage-cpp.
+
+    Without a zero voxel (where bioimage-cpp returns no meaningful distance), every distance is infinite.
+    """
+    import bioimage_cpp as bic
+
+    if mask.all():
+        return np.full(mask.shape, np.inf, dtype="float32")
+    return bic.distance.distance_transform(mask, sampling=voxel_size)
+
+
+def expand_nuclei(nuclei, voxel_size, distance):
+    """Grow every nucleus by distance (nanometer) into the background; a voxel goes to its nearest nucleus."""
+    import bioimage_cpp as bic
+
+    background = nuclei == 0
+    if background.all() or not background.any():
+        return nuclei.copy()
+    distances, indices = bic.distance.distance_transform(background, sampling=voxel_size, return_indices=True)
+    expanded = nuclei[tuple(indices)]
+    expanded[distances > distance] = 0
+    return expanded
+
+
+def close_mask(mask, voxel_size, radius):
+    """Binary closing with a ball of radius (nanometer), computed exactly with two distance transforms.
+
+    The dilation keeps the voxels within radius of the mask, the erosion the voxels of the dilation that are further
+    than radius from its complement. The volume border does not erode the mask.
+    """
+    mask = mask.astype(bool)
+    dilated = _distances(~mask, voxel_size) <= radius
+    return (_distances(dilated, voxel_size) > radius) | mask
+
+
+def get_distance_halo(distance, voxel_size):
+    """The halo (voxels per axis) that covers a distance (nanometer), plus one voxel."""
+    return tuple(int(math.ceil(distance / vs)) + 1 for vs in voxel_size)
+
+
+def _get_repeated_source_class():
+    """The wrapper that repeats every voxel of a label source factor times along each axis (defined lazily, since
+    it registers itself with bioimage-py)."""
+    from bioimage_py.wrapper.base import WrapperSource, register_wrapper
+
+    if "RepeatedSource" in globals():
+        return globals()["RepeatedSource"]
+
+    @register_wrapper
+    class RepeatedSource(WrapperSource):
+        """Repeat every voxel of the wrapped source factor times along each axis on read (nearest upsampling).
+
+        Unlike the ResizedSource of bioimage-py with order 0, the voxel i of the source covers exactly the voxels
+        factor * i to factor * (i + 1) - 1, as for the labels of s1 on the grid of s0 (np.repeat).
+        """
+
+        def __init__(self, source, factor):
+            super().__init__(source)
+            self._factor = tuple(int(f) for f in factor)
+            assert len(self._factor) == len(self._source.shape)
+
+        @property
+        def shape(self):
+            return tuple(s * f for s, f in zip(self._source.shape, self._factor))
+
+        @property
+        def chunks(self):
+            chunks = self._source.chunks
+            return None if chunks is None else tuple(c * f for c, f in zip(chunks, self._factor))
+
+        @property
+        def shards(self):
+            return None
+
+        def _getitem(self, roi):
+            starts = [0 if sl.start is None else int(sl.start) for sl in roi]
+            stops = [sh if sl.stop is None else int(sl.stop) for sl, sh in zip(roi, self.shape)]
+            source_bb = tuple(slice(st // f, -(-sp // f)) for st, sp, f in zip(starts, stops, self._factor))
+            data = np.asarray(self._source[source_bb])
+            for axis, f in enumerate(self._factor):
+                if f > 1:
+                    data = np.repeat(data, f, axis=axis)
+            local = tuple(slice(st - b.start * f, sp - b.start * f)
+                          for st, sp, b, f in zip(starts, stops, source_bb, self._factor))
+            return data[local]
+
+        def _params(self):
+            return {"factor": self._factor}
+
+    globals()["RepeatedSource"] = RepeatedSource
+    return RepeatedSource
+
+
+def repeat_labels(labels, factor):
+    """A lazy source of labels repeated factor times along each axis (labels of s1 on the grid of s0)."""
+    if all(f == 1 for f in factor):
+        return labels
+    return _get_repeated_source_class()(labels, factor)
+
+
+def nucleus_watershed(foreground, boundary, nuclei, voxel_size, distance=CELL_EXPAND_DISTANCE, closing_radius=None):
+    """Seeded watershed on the boundary prediction within the foreground, seeded with the expanded nuclei.
+
+    With closing_radius (nanometer), the foreground mask is closed first. The parts of the foreground that are not
+    connected to a seed stay background. Returns the segmentation, the seeds and the mask.
+    """
+    import bioimage_cpp as bic
+
+    seeds = expand_nuclei(nuclei, voxel_size, distance)
+    mask = foreground > CELL_FOREGROUND_THRESHOLD
+    if closing_radius is not None:
+        mask = close_mask(mask, voxel_size, closing_radius)
+    return bic.segmentation.watershed(np.ascontiguousarray(boundary), seeds, mask=mask), seeds, mask
+
+
+def graph_watershed(oversegmentation, boundary, nuclei, edge_factor=CELL_NUCLEUS_EDGE_FACTOR):
+    """Seeded watershed on the region adjacency graph of an over-segmentation, seeded with its nucleus fragments.
+
+    The edge weight is the mean boundary prediction on the face between two fragments. A fragment is seeded with a
+    nucleus if more than CELL_NUCLEUS_FRACTION of its voxels belong to that nucleus (counting the voxels outside the
+    nuclei as well), and its edges to the fragments that are not seeded this way are multiplied by edge_factor, so
+    that the cell grows across the nuclear envelope. A nucleus without such a fragment lies mostly in a fragment that
+    reaches beyond it: it seeds the fragment with the largest part of it, if no other nucleus seeds that one, but
+    its edges keep their weight, since that fragment ends beyond the nuclear envelope already. The background
+    (label 0 of the over-segmentation) is a seed of its own whose edges come last, so it takes only the fragments no
+    nucleus reaches; they become background again.
+
+    Returns the segmentation and statistics of the seeding.
+    """
+    import bioimage_cpp as bic
+    from skimage.segmentation import relabel_sequential
+
+    oversegmentation = relabel_sequential(oversegmentation)[0].astype("uint32")
+    rag = bic.graph.region_adjacency_graph(oversegmentation)
+    weights = bic.graph.features.edge_map_features(
+        rag, oversegmentation, np.ascontiguousarray(boundary, dtype="float32"),
+    )[:, 0].astype("float32")
+
+    table = bic.utils.segmentation_overlap(oversegmentation, nuclei).overlap_table(normalize_by="a")
+    fragment, nucleus = table["label_a"].astype("int64"), table["label_b"].astype("int64")
+    count, fraction = table["count"], table["fraction"]
+    seeds = np.zeros(rag.number_of_nodes, dtype="uint32")
+    majority = (fragment > 0) & (nucleus > 0) & (fraction > CELL_NUCLEUS_FRACTION)
+    seeds[fragment[majority]] = nucleus[majority]
+    nucleus_fragment = seeds > 0
+
+    n_nuclei = int(nuclei.max())
+    fallback, lost = [], []
+    for nucleus_id in sorted(set(range(1, n_nuclei + 1)) - set(nucleus[majority].tolist())):
+        rows = np.where((nucleus == nucleus_id) & (fragment > 0))[0]
+        if len(rows) == 0:
+            lost.append(nucleus_id)
+            continue
+        best = fragment[rows[np.argmax(count[rows])]]
+        if seeds[best] == 0:
+            seeds[best] = nucleus_id
+            fallback.append(nucleus_id)
+        else:
+            lost.append(nucleus_id)
+
+    uv = rag.uv_ids()
+    downweight = nucleus_fragment[uv[:, 0]] != nucleus_fragment[uv[:, 1]]
+    stats = {
+        "n_fragments": int(oversegmentation.max()), "n_nucleus_fragments": int(nucleus_fragment.sum()),
+        "n_fallback_nuclei": len(fallback), "n_lost_nuclei": len(lost), "n_downweighted_edges": int(downweight.sum()),
+        "weight_downweighted_edges": float(np.median(weights[downweight])) if downweight.any() else 0.0,
+        "weight_other_edges": float(np.median(weights[~downweight & (uv > 0).all(axis=1)])),
+    }
+    weights[downweight] *= edge_factor
+    background_edge = (uv == 0).any(axis=1)
+    weights[background_edge] = weights.max() + 1.0
+    background_seed = n_nuclei + 1
+    seeds[0] = background_seed
+
+    node_labels = bic.graph.edge_weighted_watershed(rag, weights, seeds)
+    node_labels[node_labels == background_seed] = 0
+    segmentation = bic.graph.project_node_labels_to_pixels(rag, oversegmentation, node_labels)
+    return segmentation.astype("uint32"), oversegmentation, stats
+
+
+def get_cell_watershed_path(level):
+    return os.path.join(CELL_CROP_DIR, f"cells_watershed_s{level}.h5")
+
+
+def load_cell_crop_nuclei(level):
+    """The nuclei of the cell crop (nucleus_prompts.h5, at s1), repeated to the voxel grid of a level."""
+    with h5py.File(get_nucleus_prompts_path(), "r") as f:
+        nuclei = f["nuclei"][:].astype("uint32")
+    factor = [f1 // f for f1, f in zip(get_level_factor(1), get_level_factor(level))]
+    for axis, f in enumerate(factor):
+        nuclei = np.repeat(nuclei, f, axis=axis)
+    return nuclei
+
+
+def watershed_cell_crop(levels, closing_radius=CELL_CLOSING_RADIUS):
+    """The watershed of the expanded nuclei on the AIS predictions of the cell crop, with the closed foreground mask.
+
+    Saves the segmentation, the seeds and the closed mask of each level in one h5 file (cells_watershed_s<level>.h5).
+    """
+    for level in levels:
+        path = get_cell_watershed_path(level)
+        if os.path.exists(path):
+            print(f"{path} exists, skipping s{level}")
+            continue
+        nuclei = load_cell_crop_nuclei(level)
+        voxel_size = get_level_voxel_size(level)
+        with h5py.File(get_cell_crop_path(level, "ais"), "r") as f:
+            foreground = f["prediction/foreground"][:].astype("float32")
+            boundary = f["prediction/boundary"][:].astype("float32")
+            attrs = dict(f.attrs)
+        assert nuclei.shape == foreground.shape, (nuclei.shape, foreground.shape)
+
+        t0 = time.time()
+        segmentation, seeds, mask = nucleus_watershed(
+            foreground, boundary, nuclei, voxel_size, closing_radius=closing_radius,
+        )
+        t_watershed = time.time() - t0
+        n_closed = int(mask.sum() - (foreground > CELL_FOREGROUND_THRESHOLD).sum())
+
+        with h5py.File(path + ".tmp", "w") as f:
+            f.attrs.update({
+                "level": level, "bb_start": attrs["bb_start"], "bb_stop": attrs["bb_stop"], "voxel_size": voxel_size,
+                "predictions": get_cell_crop_path(level, "ais"), "nuclei": get_nucleus_prompts_path(),
+                "foreground_threshold": CELL_FOREGROUND_THRESHOLD, "expand_distance": CELL_EXPAND_DISTANCE,
+                "closing_radius": closing_radius, "n_closed_voxels": n_closed, "time_watershed": t_watershed,
+            })
+            f.create_dataset("segmentation", data=segmentation.astype("uint32"), chunks=True, compression="gzip")
+            f.create_dataset("seeds", data=seeds.astype("uint32"), chunks=True, compression="gzip")
+            f.create_dataset("mask", data=mask.astype("uint8"), chunks=True, compression="gzip")
+        os.rename(path + ".tmp", path)
+        print(
+            f"s{level}: {len(np.unique(segmentation)) - 1} cells in {t_watershed:.0f} s, the closing added "
+            f"{n_closed} voxels ({n_closed / mask.size:.3f} of the crop) to the mask", flush=True,
+        )
+
+
+def segment_cells_blockwise(
+    foreground, boundary, nuclei, outputs, voxel_size, num_workers, block_shape=CELL_VOLUME_BLOCK_SHAPE,
+    ws_halo=CELL_VOLUME_WS_HALO, expand_distance=CELL_EXPAND_DISTANCE, closing_radius=CELL_CLOSING_RADIUS,
+    stages=("seeds", "mask", "segmentation"), on_stage_done=None,
+):
+    """The cell segmentation of watershed_cell_crop, block-wise with bioimage-py and bioimage-cpp.
+
+    Three stages, each written into its output before the next one starts:
+    - seeds: the nuclei expanded by expand_distance (expand_nuclei on each block with the halo of the distance).
+    - mask: foreground > CELL_FOREGROUND_THRESHOLD closed with a ball of closing_radius (close_mask on each block with
+      the halo of twice the radius). Both are exact: a voxel of a block only depends on the voxels within the halo.
+    - segmentation: the seeded watershed of bioimage-py on the boundary prediction within the mask, with ws_halo.
+
+    Args:
+        foreground: The foreground prediction (a source, e.g. a zarr array).
+        boundary: The boundary prediction.
+        nuclei: The nuclei on the same voxel grid (a source, see repeat_labels).
+        outputs: The writable output arrays for 'seeds' (uint64), 'mask' (uint8) and 'segmentation' (uint64).
+        voxel_size: The ZYX voxel size in nanometer.
+        num_workers: The number of threads.
+        block_shape: The block shape of all stages; the chunks of the outputs must divide it.
+        ws_halo: The halo of the watershed.
+        expand_distance: The expansion of the nuclei in nanometer.
+        closing_radius: The radius of the closing in nanometer.
+        stages: The stages to run.
+        on_stage_done: Called with the name of each stage once it is written.
+    """
+    from functools import partial
+    from bioimage_py.copy import copy
+    from bioimage_py.segmentation import watershed
+    from bioimage_py.wrapper import SimpleTransformationWithHaloSource, ThresholdSource
+
+    timings = {}
+    if "seeds" in stages:
+        t0 = time.time()
+        seeds = SimpleTransformationWithHaloSource(
+            nuclei, partial(expand_nuclei, voxel_size=voxel_size, distance=expand_distance),
+            get_distance_halo(expand_distance, voxel_size), dtype="uint64",
+        )
+        copy(seeds, outputs["seeds"], block_shape=block_shape, num_workers=num_workers)
+        timings["seeds"] = time.time() - t0
+        if on_stage_done is not None:
+            on_stage_done("seeds")
+
+    if "mask" in stages:
+        t0 = time.time()
+        mask = SimpleTransformationWithHaloSource(
+            ThresholdSource(foreground, CELL_FOREGROUND_THRESHOLD),
+            partial(_close_mask_uint8, voxel_size=voxel_size, radius=closing_radius),
+            get_distance_halo(2 * closing_radius, voxel_size), dtype="uint8",
+        )
+        copy(mask, outputs["mask"], block_shape=block_shape, num_workers=num_workers)
+        timings["mask"] = time.time() - t0
+        if on_stage_done is not None:
+            on_stage_done("mask")
+
+    if "segmentation" in stages:
+        t0 = time.time()
+        watershed(
+            boundary, outputs["seeds"], outputs["segmentation"], halo=ws_halo, mask=outputs["mask"],
+            block_shape=block_shape, num_workers=num_workers,
+        )
+        timings["segmentation"] = time.time() - t0
+        if on_stage_done is not None:
+            on_stage_done("segmentation")
+    return timings
+
+
+def _close_mask_uint8(mask, voxel_size, radius):
+    return close_mask(mask, voxel_size, radius).astype("uint8")
+
+
+def get_cell_volume_path(level):
+    return os.path.join(VOLUME_PREDICTION_DIR, f"cells_s{level}_segmentation.zarr")
+
+
+def segment_cells_volume(level, num_workers, block_shape=CELL_VOLUME_BLOCK_SHAPE, ws_halo=CELL_VOLUME_WS_HALO):
+    """Segment the cells of a whole scale level, block-wise (segment_cells_blockwise).
+
+    The inputs are the cell predictions of predict_volume (target 'cells') and the nuclei of watershed_volume at s1,
+    repeated to the voxel grid of the level. The seeds, the mask and the segmentation are zarr arrays of the group
+    get_cell_volume_path(level) with chunks of CELL_VOLUME_CHUNK_SHAPE, which divide block_shape. A stage that is
+    written is recorded in the attributes, so a run that stops continues with the next stage.
+    """
+    zarr.config.set({"threading.max_workers": num_workers})
+    predictions = zarr.open_group(get_volume_prediction_path(level, "cells"), mode="r")
+    done_slabs = predictions.attrs.get("done_slabs", [])
+    n_slabs = math.ceil(predictions["foreground"].shape[0] / predictions.attrs["slab_size"])
+    assert len(done_slabs) == n_slabs, f"The cell predictions of s{level} are incomplete: {len(done_slabs)} / {n_slabs}"
+    foreground, boundary = predictions["foreground"], predictions["boundary"]
+    factor = [f1 // f for f1, f in zip(get_level_factor(1), get_level_factor(level))]
+    nuclei = repeat_labels(zarr.open_group(get_watershed_path(1, "nuclei"), mode="r")["segmentation"], factor)
+    shape = tuple(foreground.shape)
+    assert tuple(nuclei.shape) == shape, (nuclei.shape, shape)
+    voxel_size = get_level_voxel_size(level)
+
+    assert all(b % c == 0 for b, c in zip(block_shape, CELL_VOLUME_CHUNK_SHAPE)), block_shape
+    out = zarr.open_group(get_cell_volume_path(level), mode="a", zarr_format=3)
+    params = {
+        "predictions": get_volume_prediction_path(level, "cells"), "nuclei": get_watershed_path(1, "nuclei"),
+        "level": level, "voxel_size": list(voxel_size), "foreground_threshold": CELL_FOREGROUND_THRESHOLD,
+        "expand_distance": CELL_EXPAND_DISTANCE, "closing_radius": CELL_CLOSING_RADIUS,
+        "block_shape": list(block_shape), "ws_halo": list(ws_halo),
+    }
+    if "params" in out.attrs:
+        assert out.attrs["params"] == params, f"{get_cell_volume_path(level)} was written with other parameters."
+    out.attrs["params"] = params
+    compressor = BloscCodec(cname="zstd", clevel=5, shuffle="bitshuffle")
+    outputs = {
+        name: out.require_array(
+            name, shape=shape, dtype=dtype, chunks=CELL_VOLUME_CHUNK_SHAPE, compressors=compressor, fill_value=0,
+            dimension_names=["z", "y", "x"],
+        ) for name, dtype in (("seeds", "uint64"), ("mask", "uint8"), ("segmentation", "uint64"))
+    }
+    done = list(out.attrs.get("done_stages", []))
+    stages = [stage for stage in ("seeds", "mask", "segmentation") if stage not in done]
+
+    def on_stage_done(stage):
+        done.append(stage)
+        out.attrs["done_stages"] = done
+        print(f"s{level}: {stage} written", flush=True)
+
+    timings = segment_cells_blockwise(
+        foreground, boundary, nuclei, outputs, voxel_size, num_workers, block_shape=block_shape, ws_halo=ws_halo,
+        stages=stages, on_stage_done=on_stage_done,
+    )
+    print(f"s{level}: cells segmented, {', '.join(f'{k} in {v:.0f} s' for k, v in timings.items())}", flush=True)
+
+
+def check_cells_volume(level=0, num_workers=1, block_shapes=((32, 256, 256),), ws_halos=(CELL_VOLUME_WS_HALO,)):
+    """Compare the block-wise stages of segment_cells_volume to watershed_cell_crop on the cell crop.
+
+    The inputs are those of watershed_cell_crop (the AIS predictions of the crop and the nuclei of the prompts),
+    so any difference comes from the block-wise processing, or from the distance transform of bioimage-cpp
+    instead of scipy for a result that watershed_cell_crop wrote before close_mask and expand_nuclei used it.
+    """
+    with h5py.File(get_cell_watershed_path(level), "r") as f:
+        reference = {"seeds": f["seeds"][:], "mask": f["mask"][:].astype(bool), "segmentation": f["segmentation"][:]}
+        assert f.attrs["closing_radius"] == CELL_CLOSING_RADIUS and f.attrs["expand_distance"] == CELL_EXPAND_DISTANCE
+    with h5py.File(get_cell_crop_path(level, "ais"), "r") as f:
+        foreground = f["prediction/foreground"][:]
+        boundary = f["prediction/boundary"][:]
+    with h5py.File(get_nucleus_prompts_path(), "r") as f:
+        nuclei_s1 = f["nuclei"][:].astype("uint64")
+    factor = [f1 // f for f1, f in zip(get_level_factor(1), get_level_factor(level))]
+    nuclei = repeat_labels(nuclei_s1, factor)
+    assert np.array_equal(nuclei[tuple(slice(None) for _ in factor)], load_cell_crop_nuclei(level))
+    voxel_size = get_level_voxel_size(level)
+
+    for block_shape, ws_halo in zip(block_shapes, ws_halos):
+        outputs = {
+            "seeds": np.zeros(foreground.shape, "uint64"), "mask": np.zeros(foreground.shape, "uint8"),
+            "segmentation": np.zeros(foreground.shape, "uint64"),
+        }
+        timings = segment_cells_blockwise(
+            foreground, boundary, nuclei, outputs, voxel_size, num_workers, block_shape=block_shape, ws_halo=ws_halo,
+        )
+        fg = reference["mask"] | outputs["mask"].astype(bool)
+        print(
+            f"blocks {block_shape}, watershed halo {ws_halo}: "
+            f"seeds differ in {np.sum(outputs['seeds'] != reference['seeds'])} voxels, "
+            f"mask in {np.sum(outputs['mask'].astype(bool) != reference['mask'])} voxels, "
+            f"segmentation in {np.sum(outputs['segmentation'] != reference['segmentation'])} voxels "
+            f"({np.mean(outputs['segmentation'][fg] != reference['segmentation'][fg]):.5f} of the mask), "
+            f"{', '.join(f'{k} in {v:.0f} s' for k, v in timings.items())}", flush=True,
+        )
+
+
+def seed_cell_crop(levels):
+    """Segment the cells of the cell crop with the nuclei as seeds, from the AIS predictions of segment_cell_crop.
+
+    The nuclei are those of the prompts (nucleus_prompts.h5, at s1), repeated 2 x 2 in y and x for s0. Saves the
+    watershed of the expanded nuclei ('watershed', with its 'seeds'), the over-segmentation and the graph watershed
+    ('graph_watershed') of each level in one h5 file.
+    """
+    from micro_sam.v2.postprocessing import flow_instance_segmentation
+
+    for level in levels:
+        path = get_cell_seeded_path(level)
+        if os.path.exists(path):
+            print(f"{path} exists, skipping s{level}")
+            continue
+        nuclei = load_cell_crop_nuclei(level)
+        voxel_size = get_level_voxel_size(level)
+        with h5py.File(get_cell_crop_path(level, "ais"), "r") as f:
+            prediction = np.stack([f[f"prediction/{name}"][:].astype("float32") for name in PREDICTION_CHANNELS])
+            attrs = dict(f.attrs)
+        assert nuclei.shape == prediction.shape[1:], (nuclei.shape, prediction.shape)
+        foreground, boundary = prediction[0], prediction[4]
+
+        t0 = time.time()
+        watershed, seeds, _ = nucleus_watershed(foreground, boundary, nuclei, voxel_size)
+        t_watershed = time.time() - t0
+
+        t0 = time.time()
+        params = dict(CELL_OVERSEGMENTATION)
+        params["min_size"] = int(params["min_size"] * np.prod(get_level_voxel_size(1)) / np.prod(voxel_size))
+        oversegmentation = flow_instance_segmentation(
+            foreground, prediction[1:4], model_type=MODELS["cells"], boundary=boundary,
+            foreground_threshold=CELL_FOREGROUND_THRESHOLD, **params,
+        )
+        graph_segmentation, oversegmentation, stats = graph_watershed(oversegmentation, boundary, nuclei)
+        t_graph = time.time() - t0
+
+        with h5py.File(path + ".tmp", "w") as f:
+            f.attrs.update({
+                "level": level, "bb_start": attrs["bb_start"], "bb_stop": attrs["bb_stop"], "voxel_size": voxel_size,
+                "predictions": get_cell_crop_path(level, "ais"), "nuclei": get_nucleus_prompts_path(),
+                "foreground_threshold": CELL_FOREGROUND_THRESHOLD, "expand_distance": CELL_EXPAND_DISTANCE,
+                "nucleus_fraction": CELL_NUCLEUS_FRACTION, "nucleus_edge_factor": CELL_NUCLEUS_EDGE_FACTOR,
+                **{f"oversegmentation_{key}": value for key, value in params.items()}, **stats,
+                "time_watershed": t_watershed, "time_graph_watershed": t_graph,
+            })
+            for name, data in (
+                ("seeds", seeds), ("watershed", watershed), ("oversegmentation", oversegmentation),
+                ("graph_watershed", graph_segmentation),
+            ):
+                f.create_dataset(name, data=data.astype("uint32"), chunks=True, compression="gzip")
+        os.rename(path + ".tmp", path)
+        n_objects = {
+            name: len(np.unique(data)) - 1 for name, data in (("watershed", watershed), ("graph", graph_segmentation))
+        }
+        print(
+            f"s{level}: watershed {n_objects['watershed']} cells in {t_watershed:.0f} s, graph watershed "
+            f"{n_objects['graph']} cells in {t_graph:.0f} s, {stats}", flush=True,
         )
 
 
@@ -1179,6 +2076,52 @@ def main():
     volume.add_argument("--z_range", type=int, nargs=2, default=None, help="Predict only these slices.")
     volume.add_argument("--slab_size", type=int, default=VOLUME_SLAB_SIZE)
     volume.add_argument("--batch_size", type=int, default=1)
+    volume.add_argument("--channels", nargs="+", default=list(PREDICTION_CHANNELS), choices=list(PREDICTION_CHANNELS))
+
+    ws = subparsers.add_parser("watershed_volume", help="Segment the volume predictions with a block-wise watershed.")
+    ws.add_argument("--level", type=int, default=1)
+    ws.add_argument("--target", default="nuclei", choices=list(MODELS))
+    ws.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
+    ws.add_argument("--min_size", type=int, default=WS_MIN_SIZE, help="Remove the objects below this size.")
+    ws.add_argument("--filter_only", action="store_true", help="Only run the size filter on the saved watershed.")
+
+    inverted = subparsers.add_parser(
+        "segment_inverted_crop", help="3d AIS on the inverted raw of a central crop at s1 and s0.",
+    )
+    inverted.add_argument("--zarr_path", default=OUTPUT_PATH)
+    inverted.add_argument("--levels", type=int, nargs="+", default=[1, 0])
+
+    cell_crop = subparsers.add_parser(
+        "segment_cell_crop", help="Cells of a central crop at s1 and s0: 3d AIS and prompts from the nuclei.",
+    )
+    cell_crop.add_argument("--zarr_path", default=OUTPUT_PATH)
+    cell_crop.add_argument("--levels", type=int, nargs="+", default=[1, 0])
+    cell_crop.add_argument("--methods", nargs="+", default=["ais", "prompts"], choices=["ais", "prompts"])
+
+    seeded = subparsers.add_parser(
+        "seed_cell_crop", help="Cells of the cell crop from the AIS predictions, seeded with the nuclei.",
+    )
+    seeded.add_argument("--levels", type=int, nargs="+", default=[1, 0])
+
+    cell_ws = subparsers.add_parser(
+        "watershed_cell_crop", help="Cells of the cell crop: watershed of the expanded nuclei, closed foreground mask.",
+    )
+    cell_ws.add_argument("--levels", type=int, nargs="+", default=[0])
+    cell_ws.add_argument("--closing_radius", type=float, default=CELL_CLOSING_RADIUS, help="In nanometer.")
+
+    cells_volume = subparsers.add_parser("segment_cells_volume", help="Segment the cells of a whole level block-wise.")
+    cells_volume.add_argument("--level", type=int, default=0)
+    cells_volume.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
+
+    check_volume = subparsers.add_parser(
+        "check_cells_volume", help="Compare the block-wise cell segmentation to watershed_cell_crop on the cell crop.",
+    )
+    check_volume.add_argument("--level", type=int, default=0)
+    check_volume.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
+    check_volume.add_argument("--block_shapes", type=int, nargs="+", default=[32, 256, 256], help="ZYX, repeated.")
+    check_volume.add_argument(
+        "--ws_halos", type=int, nargs="+", default=list(CELL_VOLUME_WS_HALO), help="ZYX, repeated.",
+    )
 
     seg3d = subparsers.add_parser("segment_3d", help="Segment the cells at s2 and the nuclei of an s0 block in 3d.")
     seg3d.add_argument("--zarr_path", default=OUTPUT_PATH)
@@ -1229,7 +2172,28 @@ def main():
             plot_predictions(args.zarr_path, output_dir, args.level, target, plot_path)
     elif args.task == "predict_volume":
         predict_volume(
-            args.zarr_path, args.level, args.target, args.z_range, args.slab_size, args.batch_size,
+            args.zarr_path, args.level, args.target, args.z_range, args.slab_size, args.batch_size, args.channels,
+        )
+    elif args.task == "watershed_volume":
+        watershed_volume(
+            args.level, args.target, args.num_workers, min_size=args.min_size, filter_only=args.filter_only,
+        )
+    elif args.task == "segment_inverted_crop":
+        segment_inverted_crop(args.zarr_path, args.levels)
+    elif args.task == "segment_cell_crop":
+        segment_cell_crop(args.zarr_path, args.levels, args.methods)
+    elif args.task == "seed_cell_crop":
+        seed_cell_crop(args.levels)
+    elif args.task == "watershed_cell_crop":
+        watershed_cell_crop(args.levels, args.closing_radius)
+    elif args.task == "segment_cells_volume":
+        segment_cells_volume(args.level, args.num_workers)
+    elif args.task == "check_cells_volume":
+        assert len(args.block_shapes) % 3 == 0 and len(args.ws_halos) == len(args.block_shapes)
+        check_cells_volume(
+            args.level, args.num_workers,
+            [tuple(args.block_shapes[i:i + 3]) for i in range(0, len(args.block_shapes), 3)],
+            [tuple(args.ws_halos[i:i + 3]) for i in range(0, len(args.ws_halos), 3)],
         )
     elif args.task == "segment_3d":
         segment_3d(args.zarr_path, SEGMENT_3D_DIR, args.runs)
