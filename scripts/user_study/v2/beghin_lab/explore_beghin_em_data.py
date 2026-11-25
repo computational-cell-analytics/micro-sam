@@ -80,6 +80,9 @@ export_segmentations: write the cells ('segment_cells_volume --border_seed --nuc
 (join_nucleus_fragments) as one OME-Zarr with two multiscale label images on the levels of the raw, next to the data
 (EXPORT_PATH).
 
+export_contours: write one level (s2) of the inverted raw and the contours of the exported cells and nuclei as a
+multichannel ImageJ hyperstack (tif) for Fiji, next to the export.
+
 check_cells_volume: run the block-wise stages of segment_cells_volume on the inputs of the cell crop and compare them
 to the result of watershed_cell_crop.
 
@@ -252,6 +255,9 @@ TISSUE_SURFACE_MARGIN = 8
 SEGMENTATION_PYRAMID_PATH = os.path.join(VOLUME_PREDICTION_DIR, "segmentation_pyramids.zarr")
 # The export of the cells and nuclei (export_segmentations), at the top level of the data folder of the Beghin lab.
 EXPORT_PATH = os.path.join(os.path.dirname(DATA_DIR), "PF_Dish_C_pin3new_Spheroid3_segmentation.ome.zarr")
+# The hyperstack for Fiji (export_contours): its level and the channels with their colors (RGB).
+CONTOUR_LEVEL = 2
+CONTOUR_CHANNELS = {"EM (inverted)": (255, 255, 255), "cell contours": (255, 0, 255), "nucleus contours": (0, 255, 0)}
 SEGMENTATION_PYRAMID_CHUNKS = (64, 256, 256)
 # The nuclei the decoder misses, segmented from one point each (segment_nuclei_from_prompts). The points are a napari
 # points layer saved as csv (index, z, y, x in voxels of NUCLEUS_POINTS_LEVEL of the raw). Each nucleus is segmented in
@@ -1620,6 +1626,61 @@ def export_segmentations(output_path=EXPORT_PATH, nuclei="joined", num_workers=1
         ],
     })
     print(f"Exported to {output_path}", flush=True)
+
+
+def get_contour_path(level=CONTOUR_LEVEL):
+    return os.path.join(os.path.dirname(DATA_DIR), f"PF_Dish_C_pin3new_Spheroid3_s{level}_contours.tif")
+
+
+def get_contours(labels):
+    """The contours of a label volume, per slice: the voxels of an object next to another label in its plane (255)."""
+    contours = np.zeros(labels.shape, dtype="uint8")
+    for z, plane in enumerate(labels):
+        contours[z] = 255 * find_boundaries(plane, mode="inner")
+    return contours
+
+
+def export_contours(zarr_path, export_path=EXPORT_PATH, level=CONTOUR_LEVEL, output_path=None):
+    """Export a level of the raw and the contours of the cells and nuclei as an ImageJ hyperstack for Fiji.
+
+    The tif has the axes ZCYX and the channels of CONTOUR_CHANNELS, all uint8: the inverted raw (as the models see
+    it, 255 - raw), the contours of the cells and the contours of the nuclei of export_segmentations at this level
+    (get_contours, 0 or 255). It is uncompressed and opens in Fiji as a composite with the voxel size in micrometer,
+    one color per channel and the channel names as slice labels. The labels of a level are the first voxel of each
+    block of s0 and the raw is the mean of the block, so the contours are shifted against the raw by less than half a
+    voxel of the level.
+
+    Args:
+        zarr_path: The OME-Zarr with the raw data.
+        export_path: The OME-Zarr of export_segmentations.
+        level: The scale level.
+        output_path: The path of the tif, by default get_contour_path(level).
+    """
+    output_path = get_contour_path(level) if output_path is None else output_path
+    raw = zarr.open_array(os.path.join(zarr_path, f"s{level}"), mode="r")[:]
+    export = zarr.open_group(export_path, mode="r")
+    channels = [255 - raw]
+    for name in ("cells", "nuclei"):
+        labels = export[name][f"s{level}"][:]
+        assert labels.shape == raw.shape, (labels.shape, raw.shape)
+        channels.append(get_contours(labels))
+        print(f"{name}: {len(np.unique(labels)) - 1} objects at s{level}", flush=True)
+    data = np.stack(channels, axis=1)
+
+    voxel_size = [vs / 1000 for vs in get_level_voxel_size(level)]
+    ramp = np.arange(256) / 255
+    luts = [np.round(np.outer(color, ramp)).astype("uint8") for color in CONTOUR_CHANNELS.values()]
+    tifffile.imwrite(
+        output_path, data, imagej=True, resolution=(1 / voxel_size[2], 1 / voxel_size[1]),
+        metadata={
+            "axes": "ZCYX", "spacing": voxel_size[0], "unit": "micron", "mode": "composite", "LUTs": luts,
+            "Ranges": tuple([0.0, 255.0] * len(luts)), "Labels": list(CONTOUR_CHANNELS) * data.shape[0],
+        },
+    )
+    print(
+        f"Saved {output_path}: {data.shape} (ZCYX) {data.dtype}, voxel size {voxel_size} um (ZYX), channels "
+        f"{list(CONTOUR_CHANNELS)}, {os.path.getsize(output_path) / 1e6:.0f} MB", flush=True,
+    )
 
 
 def get_prompted_nuclei_path():
@@ -3059,6 +3120,12 @@ def main():
     export.add_argument("--nuclei", default="joined", choices=["watershed", "merged", "joined"])
     export.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
 
+    contours = subparsers.add_parser(
+        "export_contours", help="Export a level of the inverted raw and the contours of cells and nuclei for Fiji.",
+    )
+    contours.add_argument("--zarr_path", default=OUTPUT_PATH)
+    contours.add_argument("--level", type=int, default=CONTOUR_LEVEL)
+
     pyramids = subparsers.add_parser(
         "downsample_segmentations", help="Write the pyramids of the cell and nucleus segmentations up to s3.",
     )
@@ -3169,6 +3236,8 @@ def main():
         )
     elif args.task == "export_segmentations":
         export_segmentations(args.output_path, args.nuclei, args.num_workers)
+    elif args.task == "export_contours":
+        export_contours(args.zarr_path, level=args.level)
     elif args.task == "check_cells_volume":
         assert len(args.block_shapes) % 3 == 0 and len(args.ws_halos) == len(args.block_shapes)
         check_cells_volume(
