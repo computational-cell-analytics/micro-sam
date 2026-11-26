@@ -2436,6 +2436,9 @@ class EmbeddingWidget(_WidgetBase):
         )
 
     def __call__(self, skip_validate=False):
+        state = AnnotatorState()
+        # Keep existing results when validation fails or the user cancels.
+        state.skip_recomputing_embeddings = True
         self._validate_model_type_and_custom_weights()
         if self._validate_model_support():
             return
@@ -2444,15 +2447,21 @@ class EmbeddingWidget(_WidgetBase):
         if self._validate_vfm_requirements():
             return
 
+        image = self.image_selection.get_value()
+        if image is None:
+            return _generate_message("error", "No image has been selected.")
+        ndim = image.data.ndim - int(image.rgb)
+        if self._ndim is not None and ndim != self._ndim:
+            return _generate_message(
+                "error", f"This annotator requires {self._ndim} dimensions (excluding RGB channels). "
+                f"The selected image has shape {image.data.shape}."
+            )
+
         # Validate user inputs.
         if not skip_validate and self._validate_inputs():
             return
 
-        # Get the image.
-        image = self.image_selection.get_value()
-
         # Update the image embeddings:
-        state = AnnotatorState()
         if self._validate_existing_embeddings(state):
             # Whether embeddings already exist to control existing objects in layers.
             state.skip_recomputing_embeddings = True
