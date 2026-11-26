@@ -22,9 +22,9 @@ from torch_em.util.debug import check_loader
 from torch_em.util.util import get_random_colors
 
 from micro_sam import util
-import micro_sam.training as sam_training
-from micro_sam.training.util import normalize_to_8bit
-from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
+import micro_sam.v1.training as sam_training
+from micro_sam.v1.training.util import normalize_to_8bit
+from micro_sam.v1.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
 from download_datasets import _get_hpa_data_paths
 
@@ -127,7 +127,7 @@ def get_dataloaders(
 ) -> Tuple[DataLoader, DataLoader]:
     """Get the HPA dataloaders for cell segmentation.
 
-    NOTE: `micro_sam.training.default_sam_loader` is a convenience function to build a torch dataloader
+    NOTE: `micro_sam.v1.training.default_sam_loader` is a convenience function to build a torch dataloader
     from the image data and labels for training segmentation models.
     This is wrapped around the `torch_em.default_segmentation_loader`.
     It supports image data in various formats. Here, we load image data and corresponding labels by providing

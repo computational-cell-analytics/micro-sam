@@ -30,10 +30,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup micromamba
-        uses: mamba-org/setup-micromamba@v1
+        uses: mamba-org/setup-micromamba@v3
+        # Build pip packages on the main disk: the /tmp of ubuntu-latest is too small for the torch wheels.
+        env:
+          TMPDIR: ${{ runner.temp }}
         with:
           environment-file: environment.yaml
           # Pin Python to the version verified by the test suite (test.yaml).
@@ -76,7 +79,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: tmp/
 
@@ -93,4 +96,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

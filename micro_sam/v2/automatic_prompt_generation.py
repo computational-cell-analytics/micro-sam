@@ -1,0 +1,2810 @@
+"""Automatic prompt generation (APG) for UniSAM2: propose seeds generously, let the model judge them.
+
+The flow post-processing thresholds the decoder's convergence density to get instances. APG proposes
+candidates *below* that threshold, prompts the interactive branch with each one, and keeps the masks it
+scores highly, so the model does the discrimination that thresholding cannot.
+
+A volume works the same way, with the SAM2 video predictor in place of the image predictor: the flow
+is integrated in 3d so a density component is a whole object, each is scored in 2d on the slice it
+converges on, and the survivors are propagated through the volume. The optional 'refinement' re-prompts
+each instance on its anchor slice before the propagation.
+
+The measurements behind these choices are in finetuning/v2/evaluation/optimization/notes/APG_2D_OPTIMIZATION.md
+and APG_3D_OPTIMIZATION.md.
+"""
+
+import copy
+import queue
+import shutil
+import contextlib
+import multiprocessing as mp
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
+
+import numpy as np
+from tqdm import tqdm
+from scipy.ndimage import find_objects
+
+import torch
+
+from sam2.utils.amg import calculate_stability_score
+
+from bioimage_cpp.utils import Blocking
+from bioimage_cpp.segmentation import label
+from bioimage_cpp.distance import distance_transform
+
+# Only the tiled stitching uses it, so a missing 'bioimage_py' must not break the import of this module.
+try:
+    import bioimage_py as bp
+except ImportError:
+    bp = None
+
+from .normalization import to_image
+from .transforms.resize import resize_longest_side_and_pad_tensor
+from ..util import make_temp_embedding_path
+from .postprocessing import _compute_flow_density
+from .._model_settings import DEFAULT_PROMPT_GENERATION_PARAMETERS
+from .batched_inference import _resolve_devices, _volume_normalization_bounds
+from .prompt_based_segmentation import (
+    ReplicatedPromptableSegmentation3D, map_jobs_over_devices, _crop_to_original_shape,
+)
+from .util import (
+    DEFAULT_MODEL, autocast, configure_image_predictor, encode_image, get_sam2_image_predictor,
+    parameter_family, precompute_image_embeddings, set_precomputed, _load_list_datasets,
+)
+from .instance_segmentation import (
+    UniSAM2InstanceSegmentation, USE_MODEL_DEVICE, Devices, _set_image_predictor_from_3d_embeddings,
+)
+
+
+def _run_with_progress(function, pbar_update):
+    """Relay parallel work's progress to the calling thread, where GUI callbacks can repaint."""
+    if pbar_update is None:
+        return function(None)
+    updates = queue.Queue()
+    grad_enabled = torch.is_grad_enabled()
+
+    def run():
+        with torch.set_grad_enabled(grad_enabled):
+            return function(updates.put)
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        task = pool.submit(run)
+        while not task.done() or not updates.empty():
+            try:
+                increment = updates.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            pbar_update(increment)
+        return task.result()
+
+
+# Only enters the merge order, never a cutoff, so it is a constant.
+STABILITY_SCORE_OFFSET = 1.0
+
+# The multicut boundary bias `TiledAutomaticPromptGenerator` stitches tiles/blocks with by default.
+DEFAULT_STITCHING_BETA = 0.5
+
+
+def default_prompt_generation(model_type: str = DEFAULT_MODEL, is_volume: bool = False) -> dict:
+    """The default APG parameters for one model and dimensionality.
+
+    Args:
+        model_type: The model, e.g. 'hvit_t_cells' or 'hvit_s_em_mito', or a SAM2 backbone, e.g. 'hvit_t', which
+            uses the 'cells' defaults. Its family and backbone select the table, see `parameter_family`.
+        is_volume: Whether to use the 3D table (`derive_volume_prompts`) or the 2D one
+            (`derive_point_prompts`). A volume prompts once per object rather than once per slice, so
+            the two are swept and tuned independently.
+
+    Returns:
+        The default parameter dict for that model and dimensionality.
+    """
+    family, backbone = parameter_family(model_type), model_type[:6]
+    params = DEFAULT_PROMPT_GENERATION_PARAMETERS.get(family, {}).get(backbone)
+    if params is None:
+        raise ValueError(
+            f"No default prompt generation parameters for model type '{model_type}'. They exist for "
+            + ", ".join(f"{name}: {sorted(table)}" for name, table in DEFAULT_PROMPT_GENERATION_PARAMETERS.items())
+            + "."
+        )
+    return params["3d" if is_volume else "2d"]
+
+
+# Enough jobs per device that none idles at the end, and enough passes per job to pay for its state.
+PROPAGATION_JOBS_PER_DEVICE = 4
+MIN_PASSES_PER_PROPAGATION_JOB = 4
+
+DEFAULT_PROMPT_GENERATION = {
+    "multimasking": True,
+    # Resolves to the mode of 'default_prompt_generation'; pass None to run no second round.
+    "refinement": "default",
+    "refinement_kwargs": None,
+    # Volumes only. Trades device memory against the pass count.
+    "n_objects_per_pass": 16,
+    # Volumes only. Stop a pass after this many empty slices; None propagates through the whole volume.
+    "early_stop_patience": 2,
+    # Tiled volumes only. Rounds the candidates are propagated in, highest scoring first, so that a later round
+    # drops the candidates that the finished masks already cover. Faster, but not better on every dataset.
+    "propagation_waves": 1,
+    # Reject a candidate this many times larger than the median candidate it is merged against, see `merge_by_score`.
+    "max_size_factor": None,
+    # Number of image prompts (or refinement boxes) evaluated per forward pass.
+    "batch_size": 64,
+    # The step of the flow integration.
+    "dt": 0.5,
+    # Throughput only, the density is the same either way.
+    "n_threads": 8,
+}
+
+# The components a refinement mode can be assembled from, and the keyword arguments each accepts.
+# A mode is a '+'-joined combination, e.g. 'points', 'boxes' or 'points+boxes': every component
+# contributes its prompt to one joint re-prompt per instance, so 'points+boxes' conditions on both.
+REFINEMENT_COMPONENTS = ("points", "boxes", "masks")
+REFINEMENT_KWARGS = {
+    "shared": ("policy", "multimasking", "min_consistency", "max_foreign_overlap"),
+    "points": ("n_positives", "n_negatives", "max_negative_distance", "negative_source", "min_negative_distance"),
+    "boxes": ("box_extension",),
+    "masks": (),
+}
+DEFAULT_REFINEMENT = {
+    # 'replace' repaints every instance from its second-round mask; 'keep-if-better' keeps the
+    # first-round mask unless the second round scores higher.
+    "policy": "replace",
+    # Off by default: a multi-prompt re-prompt is not ambiguous the way a single point is.
+    "multimasking": False,
+    # Accept a second-round mask only if its IoU with the first-round mask reaches this. None accepts any.
+    "min_consistency": 0.7,
+    # Keep the first-round mask when more than this fraction of the second-round mask lies on other
+    # instances. None allows any.
+    "max_foreign_overlap": 0.15,
+    # Extra positives from the prompts grouped onto an instance hurt.
+    "n_positives": 1,
+    # Negative points per instance, taken from the prompts of the nearest other instances.
+    "n_negatives": 6,
+    # Only prompts within this distance (in pixels) of an instance's bounding box can be its
+    # negatives. None takes the nearest ones regardless of distance.
+    "max_negative_distance": None,
+    # Where an instance's negatives come from: the other instances' first-round 'prompts', or the
+    # deepest 'interior' point of each other instance's mask, which sits away from shared borders.
+    "negative_source": "prompts",
+    # Exclude negatives closer than this (in pixels) to the instance's own first-round mask.
+    "min_negative_distance": 0,
+    # Number of pixels every box prompt is grown by.
+    "box_extension": 0,
+}
+
+# A volume refines its anchor slices before the propagation, since a prompt on a propagated slice
+# replaces its mask. 'conditioning' is the one addition to the 2d components.
+CONDITIONING_MODES = ("prompts", "prompts-grouped", "prompts-joint", "mask")
+REFINEMENT_KWARGS_3D = {
+    "shared": REFINEMENT_KWARGS["shared"] + ("conditioning",),
+    "points": REFINEMENT_KWARGS["points"],
+    "boxes": REFINEMENT_KWARGS["boxes"],
+    "masks": REFINEMENT_KWARGS["masks"],
+}
+DEFAULT_REFINEMENT_3D = dict(DEFAULT_REFINEMENT)
+# The counters a volume's refinement reports, summed over the anchor slices.
+REFINEMENT_STATS_3D = (
+    "refined_candidates", "replaced_candidates", "gated_consistency", "gated_foreign",
+    "refinement_negatives",
+)
+DEFAULT_REFINEMENT_3D.update({
+    "n_negatives": 4,
+    # Tighter than in 2d, since an accepted re-prompt conditions a whole track.
+    "min_consistency": 0.85,
+    # How an accepted re-prompt is pushed onto the anchor frame. Each push re-runs the mask decoder, so more
+    # pushes refine the anchor more: 'prompts' pushes the box, then each point; 'prompts-grouped' the box, then
+    # all points; 'prompts-joint' the box and all points at once; 'mask' the refined mask itself.
+    "conditioning": "prompts",
+})
+
+
+def _parse_refinement(
+    refinement: str, refinement_kwargs: Optional[Dict[str, Any]], is_volume: bool = False,
+) -> tuple:
+    """Parse a refinement mode into its components and resolve its keyword arguments.
+
+    Args:
+        refinement: The mode, a '+'-joined combination of `REFINEMENT_COMPONENTS`.
+        refinement_kwargs: The mode's keyword arguments. Only keys that one of the mode's
+            components (or every mode) accepts are allowed.
+        is_volume: Whether the mode is resolved for a volume, which accepts and defaults its
+            keyword arguments differently, see `REFINEMENT_KWARGS_3D` and `DEFAULT_REFINEMENT_3D`.
+
+    Returns:
+        The components as a tuple, and the resolved keyword arguments with the defaults filled in.
+    """
+    accepted = REFINEMENT_KWARGS_3D if is_volume else REFINEMENT_KWARGS
+    defaults = DEFAULT_REFINEMENT_3D if is_volume else DEFAULT_REFINEMENT
+    components = tuple(refinement.split("+"))
+    unknown = [component for component in components if component not in REFINEMENT_COMPONENTS]
+    if unknown or len(set(components)) != len(components):
+        raise ValueError(
+            f"Invalid refinement mode {refinement!r}: expected a '+'-joined combination of "
+            f"{', '.join(REFINEMENT_COMPONENTS)} without repetition."
+        )
+    if components == ("masks",):
+        raise ValueError(
+            "A mask prompt can only condition a re-prompt, not drive one alone: SAM2 is not trained "
+            "for dense-only prompting. Combine it, e.g. 'points+masks' or 'boxes+masks'."
+        )
+
+    allowed = set(accepted["shared"])
+    for component in components:
+        allowed.update(accepted[component])
+    refinement_kwargs = refinement_kwargs or {}
+    unknown = sorted(set(refinement_kwargs) - allowed)
+    if unknown:
+        raise ValueError(
+            f"Invalid refinement_kwargs for mode {refinement!r}: {', '.join(unknown)}. "
+            f"Allowed: {', '.join(sorted(allowed))}."
+        )
+
+    resolved = {key: defaults[key] for key in allowed}
+    resolved.update(refinement_kwargs)
+    if resolved["policy"] not in ("replace", "keep-if-better"):
+        raise ValueError(f"Invalid refinement policy {resolved['policy']!r}: expected 'replace' or 'keep-if-better'.")
+    if resolved.get("negative_source", "prompts") not in ("prompts", "interior"):
+        raise ValueError(
+            f"Invalid negative_source {resolved['negative_source']!r}: expected 'prompts' or 'interior'."
+        )
+    if resolved.get("conditioning", "prompts") not in CONDITIONING_MODES:
+        raise ValueError(
+            f"Invalid conditioning {resolved['conditioning']!r}: expected one of "
+            f"{', '.join(CONDITIONING_MODES)}."
+        )
+    return components, resolved
+
+
+def mask_to_logits(mask: np.ndarray, eps: float = 1e-3) -> np.ndarray:
+    """Turn a binary mask into the low-resolution logit prompt SAM2 expects.
+
+    The image predictor preserves the aspect ratio and pads the bottom or right side. The mask uses
+    the same frame, so it stays aligned with the image features and other prompts.
+
+    Args:
+        mask: The binary mask, shape (Y, X).
+        eps: Probability assigned to the background, from which the logit magnitude follows.
+
+    Returns:
+        The logits, shape (1, 256, 256), float32.
+    """
+    binary = torch.from_numpy(np.asarray(mask, dtype="float32"))[None, None]
+    resized, _ = resize_longest_side_and_pad_tensor(binary, target_length=256)
+    logit = float(np.log((1.0 - eps) / eps))
+    return np.where(resized[0].numpy() > 0.5, logit, -logit).astype("float32")
+
+
+def _assign_points_to_instances(segmentation: np.ndarray, points: np.ndarray) -> np.ndarray:
+    """The instance id under every point, 0 where a point lies on the background.
+
+    Args:
+        segmentation: The instance segmentation.
+        points: The points as (N, 2) in XY, following the prompt convention.
+
+    Returns:
+        The instance ids as (N,), int64.
+    """
+    if len(points) == 0:
+        return np.zeros(0, dtype="int64")
+    coordinates = np.round(points[:, ::-1]).astype("int64")  # XY to YX.
+    coordinates = np.clip(coordinates, 0, np.array(segmentation.shape) - 1)
+    return segmentation[tuple(coordinates.T)].astype("int64")
+
+
+def _subsample_positives(anchor: np.ndarray, candidates: np.ndarray, n_positives: int) -> np.ndarray:
+    """The anchor plus up to 'n_positives - 1' candidates, chosen greedily for spatial coverage.
+
+    Farthest-point subsampling: each step adds the candidate farthest from everything selected so
+    far, so the kept positives spread over the instance instead of clustering. Deterministic, with
+    ties broken by candidate order.
+
+    Args:
+        anchor: The point that is always kept, shape (2,).
+        candidates: The candidate points, shape (M, 2).
+        n_positives: The total number of positives to keep, including the anchor.
+
+    Returns:
+        The selected points, shape (min(n_positives, M + 1), 2).
+    """
+    selected = [np.asarray(anchor, dtype="float32")]
+    remaining = [np.asarray(candidate, dtype="float32") for candidate in candidates]
+    while remaining and len(selected) < n_positives:
+        distances = [min(float(np.linalg.norm(candidate - point)) for point in selected) for candidate in remaining]
+        selected.append(remaining.pop(int(np.argmax(distances))))
+    return np.stack(selected)
+
+
+def _select_negatives(
+    candidates: np.ndarray, bounding_box: tuple, n_negatives: int, max_negative_distance: Optional[float],
+) -> np.ndarray:
+    """The candidates nearest to the instance, which are the ones the model could confuse with it.
+
+    Nearness is the distance to the instance's bounding box, which is zero inside it; ties are
+    broken by the distance to the box's center and then by candidate order, so the selection is
+    deterministic.
+
+    Args:
+        candidates: The candidate points as (M, 2) in XY.
+        bounding_box: The instance's bounding box as a (y_slice, x_slice) tuple.
+        n_negatives: Number of negatives to select.
+        max_negative_distance: Discard candidates farther than this from the bounding box.
+
+    Returns:
+        The selected points, shape (min(n_negatives, M'), 2).
+    """
+    if len(candidates) == 0 or n_negatives <= 0:
+        return np.zeros((0, 2), dtype="float32")
+    y_slice, x_slice = bounding_box
+    low = np.array([x_slice.start, y_slice.start], dtype="float32")
+    high = np.array([x_slice.stop - 1, y_slice.stop - 1], dtype="float32")
+
+    outside = np.maximum(np.maximum(low - candidates, candidates - high), 0.0)
+    distances = np.linalg.norm(outside, axis=1)
+    center_distances = np.linalg.norm(candidates - (low + high) / 2.0, axis=1)
+    order = np.lexsort((np.arange(len(candidates)), center_distances, distances))
+    if max_negative_distance is not None:
+        order = order[distances[order] <= max_negative_distance]
+    return candidates[order[:n_negatives]].astype("float32")
+
+
+def _distances_to_mask(
+    segmentation: np.ndarray, instance_id: int, bounding_box: tuple, candidates: np.ndarray, reach: float,
+) -> np.ndarray:
+    """The Euclidean distance of every candidate point to the instance's mask, exact up to 'reach'.
+
+    The transform runs on the instance's bounding box grown by 'reach', so a candidate outside that
+    crop is farther than 'reach' and reported as infinity, which the caller's threshold treats the
+    same way.
+
+    Args:
+        segmentation: The instance segmentation.
+        instance_id: The instance whose mask is measured to.
+        bounding_box: The instance's bounding box, as a (y_slice, x_slice) tuple.
+        candidates: The candidate points as (M, 2) in XY.
+        reach: The distance up to which the measurement has to be exact.
+
+    Returns:
+        The distances as (M,), float32, with infinity beyond 'reach'.
+    """
+    margin = int(np.ceil(reach)) + 1
+    y_slice, x_slice = bounding_box
+    y0, y1 = max(0, y_slice.start - margin), min(segmentation.shape[0], y_slice.stop + margin)
+    x0, x1 = max(0, x_slice.start - margin), min(segmentation.shape[1], x_slice.stop + margin)
+    distances_in_crop = distance_transform(segmentation[y0:y1, x0:x1] != instance_id)
+
+    distances = np.full(len(candidates), np.inf, dtype="float32")
+    for position, (x, y) in enumerate(np.round(candidates).astype("int64")):
+        if y0 <= y < y1 and x0 <= x < x1:
+            distances[position] = distances_in_crop[y - y0, x - x0]
+    return distances
+
+
+def derive_refinement_prompts(
+    segmentation: np.ndarray,
+    points: np.ndarray,
+    surviving_points: Dict[int, tuple],
+    n_positives: int = DEFAULT_REFINEMENT["n_positives"],
+    n_negatives: int = DEFAULT_REFINEMENT["n_negatives"],
+    max_negative_distance: Optional[float] = DEFAULT_REFINEMENT["max_negative_distance"],
+    negative_source: str = DEFAULT_REFINEMENT["negative_source"],
+    min_negative_distance: float = DEFAULT_REFINEMENT["min_negative_distance"],
+) -> Dict[int, Dict[str, np.ndarray]]:
+    """Group the first round's prompts onto the instances they landed in and derive re-prompts.
+
+    An instance's positives are the prompt that made it plus the suppressed prompts inside it: each
+    marks a spot the decoder proposed an object at, so together they cover the instance in a way a
+    single point cannot. Its negatives are nearby points belonging to other instances, which tell
+    the model where the instance ends.
+
+    Args:
+        segmentation: The instance segmentation of the first round.
+        points: All first-round prompt points as (N, 2) in XY, including the suppressed ones.
+        surviving_points: The prompt that made each instance, as {instance_id: (x, y)}.
+        n_positives: Number of positive points per instance, including the surviving prompt. The
+            surplus is subsampled farthest-point-first, for spatial coverage.
+        n_negatives: Number of negative points per instance. The surplus is dropped farthest-first,
+            measured to the instance's bounding box.
+        max_negative_distance: Only points within this distance of an instance's bounding box can
+            be its negatives. None takes the nearest ones regardless of distance.
+        negative_source: Where the negatives come from: the other instances' first-round 'prompts',
+            or the deepest 'interior' point of each other instance's mask, which sits away from any
+            border the two instances share.
+        min_negative_distance: Exclude negatives closer than this to the instance's own mask. A
+            negative that touches the instance's true extent cuts into the object instead of
+            bounding it, which is the suspected failure on densely packed data.
+
+    Returns:
+        The prompts per instance, as {instance_id: {'points': (M, 2) XY, 'point_labels': (M,),
+        'n_grouped': int}}, where 'n_grouped' counts the suppressed prompts grouped onto the
+        instance before any subsampling - the supply signal an adaptive re-prompt keys on.
+    """
+    points = np.asarray(points, dtype="float32").reshape(-1, 2)
+    assignment = _assign_points_to_instances(segmentation, points)
+
+    if negative_source == "interior":
+        # One deep interior point per instance, ordered by ascending instance id; converted to XY.
+        interior = interior_points(segmentation)[:, ::-1].astype("float32")
+        present = np.array(sorted(surviving_points), dtype="int64")
+        negative_points, negative_owners = interior, present
+    elif negative_source == "prompts":
+        foreign = assignment > 0
+        negative_points, negative_owners = points[foreign], assignment[foreign]
+    else:
+        raise ValueError(f"Invalid negative_source {negative_source!r}: expected 'prompts' or 'interior'.")
+
+    prompts = {}
+    for index, bounding_box in enumerate(find_objects(segmentation), start=1):
+        if bounding_box is None:
+            continue
+        anchor = np.asarray(surviving_points[index], dtype="float32")
+        grouped = points[assignment == index]
+        # The anchor is one of the grouped points; keep it once, as the seed of the subsampling.
+        grouped = grouped[np.linalg.norm(grouped - anchor, axis=1) > 0]
+        positives = _subsample_positives(anchor, grouped, n_positives)
+
+        allowed = negative_owners != index
+        candidates = negative_points[allowed]
+        if min_negative_distance > 0 and len(candidates) and n_negatives > 0:
+            distances = _distances_to_mask(segmentation, index, bounding_box, candidates, min_negative_distance)
+            candidates = candidates[distances >= min_negative_distance]
+        negatives = _select_negatives(candidates, bounding_box, n_negatives, max_negative_distance)
+
+        prompts[index] = {
+            "points": np.concatenate([positives, negatives]).astype("float32"),
+            "point_labels": np.concatenate([
+                np.ones(len(positives), dtype="int32"), np.zeros(len(negatives), dtype="int32"),
+            ]),
+            "n_grouped": int(len(grouped)),
+        }
+    return prompts
+
+
+def _shift_box(bounding_box: tuple, offset: tuple) -> tuple:
+    """Translate a bounding box by a per-axis offset, returning it unchanged for a zero offset."""
+    if not any(offset):
+        return bounding_box
+    return tuple(slice(box.start + shift, box.stop + shift) for box, shift in zip(bounding_box, offset))
+
+
+def _localize_prompts(prompt: Dict[str, Any], origin: tuple, extent: tuple) -> tuple:
+    """Translate one instance's re-prompt into a region's frame, dropping the negatives outside it.
+
+    The instance's own mask lies inside the region it is re-prompted in, so its positives are only
+    clamped onto the border pixel they round to. A negative comes from a neighbouring instance and
+    can lie outside the region - beyond a tile's halo - and has to go, because the predictor
+    normalises the prompt against the region's own shape.
+
+    Args:
+        prompt: The instance's prompt, as `derive_refinement_prompts` returns it.
+        origin: The region's (y, x) origin in the full image.
+        extent: The region's (y, x) shape.
+
+    Returns:
+        The translated prompt, and the number of negatives dropped.
+    """
+    origin_xy = np.array([origin[1], origin[0]], dtype="float32")
+    high_xy = np.array([extent[1] - 1, extent[0] - 1], dtype="float32")
+    points = np.asarray(prompt["points"], dtype="float32") - origin_xy
+    labels = np.asarray(prompt["point_labels"])
+
+    # A point that rounds onto one of the region's pixels is inside it. Positives are never dropped.
+    inside = np.all((points >= -0.5) & (points <= high_xy + 0.5), axis=1)
+    keep = inside | (labels == 1)
+    localized = {
+        "points": np.clip(points[keep], 0.0, high_xy),
+        "point_labels": labels[keep],
+        "n_grouped": prompt["n_grouped"],
+    }
+    return localized, int(np.count_nonzero(~keep))
+
+
+def _prompt_box(bounding_box: tuple, shape: tuple, box_extension: int) -> tuple:
+    """An instance's bounding box as the XYXY box prompt SAM2 takes, grown and clipped to 'shape'.
+
+    Args:
+        bounding_box: The instance's bounding box, as a (y_slice, x_slice) tuple.
+        shape: The (Y, X) shape the grown box is clipped to.
+        box_extension: Number of pixels the box is grown by on every side.
+
+    Returns:
+        The box as (x0, y0, x1, y1).
+    """
+    y_slice, x_slice = bounding_box
+    return (
+        max(0, x_slice.start - box_extension), max(0, y_slice.start - box_extension),
+        min(shape[1], x_slice.stop + box_extension), min(shape[0], y_slice.stop + box_extension),
+    )
+
+
+def interior_points(labels: np.ndarray) -> np.ndarray:
+    """The deepest interior point of every labelled component, in ascending label order.
+
+    The v1 counterpart transforms a `find_boundaries` image, whose 'outer' mode marks a thin
+    component's own pixels as boundary. Its maximum then falls on the bounding box's first pixel,
+    which need not lie in the component at all.
+
+    Args:
+        labels: A labelled image or volume.
+
+    Returns:
+        The points as (N, ndim), one per component, in the array's own axis order.
+    """
+    points = []
+    for index, bounding_box in enumerate(find_objects(labels), start=1):
+        if bounding_box is None:
+            continue
+        # Padded, so a component reaching the border is measured from that border too.
+        distances = distance_transform(np.pad(labels[bounding_box] == index, 1))
+        coordinates = np.unravel_index(int(np.argmax(distances)), distances.shape)
+        points.append(tuple(int(c) + box.start - 1 for c, box in zip(coordinates, bounding_box)))
+    return np.array(points, dtype="int64").reshape(-1, labels.ndim)
+
+
+def derive_point_prompts(
+    foreground: np.ndarray,
+    directed_distances: np.ndarray,
+    model_type: str = DEFAULT_MODEL,
+    candidate_threshold: Optional[float] = None,
+    foreground_threshold: Optional[float] = None,
+    n_iter: Optional[int] = None,
+    dt: Optional[float] = None,
+    sigma: Optional[float] = None,
+    min_candidate_size: Optional[int] = None,
+    n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
+) -> Optional[Dict[str, np.ndarray]]:
+    """Derive one positive point prompt per convergence-density component.
+
+    The v1 counterpart intersects thresholded centre and boundary distances; UniSAM2 predicts directed
+    distances instead, so the candidates come from the flow-convergence density that the sparse
+    post-processing also seeds from, thresholded lower.
+
+    Args:
+        foreground: Foreground probability map, shape (Y, X).
+        directed_distances: Distance channels stacked along axis 0. A leading z-channel is dropped, so
+            `prediction[1:4]` can be passed regardless of dimensionality.
+        model_type: The SAM2 backbone the predictions came from, e.g. 'hvit_t'. Selects the default
+            for any of the tunable parameters below left as None, see `default_prompt_generation`.
+        candidate_threshold: Density threshold for proposing candidates. Lower proposes more. The density
+            of a component scales with the object's area, so this is coupled to object size.
+        foreground_threshold: Foreground binarisation threshold, which bounds the pixels that can be
+            proposed from.
+        n_iter: Number of flow-integration steps. Together with 'dt' this is the distance a pixel is
+            advected, which has to be enough to reach the object's centre.
+        dt: Integration step size. Mostly only the product with 'n_iter' matters.
+        sigma: Gaussian sigma for smoothing the convergence-density map.
+        min_candidate_size: Discard components smaller than this, which are noise rather than objects.
+        n_threads: Number of threads for the flow computation.
+
+    Returns:
+        The prompts as {'points': (N, 1, 2) in XY, 'point_labels': (N, 1)}, or None if none were found.
+    """
+    defaults = default_prompt_generation(model_type, is_volume=False)
+    if candidate_threshold is None:
+        candidate_threshold = defaults["candidate_threshold"]
+    if foreground_threshold is None:
+        foreground_threshold = defaults["foreground_threshold"]
+    if n_iter is None:
+        n_iter = defaults["n_iter"]
+    if dt is None:
+        dt = DEFAULT_PROMPT_GENERATION["dt"]
+    if sigma is None:
+        sigma = defaults["sigma"]
+    if min_candidate_size is None:
+        min_candidate_size = defaults["min_candidate_size"]
+
+    if directed_distances.shape[0] > foreground.ndim:
+        directed_distances = directed_distances[-foreground.ndim:]
+
+    fg_mask = foreground > foreground_threshold
+    density = _compute_flow_density(
+        directed_distances, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma, n_threads=n_threads,
+    )
+    candidates = label(density > candidate_threshold)
+
+    if min_candidate_size > 0:
+        ids, sizes = np.unique(candidates, return_counts=True)
+        discard = ids[(sizes < min_candidate_size) & (ids > 0)]
+        if discard.size:
+            candidates[np.isin(candidates, discard)] = 0
+    if candidates.max() == 0:
+        return None
+
+    # The interior point rather than the centroid, which can lie outside a curved object.
+    centers = interior_points(candidates)
+    if len(centers) == 0:
+        return None
+
+    return {
+        "points": np.ascontiguousarray(centers[:, ::-1], dtype="float32")[:, None, :],  # SAM2 wants XY
+        "point_labels": np.ones((len(centers), 1), dtype="int32"),
+    }
+
+
+def derive_volume_prompts(
+    foreground: np.ndarray,
+    directed_distances: np.ndarray,
+    model_type: str = DEFAULT_MODEL,
+    candidate_threshold: Optional[Union[float, Sequence[float]]] = None,
+    foreground_threshold: Optional[float] = None,
+    n_iter: Optional[int] = None,
+    dt: Optional[float] = None,
+    sigma: Optional[float] = None,
+    spacing: Optional[tuple] = None,
+    min_candidate_size: Optional[int] = None,
+    n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
+) -> Optional[Dict[str, np.ndarray]]:
+    """Derive one positive point prompt, on one slice, per volumetric convergence-density component.
+
+    The volumetric counterpart of `derive_point_prompts`. The flow is integrated in 3d, so a component
+    of the resulting density is a whole object rather than one of its cross-sections, and each object
+    is prompted once instead of once per slice. The prompt is placed on the slice where the component
+    converges most, which is the slice the video predictor propagates away from in both directions.
+
+    Args:
+        foreground: Foreground probability map, shape (Z, Y, X).
+        directed_distances: Distance channels stacked along axis 0, shape (3, Z, Y, X).
+        model_type: The SAM2 backbone the predictions came from, e.g. 'hvit_t'. Selects the default
+            for any of the tunable parameters below left as None, see `default_prompt_generation`.
+        candidate_threshold: Density threshold for proposing candidates, or several of them. Lower
+            proposes more, but also merges the peaks of touching objects into one component, so a
+            ladder recovers what a single threshold cannot separate.
+        foreground_threshold: Foreground binarisation threshold, which bounds the voxels that can be
+            proposed from.
+        n_iter: Number of flow-integration steps. Together with 'dt' this is the distance a voxel is
+            advected, which has to be enough to reach the object's centre.
+        dt: Integration step size. Mostly only the product with 'n_iter' matters.
+        sigma: Gaussian sigma for smoothing the convergence-density map.
+        spacing: Anisotropic voxel spacing, e.g. (4, 1, 1), for physically isotropic smoothing.
+        min_candidate_size: Discard components smaller than this, which are noise rather than objects.
+        n_threads: Number of threads for the flow computation.
+
+    Returns:
+        The prompts as {'points': (N, 1, 2) in XY, 'point_labels': (N, 1), 'frames': (N,) slice
+        indices}, or None if no candidate was found.
+    """
+    if foreground.ndim != 3:
+        raise ValueError(f"Volumetric prompt generation expects a (Z, Y, X) foreground map, got {foreground.shape}.")
+    if directed_distances.shape[0] != 3:
+        raise ValueError(f"Expected 3 distance channels, got {directed_distances.shape[0]}.")
+
+    defaults = default_prompt_generation(model_type, is_volume=True)
+    if candidate_threshold is None:
+        candidate_threshold = defaults["candidate_threshold"]
+    if foreground_threshold is None:
+        foreground_threshold = defaults["foreground_threshold"]
+    if n_iter is None:
+        n_iter = defaults["n_iter"]
+    if dt is None:
+        dt = DEFAULT_PROMPT_GENERATION["dt"]
+    if sigma is None:
+        sigma = defaults["sigma"]
+    if min_candidate_size is None:
+        min_candidate_size = defaults["min_candidate_size"]
+
+    fg_mask = foreground > foreground_threshold
+    density = _compute_flow_density(
+        directed_distances, fg_mask, n_iter=int(n_iter), dt=dt, sigma=sigma, spacing=spacing,
+        n_threads=n_threads,
+    )
+
+    levels = sorted(np.atleast_1d(np.asarray(candidate_threshold, dtype="float32")).tolist(), reverse=True)
+    points, frames, seen = [], [], set()
+    # Descending, so that the peaks a lower threshold merges into one component are proposed first.
+    for threshold in levels:
+        candidates = label(density > threshold)
+        if min_candidate_size > 0:
+            ids, sizes = np.unique(candidates, return_counts=True)
+            discard = ids[(sizes < min_candidate_size) & (ids > 0)]
+            if discard.size:
+                candidates[np.isin(candidates, discard)] = 0
+
+        for index, bounding_box in enumerate(find_objects(candidates)):
+            if bounding_box is None:
+                continue
+            component = candidates[bounding_box] == (index + 1)
+            component_density = np.where(component, density[bounding_box], 0.0)
+            # The most converged slice, i.e. the one closest to the object's centre.
+            z = int(np.argmax(component_density.sum(axis=(1, 2))))
+            plane = component_density[z]
+            # The density peak: it is inside the component and the least ambiguous prompt.
+            y, x = np.unravel_index(int(np.argmax(plane)), plane.shape)
+            anchor = (bounding_box[0].start + z, bounding_box[1].start + y, bounding_box[2].start + x)
+            # A component that no lower threshold has merged peaks at the same voxel at every level.
+            if anchor in seen:
+                continue
+            seen.add(anchor)
+            frames.append(anchor[0])
+            points.append((anchor[2], anchor[1]))  # SAM2 wants XY.
+
+    if not points:
+        return None
+
+    return {
+        "points": np.array(points, dtype="float32")[:, None, :],
+        "point_labels": np.ones((len(points), 1), dtype="int32"),
+        "frames": np.array(frames, dtype="int64"),
+    }
+
+
+def _record_mask(record: Dict[str, Any]) -> np.ndarray:
+    """The record's mask as a plain numpy array, whatever tensor type it arrived in."""
+    mask = record["segmentation"]
+    return mask.numpy() if hasattr(mask, "numpy") else np.asarray(mask)
+
+
+def _largest_component(mask: np.ndarray) -> np.ndarray:
+    """The largest connected component of a binary mask, with diagonal neighbours connected."""
+    components = label(mask, connectivity=mask.ndim)
+    sizes = np.bincount(components.ravel().astype("int64"))[1:]
+    if len(sizes) < 2:
+        return mask
+    return components == (sizes.argmax() + 1)
+
+
+def merge_by_score(
+    records: List[Dict[str, Any]], shape: tuple, max_overlap: float = 0.3, min_size: int = 50,
+    max_size_factor: Optional[float] = None, keep_largest_component: bool = False,
+    return_matches: bool = False, return_reasons: bool = False,
+) -> Union[np.ndarray, tuple]:
+    """Merge prediction records in descending score order, each claiming only unclaimed pixels.
+
+    Linear in the number of candidates, where `micro_sam.util.apply_nms` is quadratic, and marginally
+    better on livecell: truncating a later mask preserves the better-scoring instance's boundary.
+
+    A record carries a 'bounding_box' (a tuple of slices) and its mask is only the crop inside that
+    box, so both the merge and the records themselves scale with the objects rather than with the
+    image. A volumetric mask per object would otherwise make the 3d generator run out of memory.
+
+    Args:
+        records: The prediction records, as produced by `AutomaticPromptGenerator._apply_prompts`.
+        shape: The spatial shape of the output.
+        max_overlap: Reject a candidate when more than this fraction of it is already claimed. This is
+            the duplicate suppression of the merge.
+        min_size: Minimum object size to keep.
+        max_size_factor: Reject a candidate larger than this multiple of the median record size.
+            Catches propagation drift: a track that grows onto background instead of ending produces
+            an occasional candidate many times larger than every real object, most easily seen next
+            to the rest of the same call's candidates rather than by any fixed size. None (the
+            default) applies no such cap.
+        keep_largest_component: Whether to paint only the largest connected component of a
+            candidate's unclaimed pixels. Truncating a mask by the better-scoring ones around it
+            leaves specks and slivers where their boundaries disagree by a pixel or two, which
+            would otherwise stay part of the instance, detached from it. Dropping them keeps every
+            instance in one piece; on the 2d benchmark it never lowered mSA and gains up to 0.002.
+        return_matches: Whether to also return which record made each instance.
+        return_reasons: Whether to also return why each record was kept or dropped. A candidate is
+            'too small', 'too large', a 'duplicate' when a better-scoring mask already claims more
+            than 'max_overlap' of it, 'truncated below min size' when too few of its pixels are free,
+            or 'kept'. This is what the merge does, reported rather than recomputed.
+
+    Returns:
+        The instance segmentation, uint32 array. If `return_matches`, additionally a mapping from
+        every instance id to the index of the record that made it. If `return_reasons`, additionally
+        the reason per record, in the order the records were given.
+    """
+    out = np.zeros(shape, dtype="uint32")
+    next_id = 1
+    scores = np.array([record["predicted_iou"] * record["stability_score"] for record in records])
+    if not np.isfinite(scores).all():
+        raise ValueError("Every merge score must be finite.")
+    max_size = None
+    if max_size_factor is not None and records:
+        areas = np.array([int(_record_mask(record).sum()) for record in records])
+        max_size = max_size_factor * np.median(areas)
+    full_box = tuple(slice(None) for _ in shape)
+    matches = {}
+    reasons = ["" for _ in records]
+    for index in sorted(range(len(records)), key=lambda candidate: (-scores[candidate], candidate)):
+        record = records[index]
+        mask = _record_mask(record)
+        area = int(mask.sum())
+        if area < min_size:
+            reasons[index] = "too small"
+            continue
+        if max_size is not None and area > max_size:
+            reasons[index] = "too large"
+            continue
+        # A view, so painting the fresh pixels below writes straight into the output.
+        box = record.get("bounding_box", full_box)
+        target = out[box]
+        claimed = target[mask]
+        n_claimed = int(np.count_nonzero(claimed))
+        if n_claimed / area > max_overlap:
+            reasons[index] = "duplicate"
+            continue
+        fresh = mask & (target == 0)
+        if keep_largest_component:
+            fresh = _largest_component(fresh)
+        n_gained = int(fresh.sum())
+        if n_gained < min_size:
+            reasons[index] = "truncated below min size"
+            continue
+        target[fresh] = next_id
+        reasons[index] = "kept"
+        matches[next_id] = int(index)
+        next_id += 1
+
+    result = (out,)
+    if return_matches:
+        result += (matches,)
+    if return_reasons:
+        result += (reasons,)
+    return result[0] if len(result) == 1 else result
+
+
+def _records_shape(records: List[Dict[str, Any]]) -> tuple:
+    """The smallest canvas that holds every record, which is all a merge of cropped masks needs."""
+    boxes = [record["bounding_box"] for record in records]
+    return tuple(max(box[axis].stop for box in boxes) for axis in range(len(boxes[0])))
+
+
+def _volume_records(
+    video_segments: Dict[int, Dict[int, np.ndarray]], candidates: List[dict], shape: tuple,
+) -> List[Dict[str, Any]]:
+    """Assemble one volumetric mask record per propagated object, cropped to its bounding box.
+
+    The propagation yields its masks slice by slice. Holding one full-volume mask per object would
+    scale with the object count times the volume, so each object is kept as its bounding-box crop,
+    which scales with the objects themselves. `merge_by_score` paints from those crops.
+
+    Args:
+        video_segments: The propagation result, {frame: {object_id: mask}}, as returned by
+            `PromptableSegmentation3D.propagate_prompts`.
+        candidates: The candidates of this pass, in the order their object ids were assigned.
+        shape: The shape of the volume, (Z, Y, X).
+
+    Returns:
+        The records, carrying the anchor-slice scores of their candidate for the merge.
+    """
+    per_object = {}
+    for frame, masks in sorted(video_segments.items()):
+        for object_id, mask in masks.items():
+            mask = _crop_to_original_shape(np.asarray(mask).squeeze(), shape[-2:])
+            # Two reductions rather than an np.nonzero per mask, which materializes every index: this
+            # runs once per object and slice, so it is a real share of a volume's time.
+            rows_any, columns_any = mask.any(axis=1), mask.any(axis=0)
+            if not rows_any.any():
+                continue
+            y0, y1 = int(rows_any.argmax()), len(rows_any) - int(rows_any[::-1].argmax())
+            x0, x1 = int(columns_any.argmax()), len(columns_any) - int(columns_any[::-1].argmax())
+            per_object.setdefault(object_id, []).append(
+                (int(frame), y0, y1, x0, x1, mask[y0:y1, x0:x1].copy())
+            )
+
+    records = []
+    for object_id, entries in per_object.items():
+        candidate = candidates[object_id - 1]
+        # The frames are in ascending order, so the first and last entry bound the object in z.
+        z0, z1 = entries[0][0], entries[-1][0] + 1
+        y0, x0 = min(entry[1] for entry in entries), min(entry[3] for entry in entries)
+        y1, x1 = max(entry[2] for entry in entries), max(entry[4] for entry in entries)
+
+        local = np.zeros((z1 - z0, y1 - y0, x1 - x0), dtype=bool)
+        for frame, from_y, to_y, from_x, to_x, mask in entries:
+            local[frame - z0, from_y - y0:to_y - y0, from_x - x0:to_x - x0] = mask
+
+        records.append({
+            "segmentation": local,
+            "bounding_box": (slice(z0, z1), slice(y0, y1), slice(x0, x1)),
+            "predicted_iou": candidate["score"],
+            "stability_score": candidate["stability"],
+        })
+    return records
+
+
+class AutomaticPromptGenerator(UniSAM2InstanceSegmentation):
+    """Generates an instance segmentation automatically, from prompts derived from the UniSAM2 decoder.
+
+    Used in the same way as `UniSAM2InstanceSegmentation`, and the counterpart of
+    `micro_sam.v1.instance_segmentation.AutomaticPromptGenerator`:
+    ```python
+    segmenter = AutomaticPromptGenerator(model, predictor)
+    segmenter.initialize(image, ndim=2)  # Encode the image, then run the decoder on the encoding.
+    masks = segmenter.generate(score_threshold=0.6)  # Prompt, then merge the masks.
+    ```
+
+    Volumes are segmented by passing the SAM2 video predictor instead of an image predictor:
+    ```python
+    segmenter = AutomaticPromptGenerator(model, video_predictor)
+    segmenter.initialize(volume, ndim=3)
+    masks = segmenter.generate()  # Prompt one slice per object, propagate, then merge the masks.
+    ```
+    The decoder finds the objects and the interactive branch segments them either way. What differs is
+    that an object's mask comes from propagating one prompt through the volume rather than from a
+    single forward pass, and that the candidates are scored in 2d on the slice they are prompted on,
+    which drops the weak and the duplicate ones before the propagation - which is where the cost is.
+    The decoder and the video predictor read the same 3d embeddings, so the volume is encoded once.
+
+    Args:
+        model: The UniSAM2 model (see `get_unisam2_model` / `get_decoder`).
+        predictor: The SAM2 image predictor for the interactive branch of the same model, or its
+            video predictor, which is what a volume is prompted with.
+        device: The device the model lives on (used for the non-tiled 2d decoder).
+        inference_device: The device intent used as the `devices=None` fallback. Defaults to the
+            model device (single GPU); pass None to fan out over all visible GPUs, or a device / list.
+    """
+
+    # Read by `automatic_instance_segmentation` to decide whether to pass the AIS 'mode' argument.
+    _has_postprocessing_mode = False
+    _model_type = DEFAULT_MODEL
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        predictor,
+        device: Optional[Union[str, torch.device]] = None,
+        inference_device: Devices = USE_MODEL_DEVICE,
+    ) -> None:
+        super().__init__(model, device=device, inference_device=inference_device)
+        self._video_predictor = predictor if hasattr(predictor, "propagate_in_video") else None
+        if self._video_predictor is None:
+            self._predictor = configure_image_predictor(predictor)
+        else:
+            # Build the image predictor on the video predictor's weights.
+            self._predictor = get_sam2_image_predictor(predictor)
+        predictor = self._predictor
+
+        self._image_embeddings = None
+        self._volume = None
+        self._propagator = None
+        self._offload_to_cpu = None
+        self._max_cached_frames = None
+        self._temporary_embedding_path = None
+        self._i = None
+        self._owns_image_embeddings = False
+        self._last_generation_stats = {}
+        # Set by 'TiledAutomaticPromptGenerator' to this block's full spatial halo before propagating,
+        # so pruning never drops a candidate the halo-overlap multicut might need; None elsewhere.
+        self._pruning_protected_margin: Optional[tuple] = None
+        self._scoring_predictor_pool = None
+        # The embedding cache is keyed on these, which a SAM2 image predictor does not carry itself.
+        sam2_model = getattr(predictor, "model", None)
+        if getattr(predictor, "model_type", None) is None:
+            predictor.model_type = getattr(sam2_model, "model_type", None) or "hvit"
+        if getattr(predictor, "model_name", None) is None:
+            predictor.model_name = getattr(sam2_model, "model_name", None) or predictor.model_type
+
+    def _encode(self, image: np.ndarray) -> dict:
+        """Run the image encoder once and return the embeddings that both branches use."""
+        self._predictor.reset_predictor()
+        # Preserve each microscopy channel's contrast before SAM2 sees the image.
+        encode_image(self._predictor, to_image(image))
+        return {
+            "features": self._predictor.get_image_embedding().cpu().numpy(),
+            "high_res_feats": self._predictor._features["high_res_feats"],
+            "input_size": self._predictor.model.image_size,
+            "original_size": self._predictor._orig_hw,
+        }
+
+    def _prepare_image_embeddings(self, image_embeddings: dict, i: Optional[int]) -> dict:
+        """Prepare image embeddings for the interactive branch."""
+        if i is None:
+            set_precomputed(self._predictor, image_embeddings)
+            return image_embeddings
+
+        if "fpn" not in image_embeddings:
+            raise ValueError("A slice index requires video-style embeddings with FPN features.")
+        _set_image_predictor_from_3d_embeddings(self._predictor, image_embeddings, i)
+        return {
+            "features": self._predictor.get_image_embedding().detach().cpu().numpy(),
+            "high_res_feats": self._predictor._features["high_res_feats"],
+            "input_size": self._predictor.model.image_size,
+            "original_size": self._predictor._orig_hw,
+        }
+
+    def initialize(
+        self,
+        image: np.ndarray,
+        ndim: int = 2,
+        image_embeddings: Optional[dict] = None,
+        i: Optional[int] = None,
+        save_path: Optional[str] = None,
+        verbose: bool = False,
+        offload_to_cpu: Optional[bool] = None,
+        cache_all_slices: bool = False,
+        lazy_embeddings: bool = True,
+        normalization_bounds: Optional[tuple] = None,
+        **kwargs,
+    ) -> None:
+        """Encode the input, run the decoder on that encoding and leave the predictor ready to be prompted.
+
+        Both branches of a joint checkpoint share their image encoder weights, so one pass serves both
+        and `generate` can be called repeatedly without any further encoding.
+
+        Args:
+            image: The input image, shape (Y, X) or (Y, X, C), or the input volume, shape (Z, Y, X).
+            ndim: The number of spatial dimensions, 2 or 3. A volume requires a video predictor.
+            image_embeddings: Optional precomputed image embeddings. If given, the encoder does not run.
+            i: The slice index for video-style embeddings. By default the embeddings contain one image.
+            save_path: Optional path to cache the embeddings of a volume in a zarr container. Without
+                one an ephemeral store is used, which `clear_state` removes.
+            verbose: Whether to print progress while the embeddings of a volume are computed.
+            offload_to_cpu: Whether a volume's tracking state is held on the host rather than on the
+                device. False propagates the same masks 6-11% faster, for the memory of one pass of
+                objects across the volume, which is about 17 MB per slice at the default pass size.
+                None leaves the choice to `PromptableSegmentation3D`, which offloads on cuda.
+            cache_all_slices: Whether every slice's features stay on the device while a volume is
+                propagated. A pass walks the whole volume, so a cache shorter than it is never hit
+                and every slice is fetched again on every pass - which is most of the run on a deep
+                volume. Costs about 90 MB of device memory per slice.
+            lazy_embeddings: Whether a volume's embeddings are read from their store slice by slice.
+                False holds them in host memory instead, which makes the fetch above much cheaper
+                without spending device memory.
+            normalization_bounds: Volumes only. Precomputed (lower, upper) percentile bounds (see
+                `batched_inference._volume_normalization_bounds`), normally computed from `image`
+                itself. Pass this when `image` is only a tile/block of a larger volume, so it shares
+                that volume's bounds instead of estimating its own from its own, smaller, biased crop
+                (see `TiledAutomaticPromptGenerator.generate`).
+            kwargs: Additional arguments for `UniSAM2InstanceSegmentation.initialize`.
+        """
+        if ndim not in (2, 3):
+            raise ValueError(f"Automatic prompt generation supports 2d and 3d inputs, got ndim={ndim}.")
+
+        # A volume leaves a propagator and possibly a temporary embedding store behind. Release both
+        # before replacing its state, including when the next input is a 2d image.
+        if self._volume is not None or self._temporary_embedding_path is not None:
+            self.clear_state()
+
+        if ndim == 3:
+            self._i = None
+            self._initialize_volume(
+                image, image_embeddings, save_path, verbose, offload_to_cpu, cache_all_slices,
+                lazy_embeddings, normalization_bounds=normalization_bounds, **kwargs
+            )
+            return
+
+        owns_image_embeddings = image_embeddings is None
+        if image_embeddings is None:
+            image_embeddings = self._encode(image)
+        else:
+            image_embeddings = self._prepare_image_embeddings(image_embeddings, i)
+        super().initialize(image, ndim=ndim, image_embeddings=image_embeddings, **kwargs)
+        self._image_embeddings = image_embeddings
+        self._i = None
+        self._owns_image_embeddings = owns_image_embeddings
+
+    def _build_propagator(self, volume, image_embeddings) -> ReplicatedPromptableSegmentation3D:
+        """The video predictor this volume is propagated with, one state per inference device."""
+        return ReplicatedPromptableSegmentation3D(
+            self._video_predictor, volume, image_embeddings, devices=self._inference_devices(None),
+            offload_state_to_cpu=self._offload_to_cpu, max_cached_frames=self._max_cached_frames,
+            release_stale_mask_memory=True,
+        )
+
+    def _initialize_volume(
+        self, volume, image_embeddings, save_path, verbose, offload_to_cpu, cache_all_slices,
+        lazy_embeddings, normalization_bounds=None, **kwargs
+    ) -> None:
+        """Encode the volume, run the decoder on that encoding and initialize the video predictor."""
+        if self._video_predictor is None:
+            raise ValueError(
+                "Volumetric prompt generation prompts the SAM2 video predictor, so it has to be "
+                "constructed with one instead of an image predictor."
+            )
+        if volume.ndim not in (3, 4):
+            raise ValueError(
+                f"Volumetric prompt generation expects a (Z, Y, X) or (Z, Y, X, C) volume, got shape {volume.shape}."
+            )
+
+        owns_image_embeddings = image_embeddings is None
+        if image_embeddings is None:
+            path = save_path
+            if path is None:
+                self._temporary_embedding_path = make_temp_embedding_path()
+                path = self._temporary_embedding_path
+            image_embeddings = precompute_image_embeddings(
+                self._video_predictor, volume, save_path=path, ndim=3, verbose=verbose,
+                lazy_loading=lazy_embeddings, devices=self._inference_devices(None),
+                norm_bounds=normalization_bounds,
+            )
+
+        UniSAM2InstanceSegmentation.initialize(self, volume, ndim=3, image_embeddings=image_embeddings, **kwargs)
+        self._image_embeddings = image_embeddings
+        self._owns_image_embeddings = owns_image_embeddings
+        self._volume = volume
+        self._offload_to_cpu = offload_to_cpu
+        self._max_cached_frames = int(volume.shape[0]) if cache_all_slices else None
+        self._propagator = self._build_propagator(volume, image_embeddings)
+
+    def get_state(self) -> dict:
+        """Return the decoder predictions and the image embeddings, so that both branches can be restored.
+
+        `generate` also prompts the interactive branch, which needs the encoding of the same input. For
+        a volume the volume itself is part of the state, because the video predictor is initialized on it.
+        """
+        state = super().get_state()
+        state["image_embeddings"] = self._image_embeddings
+        if self._volume is not None:
+            state["volume"] = self._volume
+        return state
+
+    def set_state(self, state: dict) -> None:
+        """Restore the decoder predictions and the encoding of the input they belong to.
+
+        The state must hold either 'image_embeddings' or 'image'. Without one, `generate` would prompt
+        whatever image the predictor still holds. A volumetric state must also hold 'volume'.
+
+        Args:
+            state: The state, as returned by `get_state`, or a dict with 'prediction' and 'image'.
+        """
+        image_embeddings = state.get("image_embeddings")
+        volume = state.get("volume")
+        i = state.get("i")
+
+        if volume is not None:
+            if image_embeddings is None:
+                raise ValueError("A volumetric state must hold the 'image_embeddings' of its volume.")
+            super().set_state(state)
+            self._volume = volume
+            self._propagator = self._build_propagator(volume, image_embeddings)
+            self._i = None
+        else:
+            if image_embeddings is None:
+                if "image" not in state:
+                    raise ValueError("The state must hold either 'image_embeddings' or 'image'.")
+                image_embeddings = self._encode(state["image"])
+            else:
+                image_embeddings = self._prepare_image_embeddings(image_embeddings, i)
+            super().set_state(state)
+            self._i = None
+        self._image_embeddings = image_embeddings
+        self._owns_image_embeddings = False
+
+    def clear_state(self) -> None:
+        """Clear the decoder predictions and the input that is set on the predictor."""
+        owned_embeddings = self._image_embeddings if getattr(self, "_owns_image_embeddings", False) else None
+        super().clear_state()
+        self._image_embeddings = None
+        self._i = None
+        self._owns_image_embeddings = False
+        self._predictor.reset_predictor()
+        self._volume = None
+        # Built on the propagator's replicas, so it must not outlive them.
+        self._scoring_predictor_pool = None
+        if self._propagator is not None:
+            self._propagator.reset_predictor()
+            self._propagator = None
+        try:
+            close = getattr(owned_embeddings, "close", None)
+            if close is not None:
+                close()
+        finally:
+            if self._temporary_embedding_path is not None:
+                shutil.rmtree(self._temporary_embedding_path, ignore_errors=True)
+                self._temporary_embedding_path = None
+
+    @torch.no_grad()
+    def generate(
+        self,
+        candidate_threshold: Optional[Union[float, Sequence[float]]] = None,
+        foreground_threshold: Optional[float] = None,
+        n_iter: Optional[int] = None,
+        dt: Optional[float] = None,
+        sigma: Optional[float] = None,
+        spacing: Optional[tuple] = None,
+        min_candidate_size: Optional[int] = None,
+        score_threshold: Optional[float] = None,
+        max_overlap: Optional[float] = None,
+        min_size: Optional[int] = None,
+        max_size_factor: Optional[float] = DEFAULT_PROMPT_GENERATION["max_size_factor"],
+        refinement: Optional[str] = DEFAULT_PROMPT_GENERATION["refinement"],
+        refinement_kwargs: Optional[Dict[str, Any]] = DEFAULT_PROMPT_GENERATION["refinement_kwargs"],
+        multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
+        n_objects_per_pass: int = DEFAULT_PROMPT_GENERATION["n_objects_per_pass"],
+        early_stop_patience: Optional[int] = DEFAULT_PROMPT_GENERATION["early_stop_patience"],
+        propagation_waves: int = DEFAULT_PROMPT_GENERATION["propagation_waves"],
+        batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
+        n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
+        verbose: bool = False,
+        pbar_init: Optional[Callable] = None,
+        pbar_update: Optional[Callable] = None,
+    ) -> np.ndarray:
+        """Derive prompts from the stored predictions, apply them and merge the masks.
+
+        Args:
+            candidate_threshold: Density threshold for proposing candidates, or several of them for
+                a volume. By default resolved per model type and dimensionality, see
+                `default_prompt_generation`.
+            foreground_threshold: Foreground binarisation threshold. Here it only limits which pixels can
+                be proposed from, since the masks come from the interactive branch, so it trades candidate
+                recall rather than boundary quality.
+            n_iter: Number of flow-integration steps for the candidate density.
+            dt: Integration step size. Mostly only the product with 'n_iter' matters, which is the
+                distance a pixel is advected.
+            sigma: Gaussian sigma for smoothing the candidate density. Less smoothing leaves more peaks,
+                which costs precision for the sparse post-processing but buys candidate recall here.
+            spacing: Anisotropic voxel spacing of a volume, e.g. (4, 1, 1).
+            min_candidate_size: Discard density components smaller than this.
+            score_threshold: Discard candidates whose predicted IoU is below this.
+            max_overlap: Reject a candidate when more than this fraction of it is already claimed. For a
+                volume this applies on the slice a candidate is prompted on and again on the 3d merge.
+            min_size: Minimum object size in the result.
+            max_size_factor: Volumes only. Reject a candidate this many times larger than the median
+                size among the candidates it is merged against, which catches propagation drift (a
+                track that grows onto background instead of ending). None (the default) applies no
+                such cap; see `merge_by_score`.
+            refinement: Optional second round, a '+'-joined combination of 'points' (the first
+                round's prompts grouped onto each merged instance, see `derive_refinement_prompts`),
+                'boxes' (its bounding box) and 'masks' (its mask as a logit prompt). None runs no second
+                round. 'default' (the default) takes the mode of `default_prompt_generation`. For a
+                volume the round runs on each candidate's anchor slice, before the propagation, and
+                produces the conditioning that propagation starts from rather than a finished mask,
+                see `_refine_anchors`.
+            refinement_kwargs: Keyword arguments of that second round, validated against the mode's
+                components; see `DEFAULT_REFINEMENT`, or `DEFAULT_REFINEMENT_3D` for a volume, for
+                the accepted keys and their defaults.
+            multimasking: Whether to predict several masks per point and keep the best scoring one. A
+                single point is ambiguous between one object and a cluster, so this is on by default.
+            n_objects_per_pass: Number of objects propagated together through a volume. The video
+                predictor runs them as one batch, so this trades device memory against the pass count.
+            propagation_waves: Tiled volumes only. Rounds the candidates are propagated in, highest
+                scoring first, dropping between rounds those an already-propagated instance covers by
+                more than 'max_overlap'. One round propagates every candidate, see
+                `DEFAULT_PROMPT_GENERATION`.
+            early_stop_patience: Stop a propagation pass after this many consecutive slices in which
+                every object of the pass is empty. None propagates through the whole volume. Two by
+                default: propagating past the end of every object of a pass only reproduces empty
+                masks, so this saves work without changing the result. Raise it where an object may
+                disappear and reappear, because a stop that fires mid-object truncates it.
+            batch_size: Number of prompts per forward pass.
+            n_threads: Number of threads for the flow integration the candidates come from.
+            verbose: Whether to show progress over the propagation passes of a volume.
+            pbar_init: Initialize an external progress stage with its total and description.
+            pbar_update: Advance the external progress bar after completed work.
+
+        Returns:
+            The instance segmentation, uint32 array with the spatial shape of the prediction.
+        """
+        if not self._is_initialized:
+            raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
+
+        self._last_generation_stats = {}
+        shape = self._prediction[0].shape
+        # The prediction carries the dimensionality it was run at: (4, Y, X) or (4, Z, Y, X).
+        is_volume = self._prediction.ndim == 4
+        defaults = default_prompt_generation(self._model_type, is_volume=is_volume)
+        if candidate_threshold is None:
+            candidate_threshold = defaults["candidate_threshold"]
+        if score_threshold is None:
+            score_threshold = defaults["score_threshold"]
+        if max_overlap is None:
+            max_overlap = defaults["max_overlap"]
+        if min_size is None:
+            min_size = defaults["min_size"]
+        if refinement == "default":
+            refinement = defaults["refinement"]
+
+        if is_volume:
+            components = resolved = None
+            if refinement is not None:
+                components, resolved = _parse_refinement(refinement, refinement_kwargs, is_volume=True)
+            if pbar_init is not None:
+                pbar_init(1, "APG: deriving volume prompts")
+            prompts = derive_volume_prompts(
+                self._prediction[0], self._prediction[1:4], model_type=self._model_type,
+                candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
+                n_iter=n_iter, dt=dt, sigma=sigma, spacing=spacing,
+                min_candidate_size=min_candidate_size, n_threads=n_threads,
+            )
+            if pbar_update is not None:
+                pbar_update(1)
+            if prompts is None:
+                self._last_generation_stats = {
+                    "proposed_candidates": 0,
+                    "scored_candidates": 0,
+                    "unique_anchor_slices": 0,
+                    "propagation_passes": 0,
+                    "propagated_frame_steps": 0,
+                    "early_stopped_frame_steps": 0,
+                }
+                if components is not None:
+                    self._last_generation_stats.update({key: 0 for key in REFINEMENT_STATS_3D})
+                return np.zeros(shape, dtype="uint32")
+            self._last_generation_stats["proposed_candidates"] = len(prompts["points"])
+            if components is not None:
+                self._last_generation_stats.update({key: 0 for key in REFINEMENT_STATS_3D})
+            # The refinement's forwards are not wrapped by '_apply_prompts', which has its own.
+            if components is None:
+                candidates = self._score_candidates(
+                    prompts, multimasking=multimasking, batch_size=batch_size,
+                    score_threshold=score_threshold, max_overlap=max_overlap,
+                    components=components, refinement_kwargs=resolved,
+                    pbar_init=pbar_init, pbar_update=pbar_update,
+                )
+            else:
+                with autocast(self._predictor.device):
+                    candidates = self._score_candidates(
+                        prompts, multimasking=multimasking, batch_size=batch_size,
+                        score_threshold=score_threshold, max_overlap=max_overlap,
+                        components=components, refinement_kwargs=resolved,
+                        pbar_init=pbar_init, pbar_update=pbar_update,
+                    )
+            self._last_generation_stats["scored_candidates"] = len(candidates)
+            records = self._propagate_candidates(
+                candidates, n_objects_per_pass=n_objects_per_pass,
+                early_stop_patience=early_stop_patience, verbose=verbose, max_overlap=max_overlap,
+                propagation_waves=propagation_waves, pbar_init=pbar_init, pbar_update=pbar_update,
+            )
+            # Tiled records arrive grouped by tile and need their halo overlaps resolved, which
+            # '_merge' does polymorphically; an untiled volume merges them flat.
+            if pbar_init is not None:
+                pbar_init(1, "APG: merging volume masks")
+            segmentation, _ = self._merge(
+                records, shape, score_threshold=score_threshold, max_overlap=max_overlap,
+                min_size=min_size, max_size_factor=max_size_factor,
+            )
+            if pbar_update is not None:
+                pbar_update(1)
+            return segmentation
+
+        proposals = self.propose(
+            candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
+            n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size,
+            multimasking=multimasking, batch_size=batch_size, n_threads=n_threads,
+            pbar_init=pbar_init, pbar_update=pbar_update,
+        )
+        return self.select(
+            proposals, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
+            refinement=refinement, refinement_kwargs=refinement_kwargs, batch_size=batch_size,
+        )
+
+    @torch.no_grad()
+    def propose(
+        self,
+        candidate_threshold: Optional[float] = None,
+        foreground_threshold: Optional[float] = None,
+        n_iter: Optional[int] = None,
+        dt: Optional[float] = None,
+        sigma: Optional[float] = None,
+        min_candidate_size: Optional[int] = None,
+        multimasking: bool = DEFAULT_PROMPT_GENERATION["multimasking"],
+        batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
+        n_threads: int = DEFAULT_PROMPT_GENERATION["n_threads"],
+        pbar_init: Optional[Callable] = None,
+        pbar_update: Optional[Callable] = None,
+    ) -> list:
+        """Derive the prompts and turn them into scored mask proposals, without selecting any of them.
+
+        This is the half of `generate` that needs the model. Splitting it off lets a parameter sweep
+        reuse one set of proposals across every value of 'score_threshold', 'max_overlap' and
+        'min_size', which only filter and merge. Images only: a volume gates its propagation on the
+        score, so its proposals depend on those parameters too.
+
+        Args:
+            candidate_threshold: Density threshold for proposing candidates, see `derive_point_prompts`.
+            foreground_threshold: Foreground binarisation threshold.
+            n_iter: Number of flow-integration steps for the candidate density.
+            dt: Integration step size.
+            sigma: Gaussian sigma for smoothing the candidate density.
+            min_candidate_size: Discard density components smaller than this.
+            multimasking: Whether to predict several masks per point and keep the best scoring one.
+            batch_size: Number of prompts per forward pass.
+            n_threads: Number of threads for the flow integration the candidates come from.
+            pbar_init: Initialize each progress stage with its total and description.
+            pbar_update: Advance progress after deriving prompts and each prediction batch.
+
+        Returns:
+            The proposals, to be passed to `select`. Their layout is an implementation detail of the
+            generator that produced them.
+        """
+        if not self._is_initialized:
+            raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
+        if self._prediction.ndim == 4:
+            raise ValueError("Proposals can only be reused for an image, because a volume gates its propagation.")
+
+        if pbar_init is not None:
+            pbar_init(1, "APG: deriving prompts")
+        prompts = derive_point_prompts(
+            self._prediction[0], self._prediction[1:4], model_type=self._model_type,
+            candidate_threshold=candidate_threshold, foreground_threshold=foreground_threshold,
+            n_iter=n_iter, dt=dt, sigma=sigma, min_candidate_size=min_candidate_size, n_threads=n_threads,
+        )
+        if pbar_update is not None:
+            pbar_update(1)
+        if prompts is None:
+            return []
+        if pbar_init is not None:
+            pbar_init((len(prompts["points"]) + batch_size - 1) // batch_size, "APG: prompting batches")
+        return self._apply(
+            prompts, multimasking=multimasking, batch_size=batch_size, pbar_update=pbar_update,
+        )
+
+    def select(
+        self,
+        proposals: list,
+        score_threshold: Optional[float] = None,
+        max_overlap: Optional[float] = None,
+        min_size: Optional[int] = None,
+        refinement: Optional[str] = DEFAULT_PROMPT_GENERATION["refinement"],
+        refinement_kwargs: Optional[Dict[str, Any]] = DEFAULT_PROMPT_GENERATION["refinement_kwargs"],
+        batch_size: int = DEFAULT_PROMPT_GENERATION["batch_size"],
+    ) -> np.ndarray:
+        """Merge the proposals of `propose` into an instance segmentation.
+
+        Args:
+            proposals: The proposals, as returned by `propose` on the same generator.
+            score_threshold: Discard proposals whose predicted IoU is below this.
+            max_overlap: Reject a proposal when more than this fraction of it is already claimed.
+            min_size: Minimum object size in the result.
+            refinement: Optional second round, a '+'-joined combination of 'points', 'boxes',
+                and 'masks', or 'default' for the mode of `default_prompt_generation`; see `generate`.
+            refinement_kwargs: Keyword arguments of that second round, validated against the mode's
+                components; see `DEFAULT_REFINEMENT` for the accepted keys and their defaults.
+            batch_size: Number of prompts per forward pass of the refinement.
+
+        Returns:
+            The instance segmentation, uint32 array with the spatial shape of the prediction.
+        """
+        defaults = default_prompt_generation(self._model_type, is_volume=False)
+        if score_threshold is None:
+            score_threshold = defaults["score_threshold"]
+        if max_overlap is None:
+            max_overlap = defaults["max_overlap"]
+        if min_size is None:
+            min_size = defaults["min_size"]
+        if refinement == "default":
+            refinement = defaults["refinement"]
+
+        components = resolved = None
+        if refinement is not None:
+            components, resolved = _parse_refinement(refinement, refinement_kwargs)
+
+        shape = self._prediction[0].shape
+        if not proposals:
+            return np.zeros(shape, dtype="uint32")
+
+        segmentation, context = self._merge(
+            proposals, shape, score_threshold=score_threshold, max_overlap=max_overlap, min_size=min_size,
+            return_context=components is not None,
+        )
+        if components is not None and segmentation.max() > 0:
+            segmentation = self._refine(segmentation, context, components, resolved, batch_size)
+        return segmentation
+
+    def _region_of(self, context: dict, record_index: int):
+        """The region a record's instance is re-prompted in, keyed however the generator likes.
+
+        A refinement runs region by region, because a tiled generator has to point its predictor at
+        one tile at a time. Here the whole image is one region, so every record shares the key None.
+        """
+        return None
+
+    def _region_box(self, key) -> tuple:
+        """The region's bounding box, as a slice tuple into the segmentation."""
+        return (slice(None), slice(None))
+
+    def _set_region(self, key) -> None:
+        """Point the predictor at the region. Its image is already set for a single one."""
+
+    def _apply(self, prompts: dict, multimasking: bool, batch_size: int, pbar_update=None) -> list:
+        """Turn the prompts into mask proposals."""
+        return self._apply_prompts(
+            self._predictor, prompts, multimasking=multimasking, batch_size=batch_size, pbar_update=pbar_update,
+        )
+
+    def _merge(
+        self, proposals: list, shape: tuple, score_threshold: float, max_overlap: float, min_size: int,
+        max_size_factor: Optional[float] = None, return_context: bool = False,
+    ) -> tuple:
+        """Merge the mask proposals into an instance segmentation.
+
+        Returns:
+            The segmentation, and the refinement context: the score-filtered records and the mapping
+            from every instance id to the record that made it. Without `return_context` the context
+            is None, so the matches are not computed for nothing.
+        """
+        records = [record for record in proposals if record["predicted_iou"] >= score_threshold]
+        if not records:
+            return np.zeros(shape, dtype="uint32"), None
+        # Images only: a volume's track may leave its object and come back across slices, and that
+        # merge is not measured with it.
+        merge_kwargs = {
+            "max_overlap": max_overlap, "min_size": min_size, "max_size_factor": max_size_factor,
+            "keep_largest_component": len(shape) == 2,
+        }
+        if not return_context:
+            return merge_by_score(records, shape, **merge_kwargs), None
+        segmentation, matches, reasons = merge_by_score(
+            records, shape, return_matches=True, return_reasons=True, **merge_kwargs,
+        )
+        self._last_generation_stats.update({
+            "proposed_candidates": len(proposals),
+            "scored_candidates": len(records),
+            "merge_reasons": {reason: reasons.count(reason) for reason in sorted(set(reasons))},
+        })
+        return segmentation, {"proposals": proposals, "records": records, "matches": matches}
+
+    def _refine(
+        self, segmentation: np.ndarray, context: dict, components: tuple, refinement_kwargs: dict,
+        batch_size: int,
+    ) -> np.ndarray:
+        """Re-prompt the accepted instances with the requested refinement components."""
+        with autocast(self._predictor.device):
+            return self._reprompt_instances(
+                segmentation, context, components, refinement_kwargs, batch_size,
+            )
+
+    def _reprompt_instances(
+        self, segmentation: np.ndarray, context: dict, components: tuple, refinement_kwargs: dict,
+        batch_size: int,
+    ) -> np.ndarray:
+        """Predict one second-round mask per instance from the assembled prompts and repaint.
+
+        Every requested component contributes to one joint re-prompt per instance, evaluated in
+        batches. The 'policy' decides what the second round is allowed to do: 'replace' repaints
+        every instance from its new mask (the most confident painted last, so it wins contested
+        pixels), 'keep-if-better' keeps the first-round mask unless the new one scores higher. The
+        geometric gates then veto independently of either policy: a second-round mask that is
+        inconsistent with the first round ('min_consistency') or grows into a neighbour
+        ('max_foreign_overlap') is discarded, because the model's own score cannot arbitrate across
+        prompt types. An instance whose re-prompt comes back empty keeps its first-round mask.
+
+        The instances are grouped by the region they are re-prompted in and every region is set up
+        once, since a tiled generator pays for each switch. Within a region everything runs on its
+        crop of the segmentation, which is the frame the predictor works in; only the repaint at
+        the end is global, so the score order arbitrates across regions as well as within them.
+        """
+        shape = segmentation.shape
+        instances = [
+            (index + 1, bounding_box)
+            for index, bounding_box in enumerate(find_objects(segmentation))
+            if bounding_box is not None
+        ]
+
+        point_prompts = None
+        if "points" in components:
+            all_points = np.array([record["point"] for record in context["proposals"]], dtype="float32")
+            surviving_points = {
+                instance_id: context["records"][record_index]["point"]
+                for instance_id, record_index in context["matches"].items()
+            }
+            point_prompts = derive_refinement_prompts(
+                segmentation, all_points, surviving_points,
+                n_positives=refinement_kwargs["n_positives"], n_negatives=refinement_kwargs["n_negatives"],
+                max_negative_distance=refinement_kwargs["max_negative_distance"],
+                negative_source=refinement_kwargs["negative_source"],
+                min_negative_distance=refinement_kwargs["min_negative_distance"],
+            )
+
+        n_negatives_used = 0
+        if point_prompts is not None:
+            n_negatives_used = sum(
+                int(np.count_nonzero(point_prompts[instance_id]["point_labels"] == 0)) for instance_id, _ in instances
+            )
+        self._last_generation_stats.update({
+            "refinement_eligible_instances": len(instances),
+            "refinement_negatives": n_negatives_used,
+        })
+        if not instances:
+            self._last_generation_stats.update({
+                "refined_instances": 0, "replaced_instances": 0, "dropped_negatives": 0,
+                "gated_consistency": 0, "gated_foreign": 0,
+            })
+            return segmentation
+
+        # Every instance needs the record that made it, for its first-round score.
+        groups = {}
+        for instance_id, bounding_box in instances:
+            if instance_id not in context["matches"]:
+                raise RuntimeError(
+                    f"Instance {instance_id} is in the segmentation but not in the merge context. The "
+                    "refinement cannot score it against its first round."
+                )
+            key = self._region_of(context, context["matches"][instance_id])
+            groups.setdefault(key, []).append((instance_id, bounding_box))
+
+        min_consistency = refinement_kwargs["min_consistency"]
+        max_foreign_overlap = refinement_kwargs["max_foreign_overlap"]
+        keep_if_better = refinement_kwargs["policy"] == "keep-if-better"
+        chosen, replaced, dropped = [], 0, 0
+        gated = {"gated_consistency": 0, "gated_foreign": 0}
+        for key in sorted(groups):
+            self._set_region(key)
+            region_box = self._region_box(key)
+            crop = segmentation[region_box]
+            origin = tuple(box.start or 0 for box in region_box)
+            members = groups[key]
+
+            region_prompts = point_prompts
+            if point_prompts is not None and (any(origin) or crop.shape != shape):
+                region_prompts = {}
+                for instance_id, _ in members:
+                    region_prompts[instance_id], region_dropped = _localize_prompts(
+                        point_prompts[instance_id], origin, crop.shape
+                    )
+                    dropped += region_dropped
+
+            def accept(instance_id: int, bounding_box: tuple, mask: np.ndarray, score: float) -> None:
+                """Decide between the second-round mask and the first round, and queue the repaint."""
+                nonlocal replaced
+                record = context["records"][context["matches"][instance_id]]
+                first_round_score = record["predicted_iou"] * record["stability_score"]
+                take_second = mask.any() and (not keep_if_better or score > first_round_score)
+                if take_second and min_consistency is not None:
+                    first_round_mask = crop == instance_id
+                    union = int(np.count_nonzero(mask | first_round_mask))
+                    iou = int(np.count_nonzero(mask & first_round_mask)) / union if union else 0.0
+                    if iou < min_consistency:
+                        take_second = False
+                        gated["gated_consistency"] += 1
+                if take_second and max_foreign_overlap is not None:
+                    on_mask = crop[mask]
+                    foreign = int(np.count_nonzero((on_mask != 0) & (on_mask != instance_id)))
+                    if foreign / int(mask.sum()) > max_foreign_overlap:
+                        take_second = False
+                        gated["gated_foreign"] += 1
+                if take_second:
+                    replaced += 1
+                    rows, columns = np.nonzero(mask)
+                    box = (
+                        slice(int(rows.min()), int(rows.max()) + 1), slice(int(columns.min()), int(columns.max()) + 1)
+                    )
+                    chosen.append((score, instance_id, _shift_box(box, origin), mask[box]))
+                else:
+                    chosen.append((
+                        first_round_score, instance_id, _shift_box(bounding_box, origin),
+                        crop[bounding_box] == instance_id,
+                    ))
+
+            region_instances = [
+                (instance_id, _shift_box(bounding_box, tuple(-shift for shift in origin)))
+                for instance_id, bounding_box in members
+            ]
+            for start in range(0, len(region_instances), batch_size):
+                batch = region_instances[start:start + batch_size]
+                predictions = self._predict_refinement_batch(
+                    crop, batch, components, region_prompts, refinement_kwargs,
+                )
+                for (instance_id, bounding_box), (mask, score) in zip(batch, predictions):
+                    accept(instance_id, bounding_box, mask, score)
+
+        self._last_generation_stats.update({
+            "refined_instances": len(instances), "replaced_instances": replaced, "dropped_negatives": dropped, **gated,
+        })
+        # Ascending score, so that the most confident instance is painted last and wins contested pixels.
+        refined = np.zeros(shape, dtype="uint32")
+        for score, instance_id, bounding_box, mask in sorted(chosen, key=lambda entry: (entry[0], entry[1])):
+            refined[bounding_box][mask] = instance_id
+        return refined
+
+    def _predict_refinement_batch(
+        self, segmentation: np.ndarray, batch: list, components: tuple,
+        point_prompts: Optional[dict], refinement_kwargs: dict,
+    ) -> list:
+        """Return one (mask, combined score) pair per instance in ``batch``."""
+        shape = segmentation.shape
+        box_extension = refinement_kwargs.get("box_extension", 0)
+        points = labels = boxes = mask_logits = None
+
+        if "points" in components:
+            per_instance = [point_prompts[instance_id] for instance_id, _ in batch]
+            width = max(len(prompt["points"]) for prompt in per_instance)
+            points = np.zeros((len(batch), width, 2), dtype="float32")
+            labels = np.full((len(batch), width), -1, dtype="int32")
+            for row, prompt in enumerate(per_instance):
+                points[row, :len(prompt["points"])] = prompt["points"]
+                labels[row, :len(prompt["points"])] = prompt["point_labels"]
+        if "boxes" in components:
+            boxes = np.array([
+                _prompt_box(bounding_box, shape, box_extension) for _, bounding_box in batch
+            ], dtype="float32")
+        if "masks" in components:
+            mask_logits = np.stack([mask_to_logits(segmentation == instance_id) for instance_id, _ in batch])
+
+        return self._predict_prompt_batch(
+            points, labels, boxes, mask_logits, refinement_kwargs["multimasking"],
+        )
+
+    def _predict_prompt_batch(
+        self,
+        points: Optional[np.ndarray],
+        labels: Optional[np.ndarray],
+        boxes: Optional[np.ndarray],
+        mask_logits: Optional[np.ndarray],
+        multimasking: bool,
+    ) -> list:
+        """One batched forward pass over assembled prompts, returning (mask, combined score) pairs.
+
+        The point counts may differ between the batch's prompts, so the coordinate arrays are padded
+        to the longest with the label -1, which the SAM2 prompt encoder treats as 'not a point'.
+        """
+        n_prompts = len(points) if points is not None else len(boxes if boxes is not None else mask_logits)
+        mask_input, coords, point_labels, box_input = self._predictor._prep_prompts(
+            points, labels, boxes, mask_logits, True,
+        )
+        logits, scores, _ = self._predictor._predict(
+            coords, point_labels, box_input, mask_input, multimasking, return_logits=True,
+        )
+        logits = logits.reshape(n_prompts, -1, *logits.shape[-2:])
+        scores = scores.reshape(n_prompts, -1)
+        index = torch.arange(n_prompts, device=scores.device)
+        best = scores.argmax(dim=1)
+        logits, scores = logits[index, best], scores[index, best]
+
+        mask_threshold = getattr(self._predictor, "mask_threshold", 0.0)
+        stability = calculate_stability_score(logits, mask_threshold, STABILITY_SCORE_OFFSET)
+        masks = (logits > mask_threshold).cpu().numpy()
+        combined = (scores.float() * stability.float()).cpu().numpy()
+        return [(mask, float(score)) for mask, score in zip(masks, combined)]
+
+    def _apply_prompts(
+        self, predictor, prompts, multimasking: bool, batch_size: int, pbar_update=None,
+    ) -> List[Dict[str, Any]]:
+        """Prompt the interactive branch in batches, returning records for the merge.
+
+        Takes the predictor rather than reading `self._predictor`, so the volumetric scoring can hand
+        every worker the replica on its own device.
+        """
+        points, point_labels = prompts["points"], prompts["point_labels"]
+        mask_threshold = getattr(predictor, "mask_threshold", 0.0)
+
+        records = []
+        for start in range(0, len(points), batch_size):
+            stop = start + batch_size
+            batch_points, batch_labels = points[start:stop], point_labels[start:stop]
+            n_prompts = len(batch_points)
+            # Reduced on the device, so only the kept mask is transferred rather than every proposal.
+            mask_input, coords, labels, _ = predictor._prep_prompts(batch_points, batch_labels, None, None, True)
+            with autocast(predictor.device):
+                logits, scores, _ = predictor._predict(
+                    coords, labels, None, mask_input, multimasking, return_logits=True,
+                )
+            logits = logits.reshape(n_prompts, -1, *logits.shape[-2:])
+            scores = scores.reshape(n_prompts, -1)
+            index = torch.arange(n_prompts, device=scores.device)
+            best = scores.argmax(dim=1)
+            logits, scores = logits[index, best], scores[index, best]
+
+            stability = calculate_stability_score(logits, mask_threshold, STABILITY_SCORE_OFFSET)
+            binary = logits > mask_threshold
+            # Two reductions on the device: an np.nonzero per mask costs more than the rest of the loop.
+            rows_any = binary.any(dim=2).cpu().numpy()
+            columns_any = binary.any(dim=1).cpu().numpy()
+            masks = binary.cpu().numpy()
+            scores = scores.float().cpu().numpy()
+            stability = stability.float().cpu().numpy()
+            for offset, (mask, row_any, column_any, score, stable) in enumerate(
+                zip(masks, rows_any, columns_any, scores, stability)
+            ):
+                if not row_any.any():
+                    continue
+                y0, y1 = int(row_any.argmax()), len(row_any) - int(row_any[::-1].argmax())
+                x0, x1 = int(column_any.argmax()), len(column_any) - int(column_any[::-1].argmax())
+                records.append({
+                    # The crop rather than the full mask: the merge is linear in the mask's size.
+                    "segmentation": mask[y0:y1, x0:x1].copy(),
+                    "bounding_box": (slice(y0, y1), slice(x0, x1)),
+                    "predicted_iou": float(score),
+                    "stability_score": float(stable),
+                    # Empty masks are dropped, so the record order does not track the prompts.
+                    "prompt_index": start + offset,
+                    # The prompt as (x, y); the refinement groups the first round's prompts by it.
+                    "point": (float(batch_points[offset, 0, 0]), float(batch_points[offset, 0, 1])),
+                })
+            if pbar_update is not None:
+                pbar_update(1)
+        return records
+
+    def _score_candidates(
+        self, prompts: dict, multimasking: bool, batch_size: int, score_threshold: float,
+        max_overlap: float, components: Optional[tuple] = None, refinement_kwargs: Optional[dict] = None,
+        pbar_init=None, pbar_update=None,
+    ) -> List[dict]:
+        """Prompt every candidate in 2d on its anchor slice, and keep the strong, non-duplicate ones.
+
+        This runs before the propagation, which is where the cost is: a candidate the model scores
+        poorly, or that a better-scoring one already covers on that slice, is never propagated. It
+        also gives every surviving candidate the predicted IoU that orders the volumetric merge.
+
+        A refinement runs here too, slice by slice, while the predictor is still pointed at that
+        slice: re-reading a slice's features costs more than the re-prompt itself does.
+
+        Args:
+            prompts: The volumetric prompts, as `derive_volume_prompts` returns them.
+            multimasking: Whether to predict several masks per point and keep the best scoring one.
+            batch_size: Number of prompts per forward pass.
+            score_threshold: Discard candidates whose predicted IoU is below this.
+            max_overlap: Reject a candidate when more than this fraction of it is already claimed.
+            components: The refinement components, or None to run no second round.
+            refinement_kwargs: The resolved refinement keyword arguments.
+
+        Returns:
+            The surviving candidates, each with the prompt it will be propagated with and its global
+            'prompt_index' into the prompts.
+        """
+        points, point_labels, frames = prompts["points"], prompts["point_labels"], prompts["frames"]
+        slice_shape = self._prediction[0].shape[-2:]
+        min_size = default_prompt_generation(self._model_type, is_volume=False)["min_size"]
+        # A refinement round re-prompts through 'self._predictor', so those slices keep to it and to
+        # this process. Without one a slice is scored independently and the slices spread over the
+        # devices, each worker prompting the replica on its own.
+        refining = components is not None
+        devices = [self._predictor.device] if refining else self._scoring_devices()
+
+        def score_frame(worker_id, frame):
+            predictor = self._predictor if refining else self._scoring_predictors()[worker_id]
+            indices = np.where(frames == frame)[0]
+            # Reads the slice's features out of the volume's embeddings, so nothing is re-encoded.
+            _set_image_predictor_from_3d_embeddings(predictor, self._image_embeddings, int(frame))
+            frame_prompts = {"points": points[indices], "point_labels": point_labels[indices]}
+            records = self._apply_prompts(
+                predictor, frame_prompts, multimasking=multimasking, batch_size=batch_size,
+            )
+            records = [record for record in records if record["predicted_iou"] >= score_threshold]
+            if not records:
+                return []
+
+            def finish(candidate, record):
+                candidate["prompt_index"] = int(indices[int(record["prompt_index"])])
+                return candidate
+
+            if not refining:
+                _, kept = merge_by_score(
+                    records, _records_shape(records), max_overlap=max_overlap,
+                    min_size=min_size, return_matches=True,
+                )
+                return [
+                    finish(self._anchor_candidate(int(frame), records[record_index]), records[record_index])
+                    for record_index in kept.values()
+                ]
+
+            # On the slice's own canvas rather than the records' bounding one, because a refinement
+            # looks instance ids up by position: for the foreign-overlap gate and for the negatives.
+            segmentation, matches = merge_by_score(
+                records, slice_shape, max_overlap=max_overlap,
+                min_size=min_size,
+                return_matches=True,
+            )
+            context = {
+                "frame": int(frame), "segmentation": segmentation, "records": records,
+                "matches": matches, "points": points[indices][:, 0, :],
+            }
+            with autocast(predictor.device):
+                refined = self._refine_anchors(context, components, refinement_kwargs, batch_size)
+            return [
+                finish(candidate, records[record_index])
+                for candidate, record_index in zip(refined, matches.values())
+            ]
+
+        anchor_frames = np.unique(frames)
+        if pbar_init is not None:
+            pbar_init(len(anchor_frames), "APG: scoring anchor slices")
+        per_frame = _run_with_progress(
+            lambda update: map_jobs_over_devices(devices, anchor_frames, score_frame, update_progress=update),
+            pbar_update,
+        )
+        return [candidate for frame_candidates in per_frame for candidate in frame_candidates]
+
+    def _scoring_predictors(self) -> list:
+        """One image predictor per inference device, built on the video predictor's own replicas.
+
+        The volumetric scoring reads one slice's features per job and prompts the interactive branch
+        with them, which is independent per job, so the jobs spread over the devices exactly like the
+        propagation. Built lazily and only once, because a replica is a full model.
+        """
+        if self._propagator is None:
+            return [self._predictor]
+        if self._scoring_predictor_pool is None:
+            self._scoring_predictor_pool = [
+                get_sam2_image_predictor(predictor) for predictor, _ in self._propagator.predictor_devices
+            ]
+        return self._scoring_predictor_pool
+
+    def _scoring_devices(self) -> list:
+        """The devices the volumetric scoring spreads its jobs over, or the one it has."""
+        if self._propagator is None:
+            return [self._predictor.device]
+        return [device for _, device in self._propagator.predictor_devices]
+
+    def _anchor_candidate(self, frame: int, record: dict) -> dict:
+        """One propagation candidate: the prompt that made the anchor mask, and the merge's score."""
+        return {
+            "frame": int(frame),
+            "point": record["point"],
+            "score": record["predicted_iou"],
+            "stability": record["stability_score"],
+            # The mask on the anchor slice, which the pruning between propagation rounds measures
+            # the claimed overlap of.
+            "mask": record["segmentation"],
+            "mask_box": record["bounding_box"],
+        }
+
+    def _refine_anchors(
+        self, context: dict, components: tuple, refinement_kwargs: dict, batch_size: int,
+    ) -> List[dict]:
+        """Re-prompt every scored candidate of one anchor slice, and return what to propagate.
+
+        The volumetric counterpart of `_reprompt_instances`, and the only place a volume can refine
+        at all: a prompt on an already propagated slice would turn it into a conditioning frame and
+        replace the mask there with a single-point one. So the second round runs on the anchor slice,
+        before the propagation, and what it produces is not a mask - the propagation still makes that
+        - but the conditioning the propagation starts from and the score that orders the 3d merge.
+
+        The prompts, the batched forward and both gates are the 2d ones, applied in-plane on the
+        anchor slice: `derive_refinement_prompts` groups that slice's suppressed prompts onto their
+        candidate and takes the neighbouring ones as negatives, 'min_consistency' keeps a re-prompt
+        from reshaping the anchor rather than polishing it, and 'max_foreign_overlap' keeps it out of
+        a neighbour. A candidate whose re-prompt comes back empty or gated keeps its first round.
+
+        Returns:
+            The slice's candidates in first-round score order. An accepted re-prompt carries its
+            conditioning under 'conditioning'; a rejected one has no such key and is propagated from
+            its first-round point, exactly as without a refinement.
+        """
+        segmentation, records = context["segmentation"], context["records"]
+        frame, frame_points = context["frame"], context["points"]
+        candidates = {
+            instance_id: self._anchor_candidate(frame, records[record_index])
+            for instance_id, record_index in context["matches"].items()
+        }
+
+        point_prompts = None
+        if "points" in components:
+            point_prompts = derive_refinement_prompts(
+                segmentation, frame_points,
+                {instance_id: candidate["point"] for instance_id, candidate in candidates.items()},
+                n_positives=refinement_kwargs["n_positives"],
+                n_negatives=refinement_kwargs["n_negatives"],
+                max_negative_distance=refinement_kwargs["max_negative_distance"],
+                negative_source=refinement_kwargs["negative_source"],
+                min_negative_distance=refinement_kwargs["min_negative_distance"],
+            )
+
+        boxes = {
+            index + 1: bounding_box
+            for index, bounding_box in enumerate(find_objects(segmentation))
+            if bounding_box is not None
+        }
+        instances = [(instance_id, boxes[instance_id]) for instance_id in candidates]
+        min_consistency = refinement_kwargs["min_consistency"]
+        max_foreign_overlap = refinement_kwargs["max_foreign_overlap"]
+        keep_if_better = refinement_kwargs["policy"] == "keep-if-better"
+        stats = self._last_generation_stats
+        stats["refined_candidates"] += len(instances)
+        if point_prompts is not None:
+            # A volume takes negatives only from the candidates on the same slice, so it reports how many it got.
+            stats["refinement_negatives"] += sum(
+                int(np.count_nonzero(point_prompts[instance_id]["point_labels"] == 0))
+                for instance_id, _ in instances
+            )
+
+        for start in range(0, len(instances), batch_size):
+            batch = instances[start:start + batch_size]
+            predictions = self._predict_refinement_batch(
+                segmentation, batch, components, point_prompts, refinement_kwargs,
+            )
+            for (instance_id, bounding_box), (mask, score) in zip(batch, predictions):
+                candidate = candidates[instance_id]
+                first_round_score = candidate["score"] * candidate["stability"]
+                take_second = mask.any() and (not keep_if_better or score > first_round_score)
+                if take_second and min_consistency is not None:
+                    first_round_mask = segmentation == instance_id
+                    union = int(np.count_nonzero(mask | first_round_mask))
+                    iou = int(np.count_nonzero(mask & first_round_mask)) / union if union else 0.0
+                    if iou < min_consistency:
+                        take_second = False
+                        stats["gated_consistency"] += 1
+                if take_second and max_foreign_overlap is not None:
+                    on_mask = segmentation[mask]
+                    foreign = int(np.count_nonzero((on_mask != 0) & (on_mask != instance_id)))
+                    if foreign / int(mask.sum()) > max_foreign_overlap:
+                        take_second = False
+                        stats["gated_foreign"] += 1
+                if not take_second:
+                    continue
+                stats["replaced_candidates"] += 1
+                # The merge only reads the product of the two, and the second round reports it as one
+                # combined score, so it goes in whole rather than being split back up arbitrarily.
+                candidate["score"], candidate["stability"] = float(score), 1.0
+                candidate["conditioning"] = self._anchor_conditioning(
+                    mask, bounding_box, segmentation.shape, components,
+                    point_prompts, instance_id, refinement_kwargs,
+                )
+        return list(candidates.values())
+
+    def _anchor_conditioning(
+        self, mask: np.ndarray, bounding_box: tuple, shape: tuple, components: tuple,
+        point_prompts: Optional[dict], instance_id: int, refinement_kwargs: dict,
+    ) -> dict:
+        """What the propagation conditions the anchor frame on, once a second round is accepted.
+
+        'conditioning="mask"' hands the video predictor the refined mask, so the anchor frame is
+        exactly the mask the gates accepted, but its decoder never sees the prompt that produced it.
+        'prompts' pushes that prompt instead - the same box and points the second round used - and
+        lets the decoder rebuild the mask, which is what the interactive branch does everywhere else.
+        """
+        if refinement_kwargs["conditioning"] == "mask":
+            return {"mask": mask}
+        conditioning = {"mode": refinement_kwargs["conditioning"]}
+        if "boxes" in components:
+            conditioning["box"] = _prompt_box(bounding_box, shape, refinement_kwargs["box_extension"])
+        if "points" in components:
+            conditioning["points"] = point_prompts[instance_id]["points"]
+            conditioning["point_labels"] = point_prompts[instance_id]["point_labels"]
+        return conditioning
+
+    def _propagate_candidates(
+        self, candidates: List[dict], n_objects_per_pass: int, early_stop_patience: Optional[int],
+        verbose: bool, max_overlap: float, propagation_waves: int = 1,
+        pbar_init=None, pbar_update=None,
+    ) -> List[Dict[str, Any]]:
+        """Turn every candidate into a volumetric mask by propagating its prompts through the volume.
+
+        Every object of a pass is anchored on the same slice, because the video predictor propagates
+        them together from the earliest slice any of them is conditioned on: an object anchored later
+        than that would be tracked before it is conditioned, and never propagated backwards at all.
+        """
+        def run_pass(propagator, batch):
+            # Only the objects: re-reading the volume's features each pass costs more than the propagation.
+            propagator.reset_tracking()
+            for object_id, candidate in enumerate(batch, start=1):
+                self._condition_pass(candidate, object_id, propagator)
+            video_segments = propagator.propagate_prompts(early_stop_patience=early_stop_patience)
+            return _volume_records(video_segments, batch, self._volume.shape[:3]), len(video_segments)
+
+        claims: Dict[Any, np.ndarray] = {}
+        records, anchors = [], set()
+        n_passes = propagated_frame_steps = n_propagated = 0
+        waves = self._candidate_waves(candidates, propagation_waves)
+        for wave_index, wave in enumerate(waves):
+            wave = [candidate for candidate in wave if not self._is_claimed(claims, candidate, max_overlap)]
+            n_propagated += len(wave)
+            by_anchor: Dict[int, List[dict]] = {}
+            for candidate in wave:
+                by_anchor.setdefault(candidate["frame"], []).append(candidate)
+            passes = [
+                group[start:start + n_objects_per_pass]
+                for _, group in sorted(by_anchor.items())
+                for start in range(0, len(group), n_objects_per_pass)
+            ]
+            if not passes:
+                continue
+            anchors.update(by_anchor)
+            n_passes += len(passes)
+
+            # The passes share nothing but the volume, so each goes to whichever device is free.
+            if pbar_init is not None:
+                pbar_init(len(passes), f"APG: propagation passes (wave {wave_index + 1}/{len(waves)})")
+            with tqdm(total=len(passes), desc="Propagate prompts", disable=not verbose) as progress:
+                if pbar_update is None:
+                    per_pass = self._propagator.map_passes(passes, run_pass, update_progress=progress.update)
+                else:
+                    per_pass = _run_with_progress(
+                        lambda update: self._propagator.map_passes(passes, run_pass, update_progress=update),
+                        pbar_update,
+                    )
+
+            for pass_records, steps in per_pass:
+                records.extend(pass_records)
+                propagated_frame_steps += steps
+                if wave_index + 1 < len(waves):
+                    self._claim_records(claims, None, pass_records)
+
+        possible_frame_steps = n_passes * int(self._volume.shape[0])
+        self._last_generation_stats.update({
+            "unique_anchor_slices": len(anchors),
+            "propagation_passes": n_passes,
+            "propagated_candidates": n_propagated,
+            "pruned_candidates": len(candidates) - n_propagated,
+            "propagated_frame_steps": propagated_frame_steps,
+            "early_stopped_frame_steps": possible_frame_steps - propagated_frame_steps,
+        })
+        self._propagator.reset_predictor()
+        return records
+
+    def _claim_key(self, candidate: dict):
+        """The region a candidate's masks are expressed in. An untiled volume is a single region."""
+        return None
+
+    def _claim_shape(self, key) -> tuple:
+        """The shape of that region's claim volume, which the record bounding boxes index into."""
+        return tuple(int(side) for side in self._volume.shape[:3])
+
+    def _candidate_waves(self, candidates: List[dict], propagation_waves: int) -> List[List[dict]]:
+        """The candidates in descending merge score, cut into the rounds they are propagated in.
+
+        Descending, because that is the order the merge resolves them in: an instance a later
+        candidate would duplicate has already been propagated by the time that candidate is reached.
+        """
+        if not candidates:
+            return []
+        if propagation_waves <= 1:
+            return [list(candidates)]
+        order = sorted(candidates, key=lambda candidate: -(candidate["score"] * candidate["stability"]))
+        size = -(-len(order) // propagation_waves)
+        return [order[start:start + size] for start in range(0, len(order), size)]
+
+    def _region_claim(self, claims: Dict[Any, np.ndarray], key) -> np.ndarray:
+        """The voxels of one region that an already-propagated instance covers, made on first use."""
+        if key not in claims:
+            claims[key] = np.zeros(self._claim_shape(key), dtype=bool)
+        return claims[key]
+
+    def _claim_records(self, claims: Dict[Any, np.ndarray], key, records: List[dict]) -> None:
+        """Record the voxels a round's masks cover, in the frame the records are expressed in."""
+        if not records:
+            return
+        claim = self._region_claim(claims, key)
+        for record in records:
+            claim[record["bounding_box"]] |= record["segmentation"]
+
+    def _is_claimed(self, claims: Dict[Any, np.ndarray], candidate: dict, max_overlap: float) -> bool:
+        """Whether earlier rounds already claim enough of this candidate to make it a duplicate.
+
+        The merge rejects a candidate when a better-scoring mask claims more than 'max_overlap' of
+        it. This applies that same rule to the candidate's anchor-slice mask rather than to the
+        volumetric mask it has not been propagated into yet, so it predicts the rejection instead of
+        being it. Testing the anchor point instead measures less and prunes less: 597 candidates
+        against 1222 on one gonuclear crop, for the same score.
+
+        Where instances tile space rather than sit apart in background this misfires, because an
+        abutting neighbour then claims a real share of the candidate. Measured on cremi it costs
+        0.03 CREMI score, which is why the default is one round, see 'propagation_waves'.
+        """
+        if self._is_protected_from_pruning(candidate):
+            return False
+        claim = claims.get(self._claim_key(candidate))
+        if claim is None:
+            return False
+        mask = candidate["mask"]
+        area = int(mask.sum())
+        if area == 0:
+            return False
+        claimed = np.logical_and(claim[(candidate["frame"],) + tuple(candidate["mask_box"])], mask).sum()
+        return bool(claimed > max_overlap * area)
+
+    def _is_protected_from_pruning(self, candidate: dict) -> bool:
+        """Whether a candidate's anchor frame or mask reaches into the halo margin, if one is set.
+
+        '_pruning_protected_margin' is None outside 'TiledAutomaticPromptGenerator', so this is
+        always False there and pruning behaves exactly as it did before this option existed. A tile
+        or block sets it to its own halo before propagating: a candidate this close to the block's
+        outer edge is exactly the kind of prediction the halo-overlap multicut compares against the
+        neighbouring tile/block, so dropping it as a within-tile duplicate could discard the one
+        candidate that seam needed, even though it looked safe to prune from this tile alone.
+        """
+        margin = getattr(self, "_pruning_protected_margin", None)
+        if margin is None:
+            return False
+        z_margin, y_margin, x_margin = margin
+        frame = candidate["frame"]
+        y_box, x_box = candidate["mask_box"]
+        depth, height, width = self._volume.shape[:3]
+        return (
+            frame < z_margin or frame >= depth - z_margin
+            or y_box.start < y_margin or y_box.stop > height - y_margin
+            or x_box.start < x_margin or x_box.stop > width - x_margin
+        )
+
+    def _condition_pass(self, candidate: dict, object_id: int, propagator) -> None:
+        """Push one candidate's conditioning onto the propagator, as the object with this id.
+
+        Without a refinement a candidate is conditioned on the single point the decoder proposed it
+        at. A refined one carries either the mask its second round produced, which conditions the
+        anchor frame directly, or that round's box and points - in as many pushes as its
+        'conditioning' asks for, because a push is a decoder step on the anchor frame rather than
+        bookkeeping, and more of them refine the anchor further. See `DEFAULT_REFINEMENT_3D`.
+        """
+        frame = candidate["frame"]
+        conditioning = candidate.get("conditioning")
+        if conditioning is None:
+            x, y = candidate["point"]
+            propagator.add_point_prompts(
+                frame_ids=frame,
+                points=np.array([[y, x]], dtype="float32"),  # The propagator takes YX.
+                point_labels=np.array([1], dtype="int32"),
+                object_id=object_id,
+            )
+            return
+
+        mask = conditioning.get("mask")
+        if mask is not None:
+            # Already refined against this slice, so the propagator must not refine it a second time.
+            propagator.add_mask_prompts(
+                frame_ids=frame, masks=[mask], object_id=object_id, refine=False,
+            )
+            return
+
+        # Every producer of a conditioning dict sets this; a missing one is a bug in the producer,
+        # so it raises rather than silently picking a strategy.
+        mode = conditioning["mode"]
+        box = conditioning.get("box")
+        points = conditioning.get("points")
+        # The propagator takes YX for both.
+        points_yx = None if points is None else np.asarray(points, dtype="float32")[:, ::-1]
+        labels = conditioning.get("point_labels")
+        box_yx = None if box is None else np.array([box[1], box[0], box[3], box[2]], dtype="float32")
+
+        if mode == "prompts-joint":
+            propagator.add_prompt_set(
+                frame_id=frame, points=points_yx, point_labels=labels, box=box_yx,
+                object_id=object_id,
+            )
+            return
+
+        # A box has to come first, and it clears whatever the object carried on the frame.
+        if box_yx is not None:
+            propagator.add_box_prompts(
+                frame_ids=frame, boxes=[box_yx], object_id=object_id,
+            )
+        if points_yx is None or not len(points_yx):
+            return
+        if mode == "prompts-grouped":
+            propagator.add_prompt_set(
+                frame_id=frame, points=points_yx, point_labels=labels, object_id=object_id,
+                # Appends to the box rather than replacing it.
+                clear_old_points=box_yx is None,
+            )
+            return
+        propagator.add_point_prompts(
+            frame_ids=frame, points=points_yx,
+            point_labels=np.asarray(labels, dtype="int32"), object_id=object_id,
+        )
+
+
+def _check_tiled_embeddings(image_embeddings: dict, shape: tuple, tile_shape: tuple, halo: tuple, i) -> None:
+    """Check that the blocks can read their embeddings from the precomputed tiled embeddings.
+
+    The blocks and the embedding tiles use the same blocking. Thus a block covers the in-plane crop
+    of one embedding tile only if the embeddings have the same in-plane tiling and the same input.
+
+    Args:
+        image_embeddings: The precomputed tiled embeddings (see `precompute_image_embeddings`).
+        shape: The spatial shape of the input, (y, x) or (z, y, x).
+        tile_shape: The block shape of the tiled generator, matching `shape`'s axes.
+        halo: The block halo of the tiled generator, matching `shape`'s axes.
+        i: The index of the slice the input is in the embedded volume, or None.
+
+    Raises:
+        ValueError: If the embeddings do not match the input or its tiling.
+    """
+    features = image_embeddings["features"]
+    if image_embeddings.get("input_size") is not None or "tile_shape" not in features.attrs:
+        raise ValueError("Tiled prompt generation can only reuse tiled embeddings.")
+
+    in_plane_tiling = (tuple(tile_shape[-2:]), tuple(halo[-2:]))
+    embedding_tiling = (
+        tuple(int(t) for t in features.attrs["tile_shape"]), tuple(int(h) for h in features.attrs["halo"]),
+    )
+    if in_plane_tiling != embedding_tiling:
+        raise ValueError(
+            f"The in-plane tiling {in_plane_tiling} (tile shape, halo) is not the tiling {embedding_tiling} of "
+            "the embeddings. Compute the embeddings with the same tiling."
+        )
+
+    embedded_shape = tuple(int(s) for s in features.attrs["shape"])
+    is_video = "fpn" in image_embeddings
+    if len(shape) == 3 or i is not None:
+        expected_shape = tuple(shape) if len(shape) == 3 else (embedded_shape[0], *shape)
+        valid = is_video and embedded_shape == expected_shape and (i is None or 0 <= i < embedded_shape[0])
+    else:
+        valid = not is_video and embedded_shape == tuple(shape)
+    if not valid:
+        slice_info = "" if i is None else f" (slice {i})"
+        raise ValueError(
+            f"The embeddings of shape {embedded_shape} are not for the input of shape {tuple(shape)}"
+            f"{slice_info}. Compute the embeddings for this input."
+        )
+
+
+def _block_embeddings(image_embeddings: dict, shape: tuple, tile_shape: tuple, halo: tuple, block_id: int, i):
+    """Read the precomputed embeddings of one block from the embedding tile that contains it.
+
+    The in-plane crop of a block is one embedding tile with its halo, see `_check_tiled_embeddings`.
+    A volume block selects the slices of the block from that tile. This function reads the slices
+    into memory, so that a worker process can receive them.
+
+    Args:
+        image_embeddings: The precomputed tiled embeddings, checked by `_check_tiled_embeddings`.
+        shape: The spatial shape of the input, (y, x) or (z, y, x).
+        tile_shape: The block shape of the tiled generator, matching `shape`'s axes.
+        halo: The block halo of the tiled generator, matching `shape`'s axes.
+        block_id: The id of the block, as `bioimage_py.segmentation.stitch_segmentation` passes it.
+        i: The index of the slice the input is in the embedded volume, or None.
+
+    Returns:
+        The block's embeddings, and the slice index to initialize its generator with.
+    """
+    blocking = Blocking([0] * len(shape), list(shape), list(tile_shape))
+    block = blocking.get_block_with_halo(block_id, list(halo))
+    tiling = Blocking([0, 0], list(shape[-2:]), list(tile_shape[-2:]))
+    tile_id = tiling.coordinates_to_block_id(list(block.inner_block.begin)[-2:])
+    tile = tiling.get_block_with_halo(tile_id, list(halo[-2:])).outer_block
+    if (list(tile.begin), list(tile.end)) != (list(block.outer_block.begin)[-2:], list(block.outer_block.end)[-2:]):
+        raise RuntimeError(f"Block {block_id} does not cover the same in-plane crop as the embedding tile {tile_id}.")
+
+    name = str(tile_id)
+    features = image_embeddings["features"][name]
+    sizes = {"input_size": features.attrs["input_size"], "original_size": features.attrs["original_size"]}
+    if "fpn" not in image_embeddings:  # A 2d image.
+        high_res_feats = _load_list_datasets(image_embeddings["high_res_feats"], name, lazy_loading=False)
+        return {"features": features[:], "high_res_feats": high_res_feats, **sizes}, None
+
+    # A volume block reads its slices, a slice of a volume only that one.
+    z = slice(block.outer_block.begin[0], block.outer_block.end[0]) if len(shape) == 3 else slice(i, i + 1)
+    fpn = _load_list_datasets(image_embeddings["fpn"], name, lazy_loading=True)
+    embeddings = {
+        "features": features[z],
+        "fpn": [level[z] for level in fpn],
+        "pos_enc": _load_list_datasets(image_embeddings["pos_enc"], name, lazy_loading=False),
+        **sizes,
+    }
+    return embeddings, (None if len(shape) == 3 else 0)
+
+
+def _process_worker(model_builder: Callable[[str], tuple], device: str, task_queue) -> None:
+    """One persistent OS process per device for `TiledAutomaticPromptGenerator(execution='process')`.
+
+    A live CUDA model cannot cross a process boundary safely (its tensors are tied to the parent's
+    CUDA context), so the worker builds its own copy with `model_builder` instead of receiving one
+    from the parent - the same reason `_build_pool` deep-copies a model per device rather than
+    sharing one, just paid once per process instead of once per thread. Every block after that stays
+    entirely inside this process: no shared Python interpreter, so no GIL contention with the other
+    devices' workers. See finetuning/v2/evaluation for the measurements this is based on.
+    """
+    model, predictor = model_builder(device)
+    generator = AutomaticPromptGenerator(model, predictor, device=device, inference_device=device)
+    while True:
+        task = task_queue.get()
+        if task is None:
+            return
+        result_queue = task["result_queue"]
+        try:
+            generator.clear_state()
+            generator.initialize(
+                task["block"], ndim=task["ndim"], normalization_bounds=task["normalization_bounds"],
+                offload_to_cpu=task["offload_to_cpu"], cache_all_slices=task["cache_all_slices"],
+                **task["embedding_kwargs"],
+            )
+            generator._pruning_protected_margin = task["protected_margin"]
+            result_queue.put(("ok", generator.generate(**task["params"])))
+        except Exception as exc:  # surfaced in the parent instead of hanging it on an empty queue
+            result_queue.put(("err", repr(exc)))
+        finally:
+            generator.clear_state()
+
+
+class TiledAutomaticPromptGenerator:
+    """Generates an instance segmentation with automatically generated prompts, tile or block by tile.
+
+    Like `AutomaticPromptGenerator`, but every tile (an image) or XYZ block (a volume) is segmented
+    independently at native resolution, with a halo, and the results are stitched by
+    `bioimage_py.segmentation.stitch_segmentation`'s multicut over the halo overlap rather than by
+    giving each candidate to exactly one tile. A volume is blocked in Z too, so an object crossing a
+    Z seam is reconciled the same way one crossing a Y or X seam is: independently predicted in both
+    neighbouring blocks and merged by how well their halo predictions agree, instead of being routed
+    to a single owning tile - which a full-depth tile column cannot do for a Z seam at all. This
+    trades some redundant halo computation (every tile/block re-encodes and re-propagates its own
+    halo) for correctness at every seam, including ones the previous tile-column design could not
+    represent. See finetuning/v2/evaluation/apg_3d_blockwise_ab.py for the measurements.
+
+    Every resolved device gets its own persistent (decoder, model) copy, built once and reused
+    across every tile/block for the life of the generator, so `generate` keeps every device busy on
+    a different tile/block concurrently rather than rebuilding the model per tile.
+
+    Args:
+        model: The UniSAM2 model (see `get_unisam2_model` / `get_decoder`).
+        predictor: The SAM2 image predictor for the interactive branch of the same model, or its
+            video predictor for a volume.
+        device: The device the model lives on, used to resolve `inference_device=None`.
+        inference_device: The device(s) to run tiles/blocks on concurrently, resolved the same way
+            as `UniSAM2InstanceSegmentation`'s: None fans out over every visible GPU when the model
+            is on CUDA, a single device stays on it, a sequence pins one pool member per device.
+        beta: The multicut boundary bias passed to `stitch_segmentation`; > 0.5 biases towards
+            over-segmentation (cutting), < 0.5 towards under-segmentation (merging).
+        workers_per_device: How many independent (decoder, model) copies to build per resolved
+            device. `generate` still gives each worker one tile/block at a time, so this only helps
+            when a single worker leaves a device's compute or memory underused, e.g. a small model
+            on a large GPU. Not supported together with `execution='process'`.
+        execution: How a tile/block's own segmentation runs. `'thread'` (the default) runs every
+            worker in this process on a `concurrent.futures.ThreadPoolExecutor`, sharing one Python
+            interpreter. `'process'` instead gives every device its own persistent OS process, with
+            its own interpreter and CUDA context, so one device's per-frame propagation bookkeeping
+            never blocks another's behind the GIL - measured at 1.5-4x faster than `'thread'` once
+            the pool is warm (bigger blocks and more of them widen the gap), with no quality change
+            (see finetuning/v2/evaluation). The first `generate` call after building the generator
+            pays extra for it, though: every worker process loads its own model from disk instead of
+            reusing an in-memory copy the way `'thread'`'s pool does, which cost ~10-15s total across
+            4 workers in that same measurement. Worth it for a generator that runs many volumes, not
+            necessarily for a single one-off call. Requires `model_builder`.
+        model_builder: Required for `execution='process'`. A callable `(device) -> (model,
+            predictor)` that builds a fresh model and predictor pair on a device string - every
+            worker process calls this itself rather than receiving `model`/`predictor` from the
+            parent, because a live CUDA model cannot cross a process boundary safely.
+        process_timeout: `execution='process'` only. Seconds a block waits for its worker before
+            raising, rather than hanging forever if a worker process has died or wedged.
+    """
+
+    # Read by `automatic_instance_segmentation` to decide whether to pass the AIS 'mode' argument.
+    _has_postprocessing_mode = False
+    _is_decoder_based = True
+    # The front end computes the embeddings only when it caches them.
+    _precompute_embeddings_in_frontend = False
+
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        predictor,
+        device: Optional[Union[str, torch.device]] = None,
+        inference_device: Devices = USE_MODEL_DEVICE,
+        beta: float = DEFAULT_STITCHING_BETA,
+        workers_per_device: int = 1,
+        execution: str = "thread",
+        model_builder: Optional[Callable[[str], tuple]] = None,
+        process_timeout: float = 600.0,
+    ) -> None:
+        self._model = model
+        self._predictor = predictor
+        self._device = device
+        self._inference_device = device if inference_device is USE_MODEL_DEVICE else inference_device
+        self._beta = beta
+        if workers_per_device < 1:
+            raise ValueError(f"'workers_per_device' must be >= 1, got {workers_per_device}.")
+        self._workers_per_device = int(workers_per_device)
+        if execution not in ("thread", "process"):
+            raise ValueError(f"'execution' must be 'thread' or 'process', got {execution!r}.")
+        if execution == "process":
+            if workers_per_device != 1:
+                raise ValueError("'workers_per_device' > 1 is not supported with execution='process'.")
+            if model_builder is None:
+                raise ValueError(
+                    "execution='process' needs 'model_builder', a callable (device) -> (model, "
+                    "predictor) every worker process calls to build its own model copy - a live CUDA "
+                    "model cannot cross a process boundary safely."
+                )
+        self._execution = execution
+        self._model_builder = model_builder
+        self._process_timeout = float(process_timeout)
+        self._pool: Optional[List[AutomaticPromptGenerator]] = None
+        self._process_devices: Optional[List[str]] = None
+        self._task_queues: Optional[list] = None
+        self._processes: Optional[list] = None
+        self._manager = None
+        self._image = None
+        self._ndim = None
+        self._tile_shape = None
+        self._halo = None
+        self._verbose = False
+        self._offload_to_cpu = None
+        self._cache_all_slices = False
+        self._image_embeddings = None
+        self._i = None
+
+    def _inference_devices(self, devices: Devices) -> Devices:
+        """Resolve the inference devices and discard a pool that uses different devices."""
+        inference_devices = self._inference_device if devices is None else devices
+        if inference_devices != self._inference_device:
+            self.close()
+            if self._pool is not None:
+                for generator in self._pool:
+                    generator.clear_state()
+                self._pool = None
+            self._inference_device = inference_devices
+        return inference_devices
+
+    def _build_pool(self) -> List[AutomaticPromptGenerator]:
+        """'workers_per_device' independent (decoder, model) copies per resolved device.
+
+        Every worker is pinned entirely to its own device, and only one tile/block ever owns a
+        worker at a time (see `generate`'s queue), so multiple workers sharing a device compete for
+        its compute rather than racing on shared state. This is worth it only because a single
+        worker's block leaves a large GPU's memory and, more importantly, its compute scheduling far
+        from saturated (a `hvit_t` block is a few GB on an 80+ GB H100): plain Python threads sharing
+        a device all submit to its one default CUDA stream, which runs their kernels in submission
+        order and gives no real concurrency, so every worker beyond the first on a device gets its
+        own `torch.cuda.Stream` (`generate` runs it under that stream) to let the driver actually
+        interleave independent tiles' kernels on the same device.
+        """
+        devices = _resolve_devices(self._model, self._inference_device)
+        worker_devices = [device for device in devices for _ in range(self._workers_per_device)]
+
+        def move_pair(model, predictor, device):
+            model.to(device)
+            getattr(predictor, "model", predictor).to(device)
+
+        worker_pairs = [None] * len(worker_devices)
+        if len(worker_devices) > 1:
+            move_pair(self._model, self._predictor, "cpu")
+            for worker_id in range(1, len(worker_devices)):
+                pair = copy.deepcopy((self._model, self._predictor))
+                move_pair(*pair, worker_devices[worker_id])
+                worker_pairs[worker_id] = pair
+        move_pair(self._model, self._predictor, worker_devices[0])
+        worker_pairs[0] = self._model, self._predictor
+
+        pool = []
+        for (model, predictor), device in zip(worker_pairs, worker_devices):
+            device_obj = torch.device(device)
+            generator = AutomaticPromptGenerator(model, predictor, device=device, inference_device=device)
+            if self._workers_per_device > 1 and device_obj.type == "cuda":
+                generator._tile_stream = torch.cuda.Stream(device=device_obj)
+            pool.append(generator)
+        return pool
+
+    def _build_process_pool(self) -> None:
+        """Start one persistent worker OS process per resolved device, each with its own model copy.
+
+        Sidesteps the thread pool's GIL contention rather than working around it: every worker has
+        its own Python interpreter, so the per-frame propagation bookkeeping of one device's block
+        never blocks another device's. `_manager` backs the per-block reply queues - a `Queue`
+        created after these processes already exist cannot be pickled to a `spawn`-context child,
+        only a manager-proxied one can.
+        """
+        devices = _resolve_devices(self._model, self._inference_device)
+        ctx = mp.get_context("spawn")
+        self._manager = ctx.Manager()
+        self._process_devices = devices
+        self._task_queues = [ctx.Queue() for _ in devices]
+        self._processes = [
+            ctx.Process(target=_process_worker, args=(self._model_builder, device, task_queue), daemon=True)
+            for device, task_queue in zip(devices, self._task_queues)
+        ]
+        for process in self._processes:
+            process.start()
+
+    def close(self) -> None:
+        """Stop the process pool, if `execution='process'` built one. A no-op otherwise.
+
+        Not required for correctness - every worker process is a daemon, so it exits with the main
+        process - but lets a caller reclaim the devices deterministically before that.
+        """
+        if self._processes is None:
+            return
+        for task_queue in self._task_queues:
+            task_queue.put(None)
+        for process in self._processes:
+            process.join(timeout=10)
+            if process.is_alive():
+                process.terminate()
+        self._manager.shutdown()
+        self._processes = None
+        self._task_queues = None
+        self._process_devices = None
+        self._manager = None
+
+    def initialize(
+        self,
+        image: np.ndarray,
+        ndim: int = 2,
+        tile_shape: Optional[tuple] = None,
+        halo: Optional[tuple] = None,
+        verbose: bool = False,
+        offload_to_cpu: Optional[bool] = None,
+        cache_all_slices: bool = False,
+        image_embeddings: Optional[dict] = None,
+        i: Optional[int] = None,
+    ) -> None:
+        """Store the input and the tile/block geometry; the actual segmentation happens in `generate`.
+
+        Unlike `AutomaticPromptGenerator`, nothing is encoded here: each tile/block is encoded from
+        scratch inside `generate`, since every tile/block needs its own encoder pass over its halo.
+        If you give precomputed tiled `image_embeddings`, every tile/block reads its embeddings from
+        them, and the encoder does not run.
+
+        Args:
+            image: The input image, shape (Y, X) or (Y, X, C), or the input volume, shape (Z, Y, X).
+            ndim: The number of spatial dimensions, 2 or 3. A volume requires a video predictor.
+            tile_shape: The inner tile/block shape, (y, x) for an image, always the full (z, y, x)
+                for a volume - it is blocked in z too, not tiled in-plane only, so an object crossing
+                a z seam is reconciled by the halo-overlap multicut the same way a y/x one is. Pass
+                the full volume depth as the z entry for in-plane-only tiling (one whole-depth block
+                per xy tile).
+            halo: The halo added on each side of a tile/block, matching `tile_shape`'s axes.
+            verbose: Whether each tile/block's generator prints progress while it segments it.
+            offload_to_cpu: Volumes only, forwarded to every tile/block's own
+                `AutomaticPromptGenerator.initialize`.
+            cache_all_slices: Volumes only, forwarded the same way.
+            image_embeddings: The optional precomputed tiled embeddings of the input. With `i`, the
+                embeddings of the volume that contains the input slice. Their in-plane tile shape
+                and halo must be the ones of `tile_shape` and `halo`.
+            i: The index of the input slice in the volume of `image_embeddings`.
+        """
+        if ndim not in (2, 3):
+            raise ValueError(f"Tiled prompt generation supports 2d and 3d inputs, got ndim={ndim}.")
+        if tile_shape is None or halo is None:
+            raise ValueError("Both 'tile_shape' and 'halo' have to be passed for the tiled generator.")
+        if len(tile_shape) != ndim or len(halo) != ndim:
+            raise ValueError(
+                f"'tile_shape' and 'halo' must have {ndim} entries for a {ndim}d input, one per spatial "
+                "axis - always (z, y, x) for a volume, never in-plane only."
+            )
+        tile_shape = tuple(int(t) for t in tile_shape)
+        halo = tuple(int(h) for h in halo)
+        if image_embeddings is not None:
+            _check_tiled_embeddings(image_embeddings, image.shape[:ndim], tile_shape, halo, i)
+        self._image = image
+        self._ndim = ndim
+        self._tile_shape = tile_shape
+        self._halo = halo
+        self._verbose = verbose
+        self._offload_to_cpu = offload_to_cpu
+        self._cache_all_slices = cache_all_slices
+        self._image_embeddings = image_embeddings
+        self._i = None if image_embeddings is None else i
+
+    @torch.no_grad()
+    def generate(self, *, pbar_init=None, pbar_update=None, **params) -> np.ndarray:
+        """Segment every tile/block independently and stitch them by halo-overlap multicut.
+
+        `propagation_waves` reaches every tile/block unchanged, but each one propagates with its
+        own halo as a protected margin (see `AutomaticPromptGenerator._is_protected_from_pruning`):
+        a candidate whose anchor frame or mask reaches into that margin is never pruned as a
+        within-tile duplicate, since it is exactly the kind of prediction the halo-overlap multicut
+        compares against the neighbouring tile/block.
+
+        For a volume, every tile/block is also normalized against percentile bounds computed once
+        over the whole image (`normalization_bounds`, see `AutomaticPromptGenerator.initialize`),
+        never its own local crop - the same statistics an untiled `AutomaticPromptGenerator` would
+        use, so a tile's brightness/contrast does not depend on which tile it happens to be.
+
+        Args:
+            pbar_init: Initialize progress with the number of tiles and a description.
+            pbar_update: Advance progress after each completed tile, on the calling thread.
+            params: Keyword arguments for `AutomaticPromptGenerator.generate`, applied identically
+                to every tile/block.
+
+        Returns:
+            The stitched instance segmentation, uint32 array with the shape of the input.
+        """
+        if self._image is None:
+            raise RuntimeError("The segmenter has not been initialized. Call 'initialize' first.")
+        if bp is None:
+            raise RuntimeError("Tiled automatic prompt generation requires 'bioimage_py'. Install bioimage-py.")
+
+        params = dict(params)
+        protected_margin = tuple(self._halo)
+        # Computed once over the whole image/volume so every tile/block shares one normalization
+        # instead of each estimating its own percentiles from its own, smaller, biased crop.
+        encodes = self._ndim == 3 and self._image_embeddings is None  # Only the encoder uses the bounds.
+        normalization_bounds = _volume_normalization_bounds(self._image) if encodes else None
+
+        if self._execution == "process":
+            segment_block, num_workers = self._process_dispatch(params, normalization_bounds, protected_margin)
+        else:
+            segment_block, num_workers = self._thread_dispatch(params, normalization_bounds, protected_margin)
+
+        shape = self._image.shape[:self._ndim]
+        n_tiles = int(np.prod([(size + tile - 1) // tile for size, tile in zip(shape, self._tile_shape)]))
+        if pbar_init is not None:
+            pbar_init(n_tiles, "APG: segmenting tiles")
+
+        def stitch(update):
+            def segment_with_progress(block, block_id):
+                result = segment_block(block, block_id)
+                if update is not None:
+                    update(1)
+                return result
+
+            return bp.segmentation.stitch_segmentation(
+                input=self._image,
+                segmentation_function=segment_with_progress,
+                shape=self._image.shape[:self._ndim],
+                tile_shape=self._tile_shape,
+                tile_overlap=self._halo,
+                beta=self._beta,
+                with_background=True,
+                num_workers=num_workers,
+                job_type="local",
+            )
+        output = _run_with_progress(stitch, pbar_update)
+        return np.asarray(output).astype("uint32")
+
+    def _block_embedding_kwargs(self, block_id: int) -> dict:
+        """The precomputed embeddings to initialize a block's generator with, if there are any."""
+        if self._image_embeddings is None:
+            return {}
+        embeddings, i = _block_embeddings(
+            self._image_embeddings, self._image.shape[:self._ndim], self._tile_shape, self._halo, block_id, self._i,
+        )
+        return {"image_embeddings": embeddings, "i": i}
+
+    def _thread_dispatch(self, params: dict, normalization_bounds, protected_margin: tuple):
+        """Build the `segment_block` closure for `execution='thread'` (the default)."""
+        if self._pool is None:
+            self._pool = self._build_pool()
+        available: "queue.Queue[AutomaticPromptGenerator]" = queue.Queue()
+        for generator in self._pool:
+            available.put(generator)
+
+        def segment_block(block: np.ndarray, block_id: int) -> np.ndarray:
+            block = np.asarray(block)
+            embedding_kwargs = self._block_embedding_kwargs(block_id)
+            generator = available.get()
+            # None (a worker alone on its device) skips the stream context entirely, keeping the
+            # default stream - torch.cuda.stream(None) resolves the current device even when there
+            # is no CUDA at all, which errors on a CPU/MPS-only machine.
+            stream = getattr(generator, "_tile_stream", None)
+            stream_context = torch.cuda.stream(stream) if stream is not None else contextlib.nullcontext()
+            try:
+                with stream_context:
+                    generator.initialize(
+                        block, ndim=self._ndim, verbose=self._verbose,
+                        offload_to_cpu=self._offload_to_cpu, cache_all_slices=self._cache_all_slices,
+                        normalization_bounds=normalization_bounds, **embedding_kwargs,
+                    )
+                    generator._pruning_protected_margin = protected_margin
+                    result = generator.generate(**params)
+                    if stream is not None:
+                        # Block until this tile's queued GPU work is done before it is handed off:
+                        # the caller reads 'result' outside the stream context, on another thread.
+                        stream.synchronize()
+                return result
+            finally:
+                generator.clear_state()
+                available.put(generator)
+
+        return segment_block, len(self._pool)
+
+    def _process_dispatch(self, params: dict, normalization_bounds, protected_margin: tuple):
+        """Build the `segment_block` closure for `execution='process'`.
+
+        Each call round-trips a block through its worker's task queue and a per-block reply queue,
+        synchronously - the dispatching thread blocks on I/O while it waits, which releases the GIL,
+        so several dispatch threads still overlap even though the real segmentation work now happens
+        in another process entirely.
+        """
+        if self._processes is None:
+            self._build_process_pool()
+        available: "queue.Queue[int]" = queue.Queue()
+        for worker_id in range(len(self._processes)):
+            available.put(worker_id)
+
+        def segment_block(block: np.ndarray, block_id: int) -> np.ndarray:
+            block = np.asarray(block)
+            worker_id = available.get()
+            if not self._processes[worker_id].is_alive():
+                raise RuntimeError(f"process worker {worker_id} died before block {block_id} was dispatched.")
+            result_queue = self._manager.Queue()
+            try:
+                self._task_queues[worker_id].put({
+                    "block": block, "ndim": self._ndim, "protected_margin": protected_margin,
+                    "params": params, "normalization_bounds": normalization_bounds,
+                    "offload_to_cpu": self._offload_to_cpu, "cache_all_slices": self._cache_all_slices,
+                    "embedding_kwargs": self._block_embedding_kwargs(block_id), "result_queue": result_queue,
+                })
+                try:
+                    status, payload = result_queue.get(timeout=self._process_timeout)
+                except queue.Empty:
+                    raise RuntimeError(
+                        f"process worker {worker_id} timed out after {self._process_timeout:.0f}s on "
+                        f"block {block_id}."
+                    )
+                if status == "err":
+                    raise RuntimeError(f"process worker {worker_id} failed on block {block_id}: {payload}")
+                return payload
+            finally:
+                available.put(worker_id)
+
+        return segment_block, len(self._processes)
+
+    def get_state(self) -> dict:
+        """Return the input, the tile/block geometry and the embeddings, so `set_state` can restore them."""
+        return {
+            "image": self._image, "ndim": self._ndim, "tile_shape": self._tile_shape, "halo": self._halo,
+            "image_embeddings": self._image_embeddings, "i": self._i,
+        }
+
+    def set_state(self, state: dict) -> None:
+        """Restore the input, the tile/block geometry and the embeddings `initialize` stored.
+
+        Args:
+            state: The state, as returned by `get_state`.
+        """
+        if "image" not in state:
+            raise ValueError("A tiled prompt-generator state must hold its 'image'.")
+        self._image = state["image"]
+        self._ndim = state.get("ndim", 2)
+        self._tile_shape = state.get("tile_shape")
+        self._halo = state.get("halo")
+        self._image_embeddings = state.get("image_embeddings")
+        self._i = state.get("i")
+
+    def clear_state(self) -> None:
+        """Clear the stored input, tile/block geometry and embeddings. The device pool stays alive."""
+        self._image = None
+        self._ndim = None
+        self._tile_shape = None
+        self._halo = None
+        self._image_embeddings = None
+        self._i = None

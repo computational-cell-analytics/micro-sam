@@ -1,5 +1,6 @@
 build
 coverage
+flake8
 line-profiler
 pdoc
 pytest

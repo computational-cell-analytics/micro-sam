@@ -1,15 +1,20 @@
 import os
+import sys
 import platform
 import unittest
+from shutil import rmtree
 from subprocess import run
-from shutil import which, rmtree
 
-import zarr
+import z5py
 import pytest
 import imageio.v3 as imageio
 from skimage.data import binary_blobs
 
 import micro_sam.util as util
+
+
+def _cli(*args):
+    return run([sys.executable, "-m", "micro_sam._cli", *args])
 
 
 class TestCLI(unittest.TestCase):
@@ -23,25 +28,31 @@ class TestCLI(unittest.TestCase):
     def tearDown(self):
         rmtree(self.tmp_folder)
 
-    def _test_command(self, cmd):
-        self.assertTrue(which(cmd) is not None)
+    def _test_help(self, *args):
+        result = _cli(*args, "--help")
+        self.assertEqual(result.returncode, 0)
 
-    def test_annotator_2d(self):
-        self._test_command("micro_sam.annotator_2d")
+    def test_help(self):
+        self._test_help()
+        self._test_help("annotator")
+        self._test_help("inference")
+        for cmd in [
+            ["annotator", "segmentation"], ["annotator", "tracking"], ["annotator", "batch"],
+            ["annotator", "pixel-classification"], ["annotator", "object-classification"],
+            ["inference", "segmentation"], ["inference", "tracking"],
+            ["inference", "pixel-classification"], ["inference", "object-classification"],
+            ["precompute-embeddings"], ["train"], ["train-generalist"], ["info"],
+        ]:
+            self._test_help(*cmd)
 
-    def test_annotator_3d(self):
-        self._test_command("micro_sam.annotator_3d")
-
-    def test_annotator_tracking(self):
-        self._test_command("micro_sam.annotator_tracking")
-
-    def test_image_series_annotator(self):
-        self._test_command("micro_sam.image_series_annotator")
+    @pytest.mark.v1
+    def test_v1_help(self):
+        self._test_help("v1")
+        for cmd in ["train", "automatic_segmentation", "evaluate", "benchmark_sam"]:
+            self._test_help("v1", cmd)
 
     @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
     def test_precompute_embeddings(self):
-        self._test_command("micro_sam.precompute_embeddings")
-
         # Create 2 images as testdata.
         n_images = 2
         for i in range(n_images):
@@ -49,48 +60,33 @@ class TestCLI(unittest.TestCase):
             image_data = binary_blobs(512).astype("uint8") * 255
             imageio.imwrite(im_path, image_data)
 
-        # Test precomputation with a single image.
+        # Test precomputation with a single (2d) image.
         emb_path1 = os.path.join(self.tmp_folder, "embedddings1.zarr")
-        run([
-            "micro_sam.precompute_embeddings", "-i", im_path, "-e", emb_path1,
-            "-m", self.model_type, "--precompute_amg_state"
-        ])
+        _cli("precompute-embeddings", "-i", im_path, "-e", emb_path1, "-m", "hvit_t")
         self.assertTrue(os.path.exists(emb_path1))
-        f = zarr.open(emb_path1, mode="r")
-        self.assertIn("features", f)
+        with z5py.File(emb_path1, "r") as f:
+            self.assertIn("features", f)
+            self.assertIn("high_res_feats", f)
 
-        ais_path = os.path.join(emb_path1, "is_state.h5")
-        self.assertTrue(os.path.exists(ais_path))
-
-        # Test precomputation with image stack.
+        # Test precomputation with an image stack (loaded as a 3d volume).
         emb_path2 = os.path.join(self.tmp_folder, "embedddings2.zarr")
-        run([
-            "micro_sam.precompute_embeddings", "-i", self.tmp_folder, "-e", emb_path2,
-            "-m", self.model_type, "-k", "*.tif", "--precompute_amg_state"
-        ])
+        _cli("precompute-embeddings", "-i", self.tmp_folder, "-e", emb_path2, "-m", "hvit_t", "-k", "*.tif")
         self.assertTrue(os.path.exists(emb_path2))
-        f = zarr.open(emb_path2, mode="r")
-        self.assertIn("features", f)
-        self.assertEqual(f["features"].shape[0], n_images)
+        with z5py.File(emb_path2, "r") as f:
+            self.assertIn("features", f)
+            self.assertEqual(f["features"].shape[0], n_images)
 
-        ais_path = os.path.join(emb_path2, "is_state.h5")
-        self.assertTrue(os.path.exists(ais_path))
-
-        # Test precomputation with pattern to process multiple image.
+        # Test precomputation with a pattern to process multiple images.
         emb_path3 = os.path.join(self.tmp_folder, "embedddings3")
-        run([
-            "micro_sam.precompute_embeddings", "-i", self.tmp_folder, "-e", emb_path3,
-            "-m", self.model_type, "--pattern", "*.tif", "--precompute_amg_state"
-        ])
+        _cli(
+            "precompute-embeddings", "-i", self.tmp_folder, "-e", emb_path3, "-m", "hvit_t", "--pattern", "*.tif",
+        )
         for i in range(n_images):
             self.assertTrue(os.path.exists(os.path.join(emb_path3, f"image-{i}.zarr")))
-            ais_path = os.path.join(emb_path3, f"image-{i}.zarr", "is_state.h5")
-            self.assertTrue(os.path.exists(ais_path))
 
+    @pytest.mark.v1
     @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
-    def test_automatic_segmentation(self):
-        self._test_command("micro_sam.automatic_segmentation")
-
+    def test_v1_automatic_segmentation(self):
         # Create 1 image as testdata.
         im_path = os.path.join(self.tmp_folder, "image.tif")
         image_data = binary_blobs(512).astype("uint8") * 255
@@ -100,33 +96,127 @@ class TestCLI(unittest.TestCase):
         out_path = "output.tif"
 
         # Test AMG with default model in default mode.
-        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path,
-             "-m", self.default_model_type, "--points_per_side", "4"])
+        _cli(
+            "v1", "automatic_segmentation", "-i", im_path, "-o", out_path,
+            "-m", self.default_model_type, "--points_per_side", "4"
+        )
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
         # Test AMG with default model exclusively in AMG mode.
-        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path,
-             "-m", self.default_model_type, "--mode", "amg", "--points_per_side", "4"])
+        _cli(
+            "v1", "automatic_segmentation", "-i", im_path, "-o", out_path,
+            "-m", self.default_model_type, "--mode", "amg", "--points_per_side", "4"
+        )
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
         # Test AIS with 'micro-sam' model in default mode.
-        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.model_type])
+        _cli("v1", "automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.model_type)
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
         # Test AIS with 'micro-sam' model exclusively in AMG mode.
-        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path,
-             "-m", self.model_type, "--mode", "amg", "--points_per_side", "4"])
+        _cli(
+            "v1", "automatic_segmentation", "-i", im_path, "-o", out_path,
+            "-m", self.model_type, "--mode", "amg", "--points_per_side", "4"
+        )
         self.assertTrue(os.path.exists(out_path))
         os.remove(out_path)
 
         # Test AIS with 'micro-sam' model exclusively in AIS mode.
-        run(["micro_sam.automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.model_type, "--mode", "ais"])
+        _cli("v1", "automatic_segmentation", "-i", im_path, "-o", out_path, "-m", self.model_type, "--mode", "ais")
         self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
+
+    @pytest.mark.skipif(platform.system() == "Windows", reason="CLI test is not working on windows.")
+    def test_parse_shape_turns_tiling_off(self):
+        from micro_sam._cli import _parse_shape
+
+        self.assertIsNone(_parse_shape(None))  # not given, i.e. decide automatically
+        self.assertEqual(_parse_shape("384,384"), (384, 384))
+        self.assertEqual(_parse_shape("4, 384, 384"), (4, 384, 384))
+        # 'none' / 'off' is the readable spelling of the all-zero 'run untiled' request.
+        for value in ("none", "None", " off "):
+            self.assertEqual(_parse_shape(value), (0, 0))
+        self.assertEqual(_parse_shape("none", ndim=3), (0, 0, 0))
+
+    def test_automatic_segmentation(self):
+        # Create 1 image as testdata.
+        im_path = os.path.join(self.tmp_folder, "image.tif")
+        image_data = binary_blobs(256).astype("uint8") * 255
+        imageio.imwrite(im_path, image_data)
+
+        out_path = os.path.join(self.tmp_folder, "seg.tif")
+
+        # Test 'sparse' (flow) mode with a pass-through postproc param in '--key=value' form.
+        _cli(
+            "inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+            "-n", "2", "--mode", "sparse", "--foreground_threshold=0.5"
+        )
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
+
+        # Test 'dense' (multicut) mode with a pass-through postproc param in '--key value' form.
+        _cli(
+            "inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+            "-n", "2", "--mode", "dense", "--beta", "0.6"
+        )
+        self.assertTrue(os.path.exists(out_path))
+        os.remove(out_path)
+
+        # Test the embedding-reuse path (only the decoder is run on cached embeddings).
+        emb_path = os.path.join(self.tmp_folder, "seg-embeddings.zarr")
+        _cli(
+            "inference", "segmentation", "-i", im_path, "-o", out_path, "-m", "hvit_t_cells",
+            "-n", "2", "--mode", "sparse", "-e", emb_path
+        )
+        self.assertTrue(os.path.exists(out_path))
+        self.assertTrue(os.path.exists(emb_path))
         os.remove(out_path)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_precompute_embeddings_forwards_the_tiling(monkeypatch):
+    from click.testing import CliRunner
+
+    from micro_sam._cli import cli
+    import micro_sam.precompute_state as precompute_state
+
+    calls = []
+    monkeypatch.setattr(precompute_state, "precompute_state", lambda *args, **kwargs: calls.append(kwargs))
+
+    runner = CliRunner()
+    for options, expected in [
+        ([], (None, None)),  # resolved per image, like the other tools
+        (["--tile_shape", "256,256", "--overlap", "32,32"], ((256, 256), (32, 32))),
+        (["--tile_shape", "none", "--overlap", "none"], ((0, 0), (0, 0))),
+    ]:
+        result = runner.invoke(cli, ["precompute-embeddings", "-i", "image.tif", "-e", "embeddings.zarr", *options])
+        assert result.exit_code == 0, result.output
+        assert (calls[-1]["tile_shape"], calls[-1]["halo"]) == expected
+
+
+def test_v1_automatic_segmentation_forwards_the_tiling(monkeypatch):
+    from click.testing import CliRunner
+
+    from micro_sam._cli import cli
+    import micro_sam.v1.automatic_segmentation as v1_automatic_segmentation
+
+    calls = []
+    monkeypatch.setattr(v1_automatic_segmentation, "main", lambda argv: calls.append(argv))
+
+    runner = CliRunner()
+    command = ["v1", "automatic_segmentation", "-i", "image.tif", "-o", "out.tif"]
+    tiling = ["--tile_shape", "384", "384", "--halo", "64", "64"]
+    for options, expected in [([], []), (tiling, tiling)]:  # without options, the v1 command decides the tiling
+        result = runner.invoke(cli, [*command, *options])
+        assert result.exit_code == 0, result.output
+        assert calls[-1] == ["--input_path", "image.tif", "--output_path", "out.tif", *expected]
+
+    # The tile shape and the halo take exactly two values.
+    result = runner.invoke(cli, [*command, "--tile_shape", "384"])
+    assert result.exit_code != 0

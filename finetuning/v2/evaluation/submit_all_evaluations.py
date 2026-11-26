@@ -1,0 +1,613 @@
+"""Generate and submit every Slurm job of the v2 evaluation.
+
+Four controls pick what runs:
+    --data              which datasets, by name or with --all_datasets
+    --modality          lm, em or hp (or all)
+    --segmentation_type automatic or interactive
+    --segmentation_mode ais or apg, for micro-sam2
+
+A run without --method evaluates micro-sam2 itself, through evaluate_automatic_segmentation.py or
+evaluate_interactive_segmentation.py. With --method it evaluates the baselines instead, through
+evaluate_automatic_baselines.py or evaluate_interactive_baselines.py. Datasets a method cannot
+handle are dropped from its selection rather than submitted and failed.
+
+Usage examples:
+    # micro-sam2 automatic prompt generation on every LM dataset, for three backbones.
+    python submit_all_evaluations.py --all_datasets --modality lm \\
+        --segmentation_type automatic --segmentation_mode apg -m hvit_t hvit_s hvit_b
+
+    # micro-sam2 interactive with box prompts, every dataset.
+    python submit_all_evaluations.py --all_datasets --segmentation_type interactive -m hvit_t -p box
+
+    # Two interactive baselines on the EM datasets.
+    python submit_all_evaluations.py --all_datasets --modality em \\
+        --segmentation_type interactive --method nninteractive sam2
+
+    # micro-sam2 AIS and APG with the registry mitochondria model, tuned by parameter_search.py first.
+    python submit_all_evaluations.py --all_datasets --modality em_mito --registry_model em_mito \\
+        --segmentation_type automatic --segmentation_mode ais apg -e <exp>
+
+    # The EM organelle baselines: MitoNet and NucleoNet, and the micro-sam v1 organelle models.
+    python submit_all_evaluations.py --all_datasets --modality em --segmentation_type automatic \\
+        --method mitonet nucleonet
+    python submit_all_evaluations.py --all_datasets --modality em --segmentation_type automatic \\
+        --method microsam_ais microsam_apg -m vit_t_em_organelles vit_b_em_organelles vit_l_em_organelles
+
+    # CellViT on the histopathology panel, one job group per checkpoint.
+    python submit_all_evaluations.py --all_datasets --modality hp --segmentation_type automatic \\
+        --method cellvit -m sam_h_x40 sam_h_x20 vit256_x40 vit256_x20
+"""
+
+import os
+import re
+import shlex
+import argparse
+import subprocess
+from pathlib import Path
+from typing import Optional
+from datetime import datetime
+
+from common import (
+    DATA_ROOT, DATASETS_2D_EM_NUCLEUS_MOCK, DATASETS_2D_LM, DATASETS_HP, DATASETS_3D_LM, DATASETS_EM, DATASETS_3D_EM,
+    DATASETS_EM_MITO, DATASETS_EM_NUCLEUS, DATASETS_SUPPLEMENTARY, MODEL_TYPES, n_samples, registered_model_types,
+    registry_weight_paths,
+)
+
+EVAL_ROOT = Path(__file__).resolve().parent
+SCRIPTS = {
+    ("automatic", "micro_sam2"): EVAL_ROOT / "evaluate_automatic_segmentation.py",
+    ("automatic", "baseline"): EVAL_ROOT / "evaluate_automatic_baselines.py",
+    ("interactive", "micro_sam2"): EVAL_ROOT / "evaluate_interactive_segmentation.py",
+    ("interactive", "baseline"): EVAL_ROOT / "evaluate_interactive_baselines.py",
+}
+
+# Written into every job script, so a queued job sees the configuration the submission had rather
+# than whatever the environment holds when it starts.
+PINNED_ENV_VARS = ("MICRO_SAM2_JOINT_CHECKPOINT_ROOT", "MICRO_SAM2_JOINT_EXPORT_ROOT")
+
+DATASETS_LM = tuple(DATASETS_2D_LM + DATASETS_3D_LM)
+DATASETS_EM = tuple(DATASETS_EM)
+DATASETS_EM_MITO = tuple(DATASETS_EM_MITO)
+DATASETS_EM_NUCLEUS = tuple(DATASETS_EM_NUCLEUS)
+DATASETS_HP = tuple(DATASETS_HP)
+DATASETS = tuple(sorted(set(DATASETS_LM + DATASETS_EM + DATASETS_HP)))
+DATASETS_3D = tuple(sorted(set(DATASETS_3D_LM + DATASETS_3D_EM)))
+
+SEGMENTATION_MODES = ("ais", "apg")
+AUTOMATIC_METHODS = (
+    "cellpose", "stardist", "cellsam", "cellvit", "microsam_ais", "microsam_apg", "segneuron", "focus3d", "mitonet",
+    "nucleonet",
+)
+INTERACTIVE_METHODS = ("nninteractive", "sam3", "sam", "sam2", "micro-sam", "microsam_vol")
+
+# Interactive 'sam2' is the pretrained backbone of the very engine micro-sam2 finetunes, so it runs
+# through the same script rather than a second copy of the same inference.
+SHARED_ENGINE_METHODS = {"sam2"}
+
+DATASETS_EM_ORGANELLE = DATASETS_EM_MITO + DATASETS_EM_NUCLEUS
+DATASETS_EM_OTHER = tuple(d for d in DATASETS_EM if d not in DATASETS_EM_ORGANELLE)
+# The mock 2d nucleus slices tune micro-sam2 only, and are not benchmarked.
+DATASETS_EM_NUCLEUS_MOCK = tuple(DATASETS_2D_EM_NUCLEUS_MOCK)
+
+# What each method can actually be run on. A method that is absent runs on everything. 'exclude' lists datasets
+# a method is not meant for although their modality and dimensionality fit. 'datasets' lists the only ones it runs on.
+METHOD_SUPPORT = {
+    ("automatic", "cellsam"): {"ndim": (2,)},
+    ("automatic", "cellvit"): {"modality": ("hp",), "ndim": (2,)},
+    ("automatic", "microsam_ais"): {"exclude": DATASETS_EM_OTHER + DATASETS_EM_NUCLEUS_MOCK},
+    ("automatic", "microsam_apg"): {"exclude": DATASETS_EM_OTHER + DATASETS_EM_NUCLEUS_MOCK},
+    ("automatic", "mitonet"): {"datasets": DATASETS_EM_MITO},
+    ("automatic", "nucleonet"): {"datasets": DATASETS_EM_NUCLEUS, "exclude": DATASETS_EM_NUCLEUS_MOCK},
+    ("automatic", "segneuron"): {
+        "modality": ("em",), "ndim": (3,), "exclude": DATASETS_EM_MITO + DATASETS_EM_NUCLEUS
+    },
+    ("automatic", "focus3d"): {"modality": ("lm",), "ndim": (3,)},
+    ("interactive", "sam"): {"ndim": (2,)},
+    ("interactive", "micro-sam"): {"ndim": (2,)},
+    ("interactive", "nninteractive"): {"ndim": (3,)},
+    ("interactive", "microsam_vol"): {"ndim": (3,)},
+}
+
+# The data that one model of a method can run on, on top of METHOD_SUPPORT. The key is (method, model), since model
+# names repeat across methods. The CellPose 3 generalists are not histopathology models.
+MODEL_SUPPORT = {
+    ("cellpose", "cyto3"): {"modality": ("lm", "em")}, ("cellpose", "nuclei"): {"modality": ("lm", "em")},
+    ("microsam_vol", "vit_b_lm"): {"modality": ("lm",)}, ("microsam_vol", "vit_b_em_organelles"): {"modality": ("em",)},
+}
+# The automatic micro-sam v1 models: the LM generalists run on LM and HP, the EM organelle ones on mitochondria and
+# nuclei.
+MODEL_SUPPORT.update({
+    (method, f"vit_{size}_{name}"): support
+    for method in ("microsam_ais", "microsam_apg") for size in ("t", "b", "l")
+    for name, support in (("lm", {"modality": ("lm", "hp")}), ("em_organelles", {"datasets": DATASETS_EM_ORGANELLE}))
+})
+
+# Use --env to override the method-specific environments. StarDist runs in its own because it needs
+# TensorFlow, which does not belong next to torch in the main environment.
+METHOD_ENV = {"stardist": "stardist"}
+
+# cyto3 and nuclei are CellPose 3 checkpoints, which the CellPose 4 of the main environment cannot load.
+MODEL_ENV = {("cellpose", "cyto3"): "cellpose3", ("cellpose", "nuclei"): "cellpose3"}
+
+DEFAULT_ENV = "super"
+
+# Slurm resources per job. Only the grete partitions are available. 'grete:preemptible' is usually
+# free and starts within minutes, where the shared pools queue for days. It is MIG only, so the GPU
+# needs a type. Preemption is safe because predictions persist and jobs are requeued. Note that
+# 'grete-h100:shared' offers no MIG slice; override --gpu with '1' to use it.
+PARTITION = "grete:preemptible"
+CPUS = 4
+MAX_CONCURRENT = 20
+TIME_LIMIT = "08:00:00"
+
+# A 2d job peaks at about 3 GiB, so the smallest slice covers it. The 3d interactive evaluation of
+# hvit_t and hvit_l fits that slice too, and peaks at about 6 GB of host memory. A larger memory request
+# leaves slices of a node unusable. There is no 1g.20gb profile here; override --gpu with '2g.20gb:1'
+# for an automatic 3d job that needs more.
+GPU_2D, GPU_3D = "1g.10gb:1", "1g.10gb:1"
+MEMORY_2D, MEMORY_3D = "16G", "16G"
+
+# The interactive evaluation of these 2d datasets takes about an hour per configuration on a 1g.10gb
+# slice, so their images are split over this many shards. A 3d dataset is split into one shard per
+# sample. A scoring task per dataset runs after the shards, see 'interactive_shards'.
+INTERACTIVE_SHARDS_2D = {"livecell": 8, "panoptils": 8, "tissuenet": 8, "pannuke": 8}
+
+# The interactive methods whose scripts can shard a dataset.
+SHARDABLE_INTERACTIVE_METHODS = (None, "sam2", "nninteractive")
+
+EXPERIMENT_FOLDER = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/experiments/v2_joint_evaluation"
+
+
+def env_exports() -> str:
+    """Return 'export' lines pinning the run configuration, or an empty string if none is set."""
+    return "".join(f"export {name}={shlex.quote(os.environ[name])}\n" for name in PINNED_ENV_VARS if name in os.environ)
+
+
+def env_prefix() -> list:
+    """Return an 'env' prefix pinning the run configuration in a task command, or an empty list if none is set.
+
+    The pooled workers run the task lines without the array script, so the lines carry the configuration too.
+    """
+    assignments = [f"{name}={shlex.quote(os.environ[name])}" for name in PINNED_ENV_VARS if name in os.environ]
+    return ["env"] + assignments if assignments else []
+
+
+def sanitize(name: str) -> str:
+    """Turn a name into something Slurm and a filesystem both accept."""
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("_")
+
+
+def resolve_env(args: argparse.Namespace, method: Optional[str], model_type: Optional[str]) -> str:
+    """The conda environment one job activates."""
+    return args.env or MODEL_ENV.get((method, model_type)) or METHOD_ENV.get(method, DEFAULT_ENV)
+
+
+def available_envs() -> set:
+    """The conda environments micromamba knows about, or an empty set if it cannot be asked."""
+    try:
+        listing = subprocess.run(["micromamba", "env", "list"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    names = set()
+    for line in listing.stdout.splitlines()[1:]:
+        fields = line.split()
+        if fields and not fields[0].startswith("#"):
+            names.add(fields[0].lstrip("*").strip() or fields[0])
+    return names
+
+
+def warn_missing_envs(envs: set) -> None:
+    """Report the environments a submission needs but this machine does not have.
+
+    A job that activates a missing environment still starts, and then dies on the first import, so
+    the failure is much cheaper to see here.
+    """
+    known = available_envs()
+    if not known:
+        return
+    missing = sorted(env for env in envs if env not in known)
+    if missing:
+        print(
+            f"Warning: these environments do not exist here: {', '.join(missing)}. "
+            f"Their jobs will fail on import. Override with --env."
+        )
+
+
+def modality_of(dataset_name: str) -> str:
+    """The modality a dataset belongs to: 'lm', 'em' or 'hp'."""
+    if dataset_name in DATASETS_EM:
+        return "em"
+    return "hp" if dataset_name in DATASETS_HP else "lm"
+
+
+def ndim_of(dataset_name: str) -> int:
+    """The spatial dimensionality of a dataset, 2 or 3."""
+    return 3 if dataset_name in DATASETS_3D else 2
+
+
+def is_supported(support: dict, dataset_name: str) -> bool:
+    """Whether a dataset passes the 'modality', 'ndim', 'datasets' and 'exclude' rules of a support entry."""
+    if "modality" in support and modality_of(dataset_name) not in support["modality"]:
+        return False
+    if "ndim" in support and ndim_of(dataset_name) not in support["ndim"]:
+        return False
+    if "datasets" in support and dataset_name not in support["datasets"]:
+        return False
+    return dataset_name not in support.get("exclude", ())
+
+
+def select_datasets(args: argparse.Namespace, method: Optional[str], mode: Optional[str]) -> tuple:
+    """The datasets one job group runs on, after the modality, dimensionality and method filters.
+
+    A method that cannot handle a dataset drops it here rather than being submitted and failing on
+    the node, so a broad selection stays usable without listing exceptions by hand.
+    """
+    datasets = tuple(args.data) if args.data else DATASETS
+    if not args.supplementary and not args.data:
+        datasets = tuple(d for d in datasets if d not in DATASETS_SUPPLEMENTARY)
+
+    if args.modality == "em_mito":
+        datasets = tuple(d for d in datasets if d in DATASETS_EM_MITO)
+    elif args.modality == "em_nucleus":
+        datasets = tuple(d for d in datasets if d in DATASETS_EM_NUCLEUS)
+    elif args.modality != "all":
+        datasets = tuple(d for d in datasets if modality_of(d) == args.modality)
+    if args.ndim is not None:
+        datasets = tuple(d for d in datasets if ndim_of(d) == args.ndim)
+
+    support = METHOD_SUPPORT.get((args.segmentation_type, method), {})
+    return tuple(d for d in datasets if is_supported(support, d))
+
+
+def uses_shared_engine(args: argparse.Namespace, method: Optional[str]) -> bool:
+    """Whether a method runs through the micro-sam2 script rather than the baseline one."""
+    return args.segmentation_type == "interactive" and method in SHARED_ENGINE_METHODS
+
+
+def interactive_shards(args: argparse.Namespace, dataset_name: str, method: Optional[str]) -> Optional[int]:
+    """The number of shards an interactive dataset is split into, or None if it runs as one task.
+
+    A sharded dataset runs as one task per shard and one scoring task, which must run after all shards.
+    """
+    if args.segmentation_type != "interactive" or args.n_samples is not None:
+        return None
+    if method not in SHARDABLE_INTERACTIVE_METHODS:
+        return None
+    if ndim_of(dataset_name) == 3:
+        count = n_samples(dataset_name, args.data_root)
+        return count if count > 1 else None
+    return INTERACTIVE_SHARDS_2D.get(dataset_name)
+
+
+def build_command(
+    args: argparse.Namespace, dataset_name: str, model_type: Optional[str],
+    method: Optional[str], mode: Optional[str], sample_index: Optional[int],
+    shard: Optional[tuple] = None, score_only: bool = False,
+) -> list:
+    """Return the python command that one task runs for a dataset, for one sample or shard of it, or for its scoring.
+
+    'shard' is (shard_index, n_shards).
+    """
+    shared_engine = uses_shared_engine(args, method)
+    script = SCRIPTS[(args.segmentation_type, "baseline" if (method and not shared_engine) else "micro_sam2")]
+    command = env_prefix() + [
+        "python", str(script),
+        "-d", dataset_name,
+        "-i", args.data_root,
+        "-e", args.experiment_folder,
+    ]
+    if method and not shared_engine:
+        command.extend(["--method", method])
+    if shared_engine:
+        command.extend(["--weights", "pretrained"])
+    if model_type is not None:
+        # The family of the full registry name selects the default parameters.
+        full_name = method is None and args.registry_model and args.segmentation_type == "automatic"
+        command.extend(["-m", f"{model_type}_{args.registry_model}" if full_name else model_type])
+    if method is None and args.registry_model is not None:
+        # The interactive script takes the SAM2 weights as -c, the automatic one the decoder.
+        interactive_path, decoder_path = registry_weight_paths(f"{model_type}_{args.registry_model}")
+        if args.segmentation_type == "interactive":
+            command.extend(["-c", interactive_path])
+        else:
+            command.extend(["-c", decoder_path])
+            if mode == "apg":
+                command.extend(["--interactive_checkpoint", interactive_path])
+    elif args.checkpoint is not None:
+        command.extend(["-c", args.checkpoint])
+
+    if method is None:
+        if args.registry_model is None:
+            command.extend(["--joint_checkpoint", args.joint_checkpoint])
+        if args.segmentation_type == "automatic":
+            command.extend(["--mode", mode])
+            if args.skip_tuning:
+                command.append("--skip_tuning")
+            if args.tuning_root is not None:
+                command.extend(["--tuning_root", args.tuning_root])
+            if args.apg_params is not None and mode == "apg":
+                command.extend(["--apg_params", args.apg_params])
+
+    if args.n_samples is not None:
+        command.extend(["--n_samples", str(args.n_samples)])
+    if sample_index is not None:
+        command.extend(["--sample_index", str(sample_index)])
+    if shard is not None:
+        command.extend(["--n_shards", str(shard[1]), "--shard_index", str(shard[0])])
+    if score_only:
+        command.append("--score_only")
+
+    if args.segmentation_type == "interactive":
+        command.extend(["-p", args.prompt_choice, "-iter", str(args.n_iterations)])
+        if args.min_size:
+            command.extend(["--min_size", str(args.min_size)])
+        if shared_engine and model_type is None:
+            command.extend(["-m", "hvit_t"])
+        if method == "microsam_vol":
+            command.extend(["--start_slice", args.start_slice, "--correction", args.correction])
+            command.extend(["--n_workers", str(args.n_workers), "--seed", str(args.seed)])
+            if args.use_masks:
+                command.append("--use_masks")
+
+    return command
+
+
+def job_tag(
+    args: argparse.Namespace, dataset: str, model_type: Optional[str], method: Optional[str], mode: Optional[str],
+    sample_index: Optional[int], shard: Optional[tuple] = None, score_only: bool = False,
+) -> str:
+    """The name of one array task, which also marks it in the logs."""
+    parts = [args.segmentation_type, dataset, method or f"micro_sam2_{mode or 'interactive'}"]
+    if args.segmentation_type == "interactive":
+        parts.append(args.prompt_choice)
+    if model_type is not None:
+        parts.append(model_type)
+    if sample_index is not None:
+        parts.append(f"sample{sample_index}")
+    if shard is not None:
+        parts.append(f"shard{shard[0]}of{shard[1]}")
+    if score_only:
+        parts.append("score")
+    return "_".join(sanitize(part) for part in parts)
+
+
+def write_array_script(
+    args: argparse.Namespace, job_folder: Path, name: str, tasks: list, env: str, gpu: str, memory: str,
+) -> Path:
+    """Write one Slurm job array over 'tasks', a list of (tag, command), and return its script.
+
+    Each task runs the line of the tasks file that SLURM_ARRAY_TASK_ID selects.
+    """
+    tasks_path = job_folder / f"tasks_{name}.txt"
+    with open(tasks_path, "w") as f:
+        for tag, command in tasks:
+            f.write(f"{tag}\t{command}\n")
+
+    script_path = job_folder / f"array_{name}.sh"
+    qos_line = f"\n#SBATCH --qos={args.qos}" if args.qos is not None else ""
+    batch_script = f"""#!/bin/bash
+#SBATCH -c {CPUS}
+#SBATCH --mem {memory}
+#SBATCH -t {args.time_limit}
+#SBATCH -p {args.partition}
+#SBATCH -G {gpu}
+#SBATCH --job-name={name}
+#SBATCH --array=0-{len(tasks) - 1}%{args.max_concurrent}
+#SBATCH --requeue{qos_line}
+#SBATCH --constraint=inet
+#SBATCH -o {job_folder}/logs/{name}_%A_%a.out
+#SBATCH -e {job_folder}/logs/{name}_%A_%a.err
+
+source ~/.bashrc
+micromamba activate {env}
+{env_exports()}
+line=$(sed -n "$((SLURM_ARRAY_TASK_ID + 1))p" {tasks_path})
+echo "Task $SLURM_ARRAY_TASK_ID: $(cut -f1 <<< "$line")"
+eval "$(cut -f2- <<< "$line")"
+"""
+
+    with open(script_path, "w") as f:
+        f.write(batch_script)
+    return script_path
+
+
+def submit_job(script: Path, after: Optional[list] = None) -> Optional[str]:
+    """Hand one script to sbatch, print what it said, and return the job id.
+
+    'after' holds the job ids this job waits for, whatever their outcome.
+    """
+    command = ["sbatch", "--parsable"]
+    if after:
+        command.append(f"--dependency=afterany:{':'.join(after)}")
+    result = subprocess.run(command + [str(script)], capture_output=True, text=True)
+    print(result.stdout.strip() if result.stdout else result.stderr.strip())
+    return result.stdout.strip().split(";")[0] if result.returncode == 0 else None
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "-d", "--data", nargs="+", default=None, choices=DATASETS,
+        help="Datasets to evaluate. Required unless --all_datasets is set."
+    )
+    parser.add_argument("--all_datasets", action="store_true", help="Evaluate every dataset of the selection.")
+    parser.add_argument(
+        "--supplementary", action="store_true",
+        help="Include the supplementary datasets, which --all_datasets leaves out by default.",
+    )
+    parser.add_argument(
+        "--modality", default="all", choices=("lm", "em", "hp", "em_mito", "em_nucleus", "all"),
+        help="Restrict to a modality. 'em' is every EM dataset, 'em_mito' the mitochondria panel only, "
+        "'em_nucleus' the nucleus panel only.",
+    )
+    parser.add_argument("--ndim", type=int, default=None, choices=(2, 3), help="Restrict to a dimensionality.")
+    parser.add_argument("--segmentation_type", required=True, choices=("automatic", "interactive"))
+    parser.add_argument(
+        "--segmentation_mode", nargs="+", default=["ais"], choices=SEGMENTATION_MODES,
+        help="The micro-sam2 automatic modes to run. One job group per mode."
+    )
+    parser.add_argument(
+        "--method", nargs="+", default=None,
+        help="Evaluate these baselines instead of micro-sam2. One job group per method."
+    )
+    parser.add_argument(
+        "-m", "--model_type", nargs="+", default=None, help="Model types to evaluate. One job group per model type."
+    )
+    parser.add_argument("-e", "--experiment_folder", type=str, default=EXPERIMENT_FOLDER)
+    parser.add_argument("--data_root", type=str, default=DATA_ROOT, help="The root the data lives in.")
+    parser.add_argument("-c", "--checkpoint", type=str, default=None, help="Override the default checkpoint.")
+    parser.add_argument(
+        "--joint_checkpoint", type=str, default="best",
+        help="Name of the joint trainer checkpoint the micro-sam2 weights are taken from, "
+             "without the '.pt' suffix, e.g. 'best' or the name of a frozen copy."
+    )
+    parser.add_argument(
+        "--registry_model", type=str, default=None,
+        help="Evaluate the micro-sam2 registry models of this family, e.g. 'em_mito' or 'em_nuclei', instead of "
+             "the joint checkpoint. -m defaults to every model type registered as '<model_type>_<family>'.",
+    )
+    parser.add_argument("--skip_tuning", action="store_true", help="Evaluate micro-sam2 with the library defaults.")
+    parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
+    parser.add_argument(
+        "--per_sample", action="store_true",
+        help="Automatic only. Submit one array task per sample. The task that finds all rows writes the result.",
+    )
+    parser.add_argument("--tuning_root", type=str, default=None, help="Where parameter_search.py wrote its sweeps.")
+    parser.add_argument(
+        "--apg_params", type=str, default=None,
+        help="A JSON configuration of APG parameters, passed to every micro-sam2 APG task.",
+    )
+    parser.add_argument("-p", "--prompt_choice", type=str, default="box", choices=("box", "point"))
+    parser.add_argument("-iter", "--n_iterations", type=int, default=8, help="Iterative prompting rounds.")
+    parser.add_argument("--start_slice", default="center", help="microsam_vol only. The slice of the first prompt.")
+    parser.add_argument("--correction", default="box_and_points", help="microsam_vol only. The correction prompt.")
+    parser.add_argument("--use_masks", action="store_true", help="microsam_vol only. Feed the previous masks back.")
+    parser.add_argument("--n_workers", type=int, default=4, help="microsam_vol only. The volumes segmented at once.")
+    parser.add_argument("--seed", type=int, default=0, help="microsam_vol only. The seed of a random start slice.")
+    parser.add_argument(
+        "--min_size", type=int, default=0,
+        help="Drop ground-truth objects below this many pixels. The right value is dataset specific."
+    )
+    parser.add_argument("--partition", type=str, default=PARTITION, help="Slurm partition(s) to submit to.")
+    parser.add_argument(
+        "--gpu", type=str, default=None,
+        help=f"Slurm GPU spec. Defaults to {GPU_2D} for 2d jobs and {GPU_3D} for 3d ones."
+    )
+    parser.add_argument(
+        "--memory", default=None,
+        help=f"Memory per job. Defaults to {MEMORY_2D} for 2d jobs and {MEMORY_3D} for 3d ones."
+    )
+    parser.add_argument("--time_limit", type=str, default=TIME_LIMIT, help="Slurm time limit per job.")
+    parser.add_argument("--qos", type=str, default=None, help="Slurm QoS. Use '2h' with --time_limit 02:00:00.")
+    parser.add_argument("--max_concurrent", type=int, default=MAX_CONCURRENT, help="Array tasks that run at once.")
+    parser.add_argument(
+        "--env", type=str, default=None,
+        help=f"Conda environment every job activates. Defaults to {DEFAULT_ENV}, "
+             "or the method-specific one in METHOD_ENV."
+    )
+    parser.add_argument("--dry", action="store_true", help="Only write the Slurm scripts; do not submit them.")
+    args = parser.parse_args()
+
+    if args.all_datasets and args.data is not None:
+        raise ValueError("--all_datasets and -d/--data are mutually exclusive.")
+    if not args.all_datasets and args.data is None:
+        raise ValueError("Either -d/--data or --all_datasets must be given.")
+    if args.checkpoint is not None and args.model_type is not None and len(args.model_type) > 1:
+        raise ValueError("An explicit -c/--checkpoint cannot be shared by several model types.")
+    if args.per_sample and (args.segmentation_type != "automatic" or args.n_samples is not None):
+        raise ValueError("--per_sample needs '--segmentation_type automatic' and no --n_samples. Drop one of them.")
+    if args.apg_params is not None:
+        if args.method is not None or "apg" not in args.segmentation_mode:
+            raise ValueError("--apg_params applies to micro-sam2 with --segmentation_mode apg only.")
+        # Slurm picks the working directory of a queued task, so pass the file by its absolute path.
+        args.apg_params = os.path.abspath(args.apg_params)
+
+    valid_methods = AUTOMATIC_METHODS if args.segmentation_type == "automatic" else INTERACTIVE_METHODS
+    for method in args.method or ():
+        if method not in valid_methods:
+            raise ValueError(f"'{method}' is not a {args.segmentation_type} method. Choose from {valid_methods}.")
+    if args.registry_model is not None:
+        if args.method is not None or args.checkpoint is not None:
+            raise ValueError("--registry_model selects the micro-sam2 weights, so it excludes --method and -c.")
+        registered = registered_model_types(args.registry_model)
+        if not registered:
+            raise ValueError(f"No model type has a registry model with a decoder for '{args.registry_model}'.")
+        args.model_type = args.model_type or registered
+        missing = [model_type for model_type in args.model_type if model_type not in registered]
+        if missing:
+            raise ValueError(f"{missing} have no '{args.registry_model}' registry model. Registered: {registered}.")
+    if args.method is None and args.model_type is None:
+        args.model_type = list(MODEL_TYPES)
+
+    # micro-sam2 runs one group per automatic mode; a baseline has no mode of its own.
+    methods = args.method or [None]
+    modes = args.segmentation_mode if (args.method is None and args.segmentation_type == "automatic") else [None]
+    model_types = args.model_type or [None]
+
+    job_folder = EVAL_ROOT / "gpu_jobs" / datetime.now().strftime("%Y%m%d_%H%M%S")
+    (job_folder / "logs").mkdir(parents=True, exist_ok=True)
+
+    # An array activates one environment and requests one resource tier, so group the tasks by both. The
+    # scoring tasks of sharded datasets form groups of their own, which run after all other groups.
+    groups = {}
+    for method in methods:
+        for mode in modes:
+            datasets = select_datasets(args, method, mode)
+            if not datasets:
+                print(f"Nothing to run for method={method}, mode={mode}: the selection is empty.")
+                continue
+            for model_type in model_types:
+                env = DEFAULT_ENV if uses_shared_engine(args, method) else resolve_env(args, method, model_type)
+                model_support = MODEL_SUPPORT.get((method, model_type), {})
+                for dataset in datasets:
+                    if not is_supported(model_support, dataset):
+                        continue
+                    is_3d = ndim_of(dataset) == 3
+                    gpu = args.gpu or (GPU_3D if is_3d else GPU_2D)
+                    memory = args.memory or (MEMORY_3D if is_3d else MEMORY_2D)
+                    n_shards = interactive_shards(args, dataset, method)
+                    if n_shards is not None:
+                        for shard_index in range(n_shards):
+                            shard = (shard_index, n_shards)
+                            command = " ".join(build_command(args, dataset, model_type, method, mode, None, shard))
+                            groups.setdefault((env, gpu, memory, False), []).append(
+                                (job_tag(args, dataset, model_type, method, mode, None, shard), command)
+                            )
+                        command = " ".join(
+                            build_command(args, dataset, model_type, method, mode, None, score_only=True)
+                        )
+                        groups.setdefault((env, gpu, memory, True), []).append(
+                            (job_tag(args, dataset, model_type, method, mode, None, score_only=True), command)
+                        )
+                        continue
+                    indices = range(n_samples(dataset, args.data_root)) if args.per_sample else [None]
+                    for index in indices:
+                        command = " ".join(build_command(args, dataset, model_type, method, mode, index))
+                        groups.setdefault((env, gpu, memory, False), []).append(
+                            (job_tag(args, dataset, model_type, method, mode, index), command)
+                        )
+
+    scripts, score_scripts = [], []
+    for (env, gpu, memory, scoring), tasks in groups.items():
+        name = sanitize(f"{args.segmentation_type}_{env}_{gpu}_{memory}{'_score' if scoring else ''}")
+        script = write_array_script(args, job_folder, name, tasks, env, gpu, memory)
+        (score_scripts if scoring else scripts).append(script)
+    n_tasks = sum(len(tasks) for (*_, scoring), tasks in groups.items() if not scoring)
+    n_score_tasks = sum(len(tasks) for (*_, scoring), tasks in groups.items() if scoring)
+    print(
+        f"Wrote {len(scripts) + len(score_scripts)} job array(s) with {n_tasks} task(s) and "
+        f"{n_score_tasks} scoring task(s) to '{job_folder}'."
+    )
+    warn_missing_envs({
+        resolve_env(args, method, model_type) for method in methods for model_type in model_types
+        if not uses_shared_engine(args, method)
+    })
+    if args.dry:
+        return
+    job_ids = [submit_job(script) for script in scripts]
+    for script in score_scripts:
+        submit_job(script, after=[job_id for job_id in job_ids if job_id is not None])
+
+
+if __name__ == "__main__":
+    main()

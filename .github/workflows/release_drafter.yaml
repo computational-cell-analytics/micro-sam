@@ -29,14 +29,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 2
   
       - name: Detect new version
         id: check-version
         #if: steps.check-parent-commit.outputs.sha
-        uses: salsify/action-detect-and-tag-new-version@v2.0.1
+        uses: salsify/action-detect-and-tag-new-version@v2.0.3
         with:
           create-tag: false
           version-command: |
@@ -45,14 +45,14 @@ jobs:
       - name: Push tag
         id: tag-version
         if: steps.check-version.outputs.previous-version != steps.check-version.outputs.current-version
-        uses: mathieudutour/github-tag-action@v6.1
+        uses: mathieudutour/github-tag-action@v7
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           custom_tag: ${{ steps.check-version.outputs.current-version }}
 
       # Drafts your next Release notes as Pull Requests are merged into "main"
       - name: Publish the release notes
-        uses: release-drafter/release-drafter@v6.0.0
+        uses: release-drafter/release-drafter@v7.11.0
         with:
           config-name: release_config.yaml
           publish: "${{ steps.tag-version.outputs.new_tag != '' }}"
@@ -72,9 +72,9 @@ jobs:
     permissions:
       id-token: write  # required for OIDC trusted publishing
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v7
       with:
         python-version: '3.x'
     - name: Build distributions

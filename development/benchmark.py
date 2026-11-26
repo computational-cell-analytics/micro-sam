@@ -1,37 +1,33 @@
-"""
-Run benchmarks
---------------
-1. Install pandas tabulate dependency `python -m pip install tabulate`
-2. Run benchmark script, eg: `python benchmark.py --model_type vit_h --device cpu`
+"""Benchmark the SAM1 models of `micro_sam.v1`.
 
-Line profiling
---------------
-1. Install line profiler: `python -m pip install line_profiler`
-2. Add `@profile` decorator to any function in the call stack
-3. Run `kernprof -lv benchmark.py --model_type vit_h --device cpu`
+Run the benchmark from the root of the repository:
+`python development/benchmark.py --model_type vit_t --device cpu`
 
-Snakeviz visualization
-----------------------
-https://jiffyclub.github.io/snakeviz/
-1. Install snakeviz: `python -m pip install snakeviz`
-2. Generate profile file: `python -m cProfile -o program.prof benchmark.py --model_type vit_h --device cpu`
-3. Visualize profile file: `snakeviz program.prof`
+Line profiling: add the `@profile` decorator to any function in the call stack, then run
+`kernprof -lv development/benchmark.py --model_type vit_t --device cpu`
+
+Snakeviz visualization: generate a profile file and open it with snakeviz
+`python -m cProfile -o program.prof development/benchmark.py --model_type vit_t --device cpu`
+`snakeviz program.prof`
 """
-import argparse
+import os
 import time
+import argparse
 
-import imageio.v3 as imageio
-import micro_sam.instance_segmentation as instance_seg
-import micro_sam.prompt_based_segmentation as seg
-import micro_sam.util as util
 import numpy as np
 import pandas as pd
+import imageio.v3 as imageio
 
+import micro_sam.v1.util as util
+import micro_sam.v1.prompt_based_segmentation as seg
+import micro_sam.v1.instance_segmentation as instance_seg
 from micro_sam.sample_data import fetch_livecell_example_data
+
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "examples", "data")
 
 
 def _get_image_and_predictor(model_type, device):
-    example_data = fetch_livecell_example_data("../examples/data")
+    example_data = fetch_livecell_example_data(DATA_DIR)
     image = imageio.imread(example_data)
     predictor = util.get_sam_model(device=device, model_type=model_type)
     return image, predictor
@@ -162,20 +158,23 @@ def benchmark_amg(image, predictor, n):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--device", "-d",
-                        choices=['cpu', 'cuda', 'mps'],
-                        help="Which PyTorch backend device to use (REQUIRED)")
-    parser.add_argument("--model_type", "-m", default="vit_h",
-                        choices=list(util._MODEL_URLS),
-                        help="Which deep learning model to use")
-    parser.add_argument("--benchmark_embeddings", "-e", action="store_false",
-                        help="Skip embedding benchmark test, do not run")
-    parser.add_argument("--benchmark_prompts", "-p", action="store_false",
-                        help="Skip prompt benchmark test, do not run")
-    parser.add_argument("--benchmark_amg", "-a", action="store_false",
-                        help="Skip automatic mask generation (amg) benchmark test, do not run")
-    parser.add_argument("-n", "--n", type=int, default=None,
-                        help="Number of times to repeat benchmark tests")
+    parser.add_argument(
+        "--device", "-d", choices=["cpu", "cuda", "mps"], help="The PyTorch device. By default, the best available one."
+    )
+    parser.add_argument(
+        "--model_type", "-m", default="vit_t", choices=list(util.get_model_names()), help="The SAM1 model to benchmark."
+    )
+    parser.add_argument(
+        "--benchmark_embeddings", "-e", action="store_false", help="Skip embedding benchmark test, do not run"
+    )
+    parser.add_argument(
+        "--benchmark_prompts", "-p", action="store_false", help="Skip prompt benchmark test, do not run"
+    )
+    parser.add_argument(
+        "--benchmark_amg", "-a", action="store_false",
+        help="Skip automatic mask generation (amg) benchmark test, do not run"
+    )
+    parser.add_argument("-n", "--n", type=int, default=None, help="Number of times to repeat benchmark tests")
 
     args = parser.parse_args()
 

@@ -36,7 +36,8 @@ if __name__ == "__main__":
     parser.add_argument("--out", "-o", action="store_true")
     args = parser.parse_args()
 
-    logo_url = "https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main/doc/logo/logo_and_text.png"
+    repo_url = "https://raw.githubusercontent.com/computational-cell-analytics/micro-sam/main"
+    logo_url = f"{repo_url}/doc/logo/v2/logo_and_text.png"
     cmd = ["pdoc", "--docformat", "google", "--logo", logo_url]
 
     if args.out:

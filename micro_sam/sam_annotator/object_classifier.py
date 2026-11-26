@@ -1,35 +1,41 @@
-import os
-from joblib import dump
 from multiprocessing import cpu_count
-from pathlib import Path
 from typing import List, Optional, Tuple, Union
 
-import imageio.v3 as imageio
-import napari
 import numpy as np
-import torch
-
-from magicgui import magic_factory, magicgui
-from magicgui.widgets import Widget, Container, FunctionGui, create_widget
-from qtpy import QtWidgets
-
+import imageio.v3 as imageio
 from skimage.measure import regionprops_table
+
+from sklearn.decomposition import PCA
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 
+import torch
+
+import napari
+from qtpy import QtWidgets
+from magicgui.widgets import ComboBox
+
 from .. import util
-from ..object_classification import compute_object_features, project_prediction_to_segmentation
-from ._state import AnnotatorState
 from . import _widgets as widgets
+from ._state import AnnotatorState
+from ._tooltips import get_tooltip
+from ._titles import get_dock_title
+from ._annotator import _ClassifierBase
 from .util import _sync_embedding_widget
+from ._batch import load_batch_image, run_batch
+from ..classical_features import OBJECT_FEATURES
+from ._batch_classification import ClassificationBatchTask
+from ..v2.util import DEFAULT_MODEL, resolve_default_tiling
+from ..object_classification import compute_object_features, project_prediction_to_segmentation
 
-#
-# Utility functionality.
-# Some of this could be refactored to general purpose functionality that can also
-# be used for inference with the trained classifier.
-#
+# Object features are the object area plus the per-channel mean of the 256-channel SAM/SAM2 image
+# embedding, i.e. 257 features. PCA can reduce to at most this many components.
+N_OBJECT_FEATURES = 257
+INTERNAL_LABEL_LAYER_NAMES = {"annotations", "prediction"}
 
 
-def _accumulate_labels(segmentation, annotations):
+def _accumulate_labels(segmentation, annotations, seg_ids):
 
     def majority_label(mask, annotation):
         ids, counts = np.unique(annotation[mask], return_counts=True)
@@ -43,10 +49,14 @@ def _accumulate_labels(segmentation, annotations):
         segmentation, intensity_image=annotations, properties=("label",),
         extra_properties=[majority_label],
     )
-    return all_features["majority_label"].astype("int")
+    labels = dict(zip(all_features["label"], all_features["majority_label"].astype("int")))
+    # Match the rows of the features, which leave out the objects that vanish in the embedding resize.
+    return np.array([labels[seg_id] for seg_id in seg_ids], dtype="int")
 
 
-def _train_rf(features, labels, previous_features=None, previous_labels=None, **rf_kwargs):
+def _train_rf(
+    features, labels, previous_features=None, previous_labels=None, n_components=None, random_state=0, **rf_kwargs
+):
     assert len(features) == len(labels)
     valid = labels != 0
     X, y = features[valid], labels[valid]
@@ -56,271 +66,156 @@ def _train_rf(features, labels, previous_features=None, previous_labels=None, **
         X = np.concatenate([previous_features, X], axis=0)
         y = np.concatenate([previous_labels, y], axis=0)
 
-    rf = RandomForestClassifier(**rf_kwargs)
-    rf.fit(X, y)
-    return rf
+    rf = RandomForestClassifier(random_state=random_state, **rf_kwargs)
 
-
-# TODO do we add a shortcut?
-@magic_factory(call_button="Train and predict")
-def _train_and_predict_rf_widget(viewer: "napari.viewer.Viewer") -> None:
-    # Get the object features and the annotations.
-    state = AnnotatorState()
-    state.annotator._require_layers()
-    annotations = viewer.layers["annotations"].data
-    segmentation = state.segmentation_selection.get_value().data
-
-    if state.object_features is None:
-        if widgets._validate_embeddings(viewer):
-            return None
-        image_embeddings = state.image_embeddings
-        seg_ids, features = compute_object_features(image_embeddings, segmentation)
-        state.seg_ids = seg_ids
-        state.object_features = features
+    # Optionally reduce the features to the top-n PCA components. We clamp n_components to the
+    # number of features and samples. If it covers all features, we skip PCA and use the plain RF.
+    # Object features mix area (large magnitude) with embedding means (small), so we standardize
+    # them before PCA to keep area from dominating the components.
+    n_features = X.shape[1]
+    k = min(int(n_components), n_features, len(X)) if n_components else 0
+    if 0 < k < n_features:
+        model = Pipeline(
+            [("scaler", StandardScaler()), ("pca", PCA(n_components=k, random_state=random_state)), ("rf", rf)]
+        )
     else:
-        features, seg_ids = state.object_features, state.seg_ids
+        model = rf
 
-    previous_features, previous_labels = state.previous_features, state.previous_labels
-    labels = _accumulate_labels(segmentation, annotations)
-    if (labels == 0).all() and (previous_labels is None):
-        return widgets._generate_message("error", "You have not provided any annotations.")
-
-    # Run RF training and store it in the state.
-    rf = _train_rf(
-        features, labels, previous_features=previous_features, previous_labels=previous_labels,
-        n_estimators=200, max_depth=10, n_jobs=cpu_count(),
-    )
-    state.object_rf = rf
-
-    # Run and set the prediction.
-    pred = rf.predict(features)
-    prediction_data = project_prediction_to_segmentation(segmentation, pred, seg_ids)
-    viewer.layers["prediction"].data = prediction_data
-
-    state.annotator._refresh_label_widget()
+    model.fit(X, y)
+    return model
 
 
-@magic_factory(call_button="Export Classifier")
-def _create_export_rf_widget(export_path: Optional[Path] = None) -> None:
-    state = AnnotatorState()
-    rf = state.object_rf
-    if rf is None:
-        return widgets._generate_message("error", "You have not run training yet.")
-    if export_path is None or export_path == "":
-        return widgets._generate_message("error", "You have to provide an export path.")
-    # Do we add an extension? .joblib?
-    dump(rf, export_path)
-    # TODO show an info method about the export
+class ObjectClassifier(_ClassifierBase):
+    """GUI for the object classifier: trains a random forest on per-object SAM/SAM2 embedding features."""
 
-#
-# Object classifier implementation.
-#
+    rf_attr = "object_rf"
+    features_attr = "object_features"
+    aux_attr = "seg_ids"
+    label_widget_title = "Object label names:"
+    max_components = N_OBJECT_FEATURES
+    tool_key = "object"
+    classical_feature_choices = OBJECT_FEATURES
+    supports_apply_to_volume = False  # object classification always runs over the full image/volume
 
-
-# TODO add a gui element that shows the current label ids, how many objects are labeled, and that
-# enables naming them so that the user can keep track of what has been labeled
-class ObjectClassifier(QtWidgets.QScrollArea):
-
-    def _require_layers(self, layer_choices: Optional[List[str]] = None):
-        # Check whether the image is initialized already. And use the image shape and scale for the layers.
+    def _get_selected_segmentation_layer(self):
         state = AnnotatorState()
-        shape = self._shape if state.image_shape is None else state.image_shape
+        segmentation_layer = None if state.segmentation_selection is None else state.segmentation_selection.get_value()
+        if segmentation_layer is None:
+            widgets._generate_message("error", "You have to select a segmentation labels layer.")
+            return None
+        return segmentation_layer
 
-        # Add the label layers for the current object, the automatic segmentation and the committed segmentation.
-        dummy_data = np.zeros(shape, dtype="uint32")
-        image_scale = state.image_scale
+    def _compute_features(self):
+        # Returns (features, seg_ids) for the current image+segmentation, computing/caching if needed.
+        state = AnnotatorState()
+        if state.object_features is None:
+            if widgets._validate_embeddings(self._viewer):
+                return None, None
+            segmentation_layer = self._get_selected_segmentation_layer()
+            if segmentation_layer is None:
+                return None, None
+            image, upsampler, classical_features, ok = self._resolve_feature_inputs()
+            if not ok:
+                return None, None
+            seg_ids, features = compute_object_features(
+                state.image_embeddings, segmentation_layer.data, image=image, upsampler=upsampler,
+                classical_features=classical_features,
+            )
+            state.seg_ids, state.object_features = seg_ids, features
+        return state.object_features, state.seg_ids
 
-        # Before adding new layers, we always check whether a layer with this name already exists or not.
-        if "annotations" not in self._viewer.layers:
-            if layer_choices and "annotations" in layer_choices:
-                widgets._validation_window_for_missing_layer("annotations")
-            annotation_layer = self._viewer.add_labels(data=dummy_data, name="annotations")
-            if image_scale is not None:
-                self._viewer.layers["annotations"].scale = image_scale
-            # Reduce the brush size and set the default mode to "paint" brush mode.
-            annotation_layer.brush_size = 3
-            annotation_layer.mode = "paint"
+    def _compute_training_labels(self, aux):
+        segmentation_layer = self._get_selected_segmentation_layer()
+        if segmentation_layer is None:
+            return None
+        return _accumulate_labels(segmentation_layer.data, self._viewer.layers["annotations"].data, aux)
 
-        if "prediction" not in self._viewer.layers:
-            if layer_choices and "prediction" in layer_choices:
-                widgets._validation_window_for_missing_layer("prediction")
-            self._viewer.add_labels(data=dummy_data, name="prediction")
-            if image_scale is not None:
-                self._viewer.layers["prediction"].scale = image_scale
+    def _train(self, features, labels, previous_features, previous_labels, n_components, random_state):
+        return _train_rf(
+            features, labels, previous_features=previous_features, previous_labels=previous_labels,
+            n_estimators=200, max_depth=10, n_jobs=cpu_count(), n_components=n_components, random_state=random_state,
+        )
+
+    def _project_prediction(self, prediction, aux):
+        segmentation_layer = self._get_selected_segmentation_layer()
+        if segmentation_layer is None:
+            return None
+        return project_prediction_to_segmentation(segmentation_layer.data, prediction, aux)
+
+    #
+    # The segmentation-layer selector (object classifier only).
+    #
+
+    def _is_segmentation_layer(self, layer):
+        return isinstance(layer, napari.layers.Labels) and layer.name.lower() not in INTERNAL_LABEL_LAYER_NAMES
+
+    def _find_default_segmentation_layer(self):
+        candidates = [layer for layer in self._viewer.layers if self._is_segmentation_layer(layer)]
+        if not candidates:
+            return None
+
+        for layer in candidates:
+            if layer.name == "segmentation":
+                return layer
+
+        for layer in candidates:
+            if "seg" in layer.name.lower():
+                return layer
+
+        return candidates[0]
+
+    def _select_default_segmentation_layer(self):
+        default_layer = self._find_default_segmentation_layer()
+        if default_layer is not None:
+            self.segmentation_selection.value = default_layer
+
+    def _segmentation_layer_choices(self):
+        return [(layer.name, layer) for layer in self._viewer.layers if self._is_segmentation_layer(layer)]
+
+    def _reset_segmentation_layer_choices(self, *args):
+        previous_selection = self.segmentation_selection.value
+        self.segmentation_selection.reset_choices()
+        choices = self.segmentation_selection.choices
+        if any(layer is previous_selection for layer in choices):
+            self.segmentation_selection.value = previous_selection
+        else:
+            self._select_default_segmentation_layer()
+        if self.segmentation_selection.value is not previous_selection:
+            self._invalidate_features()
 
     def _create_segmentation_layer_section(self):
         segmentation_selection = QtWidgets.QVBoxLayout()
-        segmentation_layer_widget = QtWidgets.QLabel("Segmentation:")
-        segmentation_selection.addWidget(segmentation_layer_widget)
-        self.segmentation_selection = create_widget(annotation=napari.layers.Labels)
-        state = AnnotatorState()
-        state.segmentation_selection = self.segmentation_selection
+        seg_label = QtWidgets.QLabel("Segmentation:")
+        seg_label.setToolTip(get_tooltip("classification", "segmentation"))
+        segmentation_selection.addWidget(seg_label)
+        self.segmentation_selection = ComboBox(choices=lambda _: self._segmentation_layer_choices())
+        self.segmentation_selection.native.setToolTip(get_tooltip("classification", "segmentation"))
+        self._select_default_segmentation_layer()
+        self.segmentation_selection.changed.connect(self._invalidate_features)
+        AnnotatorState().segmentation_selection = self.segmentation_selection
         segmentation_selection.addWidget(self.segmentation_selection.native)
+        # Keep the choices in sync as layers are added, removed or reordered.
+        self._viewer.layers.events.inserted.connect(self._reset_segmentation_layer_choices)
+        self._viewer.layers.events.removed.connect(self._reset_segmentation_layer_choices)
+        self._viewer.layers.events.reordered.connect(self._reset_segmentation_layer_choices)
+
+        @self._viewer.bind_key("Shift-S", overwrite=True)
+        def _toggle_segmentation(event=None):
+            layer = self.segmentation_selection.value
+            if layer is not None:
+                layer.visible = not layer.visible
+
         return segmentation_selection
 
-    def _create_label_widget(self):
-        self._label_form = QtWidgets.QFormLayout()
-        scroll_area = QtWidgets.QScrollArea()
-        inner = QtWidgets.QWidget()
-        inner.setLayout(self._label_form)
-        scroll_area.setWidget(inner)
-        scroll_area.setWidgetResizable(True)
-
-        layout = QtWidgets.QVBoxLayout()
-        layout.addWidget(QtWidgets.QLabel("Object label names:"))
-        layout.addWidget(scroll_area)
-
-        return layout
-
-    def _refresh_label_widget(self):
-        state = AnnotatorState()
-
-        # Get the current label ids.
-        ids = np.unique(self._viewer.layers["annotations"].data)[1:]
-        if state.previous_labels is not None:
-            ids = np.union1d(ids, np.unique(state.previous_labels))
-
-        # Add new rows.
-        for lbl in ids:
-            if lbl in self._label_names:
-                continue
-            line = QtWidgets.QLineEdit(self._label_names.get(lbl, ""))
-            self._label_names[lbl] = ""
-            self._label_form.addRow(f"ID {lbl}", line)
-            line.textChanged.connect(lambda txt, lbl=lbl: self._label_names.__setitem__(lbl, txt))
-
-        # Remove rows whose label vanished.
-        for row in reversed(range(self._label_form.rowCount())):
-            lbl_text = self._label_form.itemAt(row, QtWidgets.QFormLayout.LabelRole).widget().text()
-            lbl_id = int(lbl_text.split()[1])
-            if lbl_id not in ids:
-                # Remove label+field widgets completely.
-                w_label = self._label_form.itemAt(row, QtWidgets.QFormLayout.LabelRole).widget()
-                w_edit = self._label_form.itemAt(row, QtWidgets.QFormLayout.FieldRole).widget()
-                self._label_form.removeRow(row)
-                w_label.deleteLater()
-                w_edit.deleteLater()
-                self.names.pop(lbl_id, None)
-
-    def _create_widgets(self):
-        # Create the embedding widget and connect all events related to it.
-        self._embedding_widget = widgets.EmbeddingWidget()
-        # Connect events for the image selection box.
-        self._viewer.layers.events.inserted.connect(self._embedding_widget.image_selection.reset_choices)
-        self._viewer.layers.events.removed.connect(self._embedding_widget.image_selection.reset_choices)
-        # Connect the run button with the function to update the image.
-        self._embedding_widget.run_button.clicked.connect(self._update_image)
-
-        # Create the widget for training and prediction of the classifier.
-        self._train_and_predict_widget = _train_and_predict_rf_widget()
-
-        # Create the widget for segmentation selection.
-        self._seg_selection_widget = self._create_segmentation_layer_section()
-
-        # Create the widget for displaying the current label state.
-        self._label_widget = self._create_label_widget()
-
-        # Cretate the widget for exporting the RF.
-        self._export_rf_widget = _create_export_rf_widget()
-
-        self._widgets = {
-            "embeddings": self._embedding_widget,
-            "segmentation_selection": self._seg_selection_widget,
-            "train_and_predict": self._train_and_predict_widget,
-            "label_widget": self._label_widget,
-            "export_rf": self._export_rf_widget,
-        }
-
-    def __init__(self, viewer: "napari.viewer.Viewer") -> None:
-        """Create the GUI for the object classifier.
-
-        Args:
-            viewer: The napari viewer.
-        """
-        super().__init__()
-        self._viewer = viewer
-        self._annotator_widget = QtWidgets.QWidget()
-        self._annotator_widget.setLayout(QtWidgets.QVBoxLayout())
-
-        # Add the layers for prompts and segmented obejcts.
-        # Initialize with a dummy shape, which is reset to the correct shape once an image is set.
-        self._shape = (256, 256)
-        self._require_layers()
-        self._ndim = len(self._shape)
-
-        # Create all the widgets and add them to the layout.
-        self._label_names = {}  # The names for the object labels.
-        self._create_widgets()
-
-        # We could refactor this.
-        for widget_name, widget in self._widgets.items():
-            widget_frame = QtWidgets.QGroupBox()
-            widget_layout = QtWidgets.QVBoxLayout()
-            if isinstance(widget, (Container, FunctionGui, Widget)):
-                # This is a magicgui type and we need to get the native qt widget.
-                widget_layout.addWidget(widget.native)
-            elif isinstance(widget, QtWidgets.QLayout):
-                widget_layout.addLayout(widget)
-            else:
-                # This is a qt type and we add the widget directly.
-                widget_layout.addWidget(widget)
-            widget_frame.setLayout(widget_layout)
-            self._annotator_widget.layout().addWidget(widget_frame)
-
-        # Connect the label layer and the refresh function.
-        self._refresh_label_widget()
-
-        # Set the expected annotator class to the state.
-        state = AnnotatorState()
-        state.annotator = self
-
-        # Add the widgets to the state.
-        state.widgets = self._widgets
-
-        # Add the widget to the scroll area.
-        self.setWidgetResizable(True)  # Allow widget to resize within scroll area.
-        self.setWidget(self._annotator_widget)
-
-    # napari 0.9 caps the height of dock widget content at its size hint (napari/napari#9393).
-    def showEvent(self, event):
-        size_policy = self.sizePolicy()
-        size_policy.setVerticalPolicy(QtWidgets.QSizePolicy.Policy.Expanding)
-        self.setSizePolicy(size_policy)
-        super().showEvent(event)
-
-    def _update_image(self, segmentation_result=None):
-        state = AnnotatorState()
-
-        # Whether embeddings already exist and avoid clearing objects in layers.
-        if state.skip_recomputing_embeddings:
-            return
-
-        if state.image_shape is None:
-            return
-
-        # Update the dimension and image shape if it has changed.
-        if state.image_shape != self._shape:
-            self._ndim = len(state.image_shape)
-            self._shape = state.image_shape
-
-        # Before we reset the layers, we ensure all expected layers exist.
-        self._require_layers()
-
-        # Update the image scale.
-        scale = state.image_scale
-
-        # Reset all layers.
-        self._viewer.layers["annotations"].data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.layers["annotations"].scale = scale
-        self._viewer.layers["prediction"].data = np.zeros(self._shape, dtype="uint32")
-        self._viewer.layers["prediction"].scale = scale
+    def _extra_classification_sections(self):
+        return [self._create_segmentation_layer_section()]
 
 
 def object_classifier(
     image: np.ndarray,
     segmentation: np.ndarray,
     embedding_path: Optional[Union[str, util.ImageEmbeddings]] = None,
-    model_type: str = util._DEFAULT_MODEL,
+    model_type: str = DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     return_viewer: bool = False,
@@ -338,9 +233,11 @@ def object_classifier(
             or the precompted image embeddings computed by `precompute_image_embeddings`.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
-        tile_shape: Shape of tiles for tiled embedding prediction.
-            If `None` then the whole image is passed to Segment Anything.
+        tile_shape: Shape of tiles for tiled embedding prediction. If `None`, reuse the tiling of
+            already cached embeddings, else use the default tiling for images exceeding the in-plane
+            size threshold, and pass smaller images to Segment Anything without tiling.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
+            If `None`, use the default overlap whenever tiling is active.
         return_viewer: Whether to return the napari viewer to further modify it before starting the tool.
             By default, does not return the napari viewer.
         viewer: The viewer to which the Segment Anything functionality should be added.
@@ -353,33 +250,37 @@ def object_classifier(
     Returns:
         The napari viewer, only returned if `return_viewer=True`.
     """
-    if ndim is None:
-        ndim = image.ndim - 1 if image.shape[-1] == 3 and image.ndim in (3, 4) else image.ndim
+    # Prepare the image in the same way as the annotator: squeeze singletons and map the channels to RGB.
+    image, ndim, rgb = util.prepare_annotation_image(image, ndim=ndim)
 
     state = AnnotatorState()
     state.image_shape = image.shape[:ndim]
+    state.ndim = ndim
+
+    # The API / CLI computes embeddings before creating the widget, so apply the same size
+    # heuristic here. Reuse these resolved settings when syncing the widget below.
+    tile_shape, halo = resolve_default_tiling(state.image_shape, tile_shape, halo, embedding_path)
 
     state.initialize_predictor(
         image, model_type=model_type, save_path=embedding_path,
-        halo=halo, tile_shape=tile_shape, precompute_amg_state=False,
+        halo=halo, tile_shape=tile_shape, precompute_autoseg_state=False,
         ndim=ndim, checkpoint_path=checkpoint_path, device=device,
-        skip_load=False, use_cli=True,
+        use_cli=True,
     )
 
     if viewer is None:
         viewer = napari.Viewer()
 
-    viewer.add_image(image, name="image")
-    viewer.add_labels(segmentation, name="segmentation")
+    viewer.add_image(image, name="image", rgb=rgb)
+    viewer.add_labels(util.match_image_shape(segmentation, state.image_shape), name="segmentation")
 
     annotator = ObjectClassifier(viewer)
 
     # Trigger layer update of the annotator so that layers have the correct shape.
-    # And initialize the 'committed_objects' with the segmentation result if it was given.
     annotator._update_image()
 
     # Add the annotator widget to the viewer and sync widgets.
-    viewer.window.add_dock_widget(annotator)
+    viewer.window.add_dock_widget(annotator, name=get_dock_title("object_classification"))
     _sync_embedding_widget(
         widget=state.widgets["embeddings"],
         model_type=model_type if checkpoint_path is None else state.predictor.model_type,
@@ -396,136 +297,106 @@ def object_classifier(
     napari.run()
 
 
-def image_series_object_classifier(
+class ObjectClassificationBatchTask(ClassificationBatchTask):
+    """Batch task for the object classifier: per-item segmentation layer + projected prediction."""
+
+    dock_name = get_dock_title("batch_object_classification")
+    classifier_class = ObjectClassifier
+    features_attr = "object_features"
+    aux_attr = "seg_ids"
+    rf_attr = "object_rf"
+
+    def __init__(self, *, segmentations, **kwargs):
+        super().__init__(**kwargs)
+        self.segmentations = segmentations
+        self.visited_segmentations = {}
+
+    def on_leave_item(self, viewer, entry, index):
+        # Keep the segmentation, which may be edited or produced in-tool, for going back to this item.
+        self.visited_segmentations[index] = viewer.layers["segmentation"].data.copy()
+        super().on_leave_item(viewer, entry, index)
+
+    def _set_layers(self, viewer, index):
+        # Load (or carry over) the per-item segmentation. When none is provided, start from an empty
+        # segmentation the user can fill in-tool (the 'produce' path).
+        seg = None if self.segmentations is None else self.segmentations[index]
+        seg = self.visited_segmentations.get(index, seg)
+        if seg is not None and not isinstance(seg, np.ndarray):
+            seg = imageio.imread(seg)
+        if seg is not None:
+            seg = util.match_image_shape(seg, AnnotatorState().image_shape)
+        # Without a segmentation, an empty one, so the objects of the previous item are not carried over.
+        if seg is None:
+            seg = np.zeros(tuple(AnnotatorState().image_shape), dtype="uint32")
+        if "segmentation" in viewer.layers:
+            viewer.layers["segmentation"].data = seg
+        else:
+            viewer.add_labels(seg, name="segmentation")
+
+
+def batch_object_classifier(
     images: List[np.ndarray],
     segmentations: List[np.ndarray],
     output_folder: str,
     embedding_paths: Optional[List[Union[str, util.ImageEmbeddings]]] = None,
-    model_type: str = util._DEFAULT_MODEL,
+    model_type: str = DEFAULT_MODEL,
     tile_shape: Optional[Tuple[int, int]] = None,
     halo: Optional[Tuple[int, int]] = None,
     checkpoint_path: Optional[str] = None,
     device: Optional[Union[str, torch.device]] = None,
     ndim: Optional[int] = None,
-) -> None:
+    viewer: Optional["napari.viewer.Viewer"] = None,
+    return_viewer: bool = False,
+    skip_done: bool = False,
+    batch_size: Optional[int] = 1,
+) -> Optional["napari.viewer.Viewer"]:
     """Start the object classifier for a list of images and segmentations.
 
-    This function will save the all features and labels for annotated objects,
-    to enable training a random forest on multiple images.
+    This function saves the features and labels for annotated objects across the batch, so a random
+    forest can be trained on multiple images, plus the per-image prediction and the trained classifier.
 
     Args:
         images: The input images.
-        segmentations: The input segmentations.
-        output_folder: The folder where segmentation results, trained random forest
-            and the features, labels aggregated during training will be saved.
-        embedding_paths: Filepaths where to save the embeddings
-            or the precompted image embeddings computed by `precompute_image_embeddings`.
+        segmentations: The input segmentations, one per image.
+        output_folder: The folder where predictions, the trained random forest and the accumulated
+            features/labels are saved.
+        embedding_paths: Filepaths where to save/load the embeddings, one per image.
         model_type: The Segment Anything model to use. For details on the available models check out
             https://computational-cell-analytics.github.io/micro-sam/micro_sam.html#finetuned-models.
-        tile_shape: Shape of tiles for tiled embedding prediction.
-            If `None` then the whole image is passed to Segment Anything.
+        tile_shape: Shape of tiles for tiled embedding prediction. If `None`, reuse the tiling of
+            already cached embeddings, else use the default tiling for images exceeding the in-plane
+            size threshold, and pass smaller images to Segment Anything without tiling.
         halo: Shape of the overlap between tiles, which is needed to segment objects on tile borders.
+            If `None`, use the default overlap whenever tiling is active.
         checkpoint_path: Path to a custom checkpoint from which to load the SAM model.
         device: The computational device to use for the SAM model.
             By default, automatically chooses the best available device.
         ndim: The dimensionality of the data. If not given will be derived from the data.
+        viewer: The viewer to which the functionality should be added.
+        return_viewer: Whether to return the napari viewer instead of starting the event loop.
+        batch_size: The number of tiles / slices per model call when computing the embeddings.
+            Only has an effect on a GPU. Pass None to select it per device from the free VRAM
+            (SAM2 only). By default a single tile / slice is used.
+        skip_done: Whether to skip images whose prediction already exists in `output_folder`.
+
+    Returns:
+        The napari viewer, only returned if `return_viewer=True`.
     """
-    # TODO precompute the embeddings if not computed, can re-use 'precompute' from image series annotator.
-    # TODO support file paths as inputs
-    # TODO option to skip segmented
-    if len(images) != len(segmentations):
+    if segmentations is not None and len(images) != len(segmentations):
         raise ValueError(
             f"Expect the same number of images and segmentations, got {len(images)}, {len(segmentations)}."
         )
 
-    end_msg = "You have annotated the last image. Do you wish to close napari?"
+    have_inputs_as_arrays = isinstance(images[0], np.ndarray)
+    if ndim is None:
+        ndim = load_batch_image(images[0])[1]
 
-    # Initialize the object classifier on the fist image / segmentation.
-    viewer = object_classifier(
-        image=images[0], segmentation=segmentations[0],
-        embedding_path=None if embedding_paths is None else embedding_paths[0],
-        model_type=model_type, tile_shape=tile_shape, halo=halo,
-        return_viewer=True, checkpoint_path=checkpoint_path,
-        device=device, ndim=ndim,
+    task = ObjectClassificationBatchTask(
+        segmentations=segmentations, ndim=ndim, model_type=model_type, embedding_paths=embedding_paths,
+        tile_shape=tile_shape, halo=halo, checkpoint_path=checkpoint_path, device=device,
+        batch_size=batch_size,
     )
-
-    os.makedirs(output_folder, exist_ok=True)
-    next_image_id = 0
-
-    def _save_prediction(image, pred, image_id):
-        fname = f"{Path(image).stem}_prediction.tif" if isinstance(image, str) else f"prediction_{image_id}.tif"
-        save_path = os.path.join(output_folder, fname)
-        imageio.imwrite(save_path, pred, compression="zlib")
-
-    # TODO handle cases where rf for the image was not trained, raise a message, enable contnuing
-    # Add functionality for going to the next image.
-    @magicgui(call_button="Next Image [N]")
-    def next_image(*args):
-        nonlocal next_image_id
-
-        # Get the state and the current segmentation (note that next image id has not yet been increased)
-        state = AnnotatorState()
-        segmentation = segmentations[next_image_id]
-
-        # Keep track of the previous features and labels.
-        labels = _accumulate_labels(segmentation, viewer.layers["annotations"].data)
-        valid = labels != 0
-        if valid.sum() > 0:
-            features, labels = state.object_features[valid], labels[valid]
-            if state.previous_features is None:
-                state.previous_features, state.previous_labels = features, labels
-            else:
-                state.previous_features = np.concatenate([state.previous_features, features], axis=0)
-                state.previous_labels = np.concatenate([state.previous_labels, labels], axis=0)
-            # Save the accumulated features and labels.
-            np.save(os.path.join(output_folder, "features.npy"), state.previous_features)
-            np.save(os.path.join(output_folder, "labels.npy"), state.previous_labels)
-
-        # Save the current prediction and RF.
-        _save_prediction(images[next_image_id], viewer.layers["prediction"].data, next_image_id)
-        dump(state.object_rf, os.path.join(output_folder, "rf.joblib"))
-
-        # Go to the next image.
-        next_image_id += 1
-
-        # Check if we are done.
-        if next_image_id == len(images):
-            # Inform the user via dialog.
-            abort = widgets._generate_message("info", end_msg)
-            if not abort:
-                viewer.close()
-            return
-
-        # Get the next image, segmentation and embedding_path.
-        image = images[next_image_id]
-        segmentation = segmentations[next_image_id]
-        embedding_path = None if embedding_paths is None else embedding_paths[next_image_id]
-
-        # Set the new image in the viewer, state and annotator.
-        viewer.layers["image"].data = image
-        viewer.layers["segmentation"].data = segmentation
-
-        state.initialize_predictor(
-            image, model_type=model_type, ndim=ndim,
-            save_path=embedding_path,
-            tile_shape=tile_shape, halo=halo,
-            predictor=state.predictor, device=device,
-        )
-        state.image_shape = image.shape if image.ndim == ndim else image.shape[:-1]
-        state.annotator._update_image()
-
-        # Clear the object features and seg-ids from the state.
-        state.object_features = None
-        state.seg_ids = None
-
-    viewer.window.add_dock_widget(next_image)
-
-    @viewer.bind_key("n", overwrite=True)
-    def _next_image(viewer):
-        next_image(viewer)
-
-    napari.run()
-
-
-# TODO: folder annotator
-# TODO: main function
+    return run_batch(
+        images, output_folder, task, have_inputs_as_arrays=have_inputs_as_arrays,
+        viewer=viewer, return_viewer=return_viewer, skip_done=skip_done,
+    )

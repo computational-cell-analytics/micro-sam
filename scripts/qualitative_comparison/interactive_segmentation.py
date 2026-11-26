@@ -3,7 +3,7 @@ from glob import glob
 
 from torch_em.data.datasets import get_dsb_loader
 
-from micro_sam.evaluation.model_comparison import (
+from micro_sam.v1.evaluation.model_comparison import (
     generate_data_for_model_comparison, model_comparison
 )
 

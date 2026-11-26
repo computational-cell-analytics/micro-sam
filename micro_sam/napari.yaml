@@ -23,7 +23,7 @@ contributions:
       title: Load 2D Hela sample data from micro_sam plugin
     - id: micro_sam.sample_data_3d
       python_name: micro_sam.sample_data:sample_data_3d
-      title: Load Lucchi++ 3D sample data from micro_sam plugin
+      title: Load Lucchi 3D sample data from micro_sam plugin
     - id: micro_sam.sample_data_tracking
       python_name: micro_sam.sample_data:sample_data_tracking
       title: Load tracking sample data from micro_sam plugin
@@ -32,27 +32,21 @@ contributions:
       title: Load segmentation sample data from micro_sam plugin
 
     # Commands for plugins.
-    - id: micro_sam.annotator_2d
-      python_name: micro_sam.sam_annotator.annotator_2d:Annotator2d
-      title: Start the 2d annotator
-    - id: micro_sam.annotator_3d
-      python_name: micro_sam.sam_annotator.annotator_3d:Annotator3d
-      title: Start the 3d annotator
+    - id: micro_sam.annotator
+      python_name: micro_sam.sam_annotator.annotator:Annotator
+      title: Start the segmentation annotator
     - id: micro_sam.annotator_tracking
       python_name: micro_sam.sam_annotator.annotator_tracking:AnnotatorTracking
       title: Start the tracking annotator
-    - id: micro_sam.annotator_timeseries
-      python_name: micro_sam.sam_annotator.annotator_timeseries:AnnotatorTimeSeries
-      title: Start the time series segmentation annotator
-    - id: micro_sam.image_series_annotator
-      python_name: micro_sam.sam_annotator.image_series_annotator:ImageSeriesAnnotator
-      title: Run the annotator for multiple images in a folder
+    - id: micro_sam.batch_annotator
+      python_name: micro_sam.sam_annotator.batch_annotator:BatchAnnotator
+      title: Start the batch annotator
     - id: micro_sam.object_classifier
       python_name: micro_sam.sam_annotator.object_classifier:ObjectClassifier
       title: Start the SAM based object classifier
-    - id: micro_sam.training
-      python_name: micro_sam.sam_annotator.training_ui:TrainingWidget
-      title: Finetune SAM model
+    - id: micro_sam.pixel_classifier
+      python_name: micro_sam.sam_annotator.pixel_classifier:PixelClassifier
+      title: Start the SAM based pixel classifier
     - id: micro_sam.settings
       python_name: micro_sam.sam_annotator._widgets:settings_widget
       title: Set cache directory
@@ -71,7 +65,7 @@ contributions:
       display_name: HeLa 2d example data
       key: micro_sam-hela2d
     - command: micro_sam.sample_data_3d
-      display_name: Lucchi++ 3d dataset
+      display_name: Lucchi 3d dataset
       key: micro_sam-lucchi
     - command: micro_sam.sample_data_tracking
       display_name: Tracking sample dataset
@@ -81,19 +75,19 @@ contributions:
       key: micro_sam-segmentation
 
   widgets:
-    - command: micro_sam.annotator_2d
-      display_name: Annotator 2d
-    - command: micro_sam.annotator_3d
-      display_name: Annotator 3d
+    # napari names the dock widget '<display_name> (<the plugin display_name above>)', which is also the
+    # dock title the CLI / API entry points pass to 'add_dock_widget', so a tool is called the same way no
+    # matter how it was started. These names repeat the tool names in 'sam_annotator/_titles.py', which
+    # this static manifest cannot import, so both have to be changed together.
+    - command: micro_sam.annotator
+      display_name: Segmentation Annotator
     - command: micro_sam.annotator_tracking
-      display_name: Annotator Tracking
-    - command: micro_sam.annotator_timeseries
-      display_name: Annotator Time Series
-    - command: micro_sam.image_series_annotator
-      display_name: Image Series Annotator
+      display_name: Tracking Annotator
+    - command: micro_sam.batch_annotator
+      display_name: Batch Annotator
     - command: micro_sam.object_classifier
       display_name: Object Classifier
-    - command: micro_sam.training
-      display_name: Finetuning
+    - command: micro_sam.pixel_classifier
+      display_name: Pixel Classifier
     - command: micro_sam.settings
       display_name: Settings

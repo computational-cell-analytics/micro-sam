@@ -8,12 +8,12 @@ import argparse
 from glob import glob
 
 import h5py
-from skimage.measure import label
 import imageio.v3 as imageio
+from skimage.measure import label
 
 import bioimageio.spec.model.v0_5 as spec
 
-from micro_sam.bioimageio import export_sam_model
+from micro_sam.v1.bioimageio import export_sam_model
 
 from models import get_id_and_emoji, MODEL_TO_NAME
 

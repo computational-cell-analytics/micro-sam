@@ -1,15 +1,15 @@
-import argparse
-import json
 import os
+import json
+import argparse
 from glob import glob
-from inspect import signature
 from pathlib import Path
+from inspect import signature
 
 import h5py
-import imageio.v3 as imageio
-import pandas as pd
 import napari
 import numpy as np
+import pandas as pd
+import imageio.v3 as imageio
 
 from tqdm import tqdm
 
@@ -41,13 +41,13 @@ def _normalize_and_pad(image):
 
 
 def _run_prediction(image_path, label_path, out_path, predictor, segmenter, model_type, settings):
-    from micro_sam.inference import batched_inference
-    from micro_sam.instance_segmentation import _derive_point_prompts, _derive_box_prompts
+    from micro_sam.v1.inference import batched_inference
+    from micro_sam.v1.instance_segmentation import _derive_point_prompts, _derive_box_prompts
     from micro_sam.util import apply_nms
     from elf.evaluation import mean_segmentation_accuracy
 
     if predictor is None:
-        from micro_sam.instance_segmentation import AutomaticPromptGenerator, get_predictor_and_decoder
+        from micro_sam.v1.instance_segmentation import AutomaticPromptGenerator, get_predictor_and_decoder
         predictor, decoder = get_predictor_and_decoder(model_type=model_type)
         segmenter = AutomaticPromptGenerator(predictor, decoder)
 

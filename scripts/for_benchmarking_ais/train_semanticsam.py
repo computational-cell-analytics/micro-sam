@@ -4,9 +4,9 @@ import torch
 
 from torch_em.loss import DiceBasedDistanceLoss
 
-import micro_sam.training as sam_training
-from micro_sam.training.trainable_sam import TrainableSAM
-from micro_sam.training.util import ConvertToSemanticSamInputs
+import micro_sam.v1.training as sam_training
+from micro_sam.v1.training.trainable_sam import TrainableSAM
+from micro_sam.v1.training.util import ConvertToSemanticSamInputs
 
 from segment_anything import sam_model_registry
 

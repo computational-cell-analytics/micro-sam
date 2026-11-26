@@ -1,0 +1,5 @@
+{
+  "name": "apg3d-legacy-benchmark-defaults",
+  "params_2d": {},
+  "params_3d": {"sigma": 0.5, "min_candidate_size": 4, "min_size": 50, "dt": 0.25, "max_overlap": 0.15}
+}

@@ -19,9 +19,9 @@ import imageio.v3 as imageio
 
 from torch_em.util.debug import check_loader
 
-import micro_sam.training as sam_training
-from micro_sam.training.util import normalize_to_8bit
-from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
+import micro_sam.v1.training as sam_training
+from micro_sam.v1.training.util import normalize_to_8bit
+from micro_sam.v1.automatic_segmentation import get_predictor_and_segmenter, automatic_instance_segmentation
 
 
 def load_images_and_labels(folder, view):

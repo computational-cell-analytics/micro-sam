@@ -8,7 +8,7 @@ from torch_em.data import datasets
 from torch_em.data import MinInstanceSampler
 from torch_em.transform.label import connected_components
 
-from micro_sam.evaluation.model_comparison import (
+from micro_sam.v1.evaluation.model_comparison import (
     generate_data_for_model_comparison, model_comparison
 )
 
@@ -56,7 +56,7 @@ def compare_experiments_for_dataset(
         have_model3=intermediate_model is not None
     )
     if view_napari:
-        from micro_sam.evaluation.model_comparison import model_comparison_with_napari
+        from micro_sam.v1.evaluation.model_comparison import model_comparison_with_napari
         model_comparison_with_napari(output_folder, show_points=True)
 
 
