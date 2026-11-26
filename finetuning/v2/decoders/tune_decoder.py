@@ -271,29 +271,38 @@ def search_command(args):
 def worker_command(args):
     """Take tasks from the queue of a session that a 'search' job drives, so that a search is spread over several
     small jobs. The worker waits between the stages and ends when the result is written, when its time limit is
-    close, or when no task was open for 'max_idle' seconds (the search job is gone).
+    close, or when no task was started or closed for 'max_idle' seconds: the search job is gone, or the open tasks
+    wait for tasks that failed.
     """
     search, _ = import_search()
     queue = os.path.join(args.experiment_folder, "queue")
     result = os.path.join(args.experiment_folder, "best_parameters.json")
-    last_open = time.time()
-    while not os.path.exists(result) and search.seconds_left() > search.MIN_SECONDS_LEFT:
+
+    def queue_state():
+        """The number of tasks of the queue and of those that are done or failed."""
         tasks_path = os.path.join(queue, "tasks.json")
         n_tasks = 0
         if os.path.exists(tasks_path):
             with open(tasks_path) as f:
                 n_tasks = len(json.load(f))
         claims = os.path.join(queue, "claims")
-        closed = [
+        n_closed = sum(
             any(os.path.exists(os.path.join(claims, str(index), state)) for state in ("done", "failed"))
             for index in range(n_tasks)
-        ]
-        if not all(closed):
-            # Returns when no task is open (failed tasks count as closed) or the time limit is close.
+        )
+        return n_tasks, n_closed
+
+    state, last_change = None, time.time()
+    while not os.path.exists(result) and search.seconds_left() > search.MIN_SECONDS_LEFT:
+        n_tasks, n_closed = queue_state()
+        if n_closed < n_tasks:
+            # Returns when no task is open or can run (failed tasks count as closed), or the time limit is close.
             search.run_worker(queue, args.threads, args.slots)
-            last_open = time.time()
-        elif time.time() - last_open > args.max_idle:
-            print(f"No open task for {args.max_idle} s, the worker ends.", flush=True)
+        new_state = queue_state()
+        if new_state != state:
+            state, last_change = new_state, time.time()
+        elif time.time() - last_change > args.max_idle:
+            print(f"No task was started or closed for {args.max_idle} s, the worker ends.", flush=True)
             break
         time.sleep(30)
 
@@ -426,7 +435,8 @@ def main():
     sub.add_argument("-e", "--experiment_folder", required=True, help="The folder of the session.")
     sub.add_argument("--threads", type=int, default=os.cpu_count(), help="The CPU threads for all tasks together.")
     sub.add_argument("--slots", type=int, default=None, help="The tasks that run at once. Default: threads / 2.")
-    sub.add_argument("--max_idle", type=int, default=1800, help="End after this many seconds without an open task.")
+    sub.add_argument("--max_idle", type=int, default=1800,
+                     help="End after this many seconds in which no task was started or closed.")
 
     sub = commands.add_parser("submit", help="Submit the sessions as Slurm jobs.")
     sub.add_argument("--checkpoint", required=True, help="The training checkpoint, or its staged copy.")

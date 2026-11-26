@@ -1766,12 +1766,14 @@ def worker_loop(queue_dir, threads, models=None):
     """Claim and run the tasks of a queue until none is open or the time limit is too close.
 
     A task whose cache is not written yet, or that another running job holds, may still come free, so the worker
-    waits for it. A failed task is left for inspection, not retried.
+    waits for it. A failed task is left for inspection, not retried. If every open task waits for a cache, the
+    tasks that write the caches have failed and no task can run any more: the worker ends instead of waiting for
+    the time limit of its job.
     """
     claims = Path(queue_dir, "claims")
     while True:
         tasks = json.loads(Path(queue_dir, "tasks.json").read_text())
-        n_open, claimed = 0, False
+        n_open, n_blocked, claimed = 0, 0, False
         for index, task in enumerate(tasks):
             claim = claims / str(index)
             if (claim / "done").exists() or (claim / "failed").exists():
@@ -1780,6 +1782,7 @@ def worker_loop(queue_dir, threads, models=None):
                 continue
             n_open += 1
             if task["requires"] is not None and not os.path.exists(task["requires"]):
+                n_blocked += 1
                 continue
             if seconds_left() < MIN_SECONDS_LEFT or not try_claim(str(claim)):
                 continue
@@ -1794,6 +1797,9 @@ def worker_loop(queue_dir, threads, models=None):
                 print(f"Task {index} failed with exit code {result.returncode}.", flush=True)
                 (claim / "failed").write_text(f"{result.returncode}\n")
         if n_open == 0 or (not claimed and seconds_left() < MIN_SECONDS_LEFT):
+            break
+        if n_blocked == n_open and not claimed:
+            print(f"{n_blocked} open task(s) wait for a cache that no task writes any more.", flush=True)
             break
         if not claimed:
             time.sleep(POLL_SECONDS)

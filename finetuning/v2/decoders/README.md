@@ -362,6 +362,23 @@ Logs: `<root>/evaluation/hiera_u_hvit_t_cells_epoch29_9a812c61/logs/slurm/` and
 `<root>/evaluation/reference_hvit_t/logs/slurm/`. Before the recomputed reference is used, compare its column
 `mSA_with_slivers` with the mSA of the earlier results (`TUNING_DATA.md`, "Next steps").
 
+State 2026-11-25 23:55: the 2d search stopped on 2026-11-24 21:43. The jobs imported `micro_sam` from the working
+tree, where another branch was checked out at 21:34, so every task started after that failed on an import (19
+failed tasks, the tasks that were running finished). The two jobs then held their CPUs without work until their
+time limits (17502288 failed 2026-11-25 22:04, 17533378 cancelled). 316 of the 527 tasks of the first stage are
+kept. Changes:
+- `evaluate_decoder.freeze_code` copies the packages `micro_sam` and `torch_em` (`FROZEN_PACKAGES`) into the code
+  folder of a run, and the job scripts put it first in `PYTHONPATH`.
+- A search worker ends when every open task waits for the cache of a failed task
+  (`parameter_search.worker_loop`), and `tune_decoder.py worker` ends after `--max_idle` without a started or
+  closed task. Before, both waited for the time limit of their job.
+- 2d submitted again with `--data 2d --skip_reference`: 17569447 (predictions are stored, search continues, test
+  half 0) and 17569448 (tasks of the search, test half 1), code folder `jobs/code_20261125_234801`. The queue of
+  the first run was moved aside before (`2d/queue_before_20261125_2355`): the tasks are keyed by their command,
+  which holds the path of the code folder, so a search that continues from another code folder would add every
+  open task a second time. With a new queue the 297 stored shards are read (at most 92 s per task) and the
+  others run once.
+
 ## Post-processing parameter search: offline analysis
 
 `analyze_parameter_search.py` (`cache`, `run`, `report`) analyses the existing sweeps without predicting anything: the

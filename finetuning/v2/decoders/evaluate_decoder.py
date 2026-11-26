@@ -101,6 +101,10 @@ SUPPLEMENT_DATASETS = (
 # The samples per array task of the full evaluation.
 SAMPLES_PER_TASK = {2: 250, 3: 8}
 
+# The packages that are installed from their working trees (editable installs). A job would import whatever branch
+# is checked out there while it runs, so `freeze_code` copies them and the job scripts put the copy first.
+FROZEN_PACKAGES = ("micro_sam", "torch_em")
+
 
 def _find_dir(*candidates):
     for path in candidates:
@@ -541,21 +545,31 @@ set -u
 micromamba activate new-stack
 export PYTHONUNBUFFERED=1 PYTORCH_ALLOC_CONF=expandable_segments:True
 cd {code}
+export PYTHONPATH={code}${{PYTHONPATH:+:$PYTHONPATH}}
 ARGS=$(sed -n "${{SLURM_ARRAY_TASK_ID}}p" {tasks})
 {command} $ARGS
 """
 
 
 def freeze_code(folder):
-    """Copy this folder, the evaluation code and the plotting scripts with the panel datasets for a Slurm job."""
+    """Copy this folder, the evaluation code and the plotting scripts with the panel datasets for a Slurm job.
+
+    The packages in FROZEN_PACKAGES are copied as well. A job has to run with the returned folder in 'PYTHONPATH'
+    to import them from the copy and not from their working trees.
+    """
+    import importlib
+
     stamp = time.strftime("%Y%m%d_%H%M%S")
     code = os.path.join(folder, "jobs", f"code_{stamp}")
     shutil.copytree(HERE, code, ignore=shutil.ignore_patterns("__pycache__"))
+    for_paper = os.path.join(_repo_root(), "scripts", "plotting", "v2", "for_paper")
+    for package in FROZEN_PACKAGES:
+        source = os.path.dirname(os.path.abspath(importlib.import_module(package).__file__))
+        shutil.copytree(source, os.path.join(code, package), ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(
         evaluation_dir(), os.path.join(code, "evaluation"),
         ignore=shutil.ignore_patterns("__pycache__", "gpu_jobs", "optimization"),
     )
-    for_paper = os.path.join(_repo_root(), "scripts", "plotting", "v2", "for_paper")
     os.makedirs(os.path.join(code, "for_paper"))
     for figure in ("figure2", "figure3"):
         shutil.copy(os.path.join(for_paper, f"plots_for_{figure}.py"), os.path.join(code, "for_paper"))
