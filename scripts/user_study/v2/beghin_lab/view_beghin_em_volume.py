@@ -7,6 +7,13 @@ If the merged nuclei (merge_prompted_nuclei: without the fragments of the prompt
 and the cells from them with the background seed ('segment_cells_volume --border_seed --merged_nuclei') have a
 pyramid, these cells are the visible segmentation and the other ones are hidden. The same holds for the joined nuclei
 (join_nucleus_fragments: the fragments of a nucleus as one object) and their cells, which replace the merged ones.
+If the candidates for the partial nuclei from prompts (reprompt_partial_nuclei.py, computed at s1) have a pyramid
+('downsample_segmentations --names nuclei_reprompted'), they are the layer 'nuclei_reprompted': the suggested
+candidate of each partial nucleus under the id of the nucleus in the joined nuclei. Where the candidates of two
+nuclei overlap (pieces of the same nucleus) the one with the lower id is shown.
+The updated nuclei and cells (update_partial_nuclei.py: the joined nuclei with these candidates and without small
+fragments, and their cells) replace the joined ones as the visible layers, 'nuclei_updated' on top of the cells; the
+candidates are hidden then.
 
 The levels above the one a segmentation was computed at come from the pyramids of downsample_segmentations, which take
 the first voxel of each block. All layers are placed in nanometer: the raw with the scale and translation of its OME
@@ -32,10 +39,15 @@ PREDICTION_DIR = "/mnt/vast-nhr/projects/cidas/cca/experiments/micro_sam2/beghin
 PYRAMID_PATH = os.path.join(PREDICTION_DIR, "segmentation_pyramids.zarr")
 SEGMENTATIONS = (
     "nuclei", "cells", "cells_border_seed", "nuclei_prompted", "nuclei_merged", "cells_merged_nuclei_border_seed",
-    "nuclei_joined", "cells_joined_nuclei_border_seed",
+    "nuclei_joined", "cells_joined_nuclei_border_seed", "nuclei_reprompted", "cells_updated_nuclei_border_seed",
+    "nuclei_updated",
 )
+# The segmentations that are visible in addition to the latest version of the cells: the latest one that exists.
+VISIBLE = ("nuclei_reprompted", "nuclei_updated")
 # The versions of the cells, the latest one that exists is visible.
-CELLS = ("cells", "cells_merged_nuclei_border_seed", "cells_joined_nuclei_border_seed")
+CELLS = (
+    "cells", "cells_merged_nuclei_border_seed", "cells_joined_nuclei_border_seed", "cells_updated_nuclei_border_seed",
+)
 IN_MEMORY_LEVELS = (2, 3)
 
 
@@ -83,6 +95,7 @@ def main():
     visible = [name for name in CELLS if name in pyramid][-1:]
     if visible == ["cells"]:
         visible.append("nuclei_prompted")
+    visible.extend([name for name in VISIBLE if name in pyramid][-1:])
     viewer = napari.Viewer()
     viewer.add_image(
         load(raw, in_memory), name=f"raw s{level}", scale=scale, translate=translation, units="nm",

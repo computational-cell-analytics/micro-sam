@@ -62,6 +62,8 @@ of the OME-Zarr do. View them with view_beghin_em_volume.py.
 segment_nuclei_from_prompts: segment the nuclei that watershed_volume misses with the SAM2 video predictor of the
 nuclei model at s1, each prompted with one point of a napari points layer, as a label volume of s1 with new ids.
 Add its pyramid with 'downsample_segmentations --names nuclei_prompted'.
+The candidates for the partial nuclei from prompts (reprompt_partial_nuclei.py, the label volume 'suggested' at s1)
+get their pyramid with 'downsample_segmentations --names nuclei_reprompted'.
 
 merge_prompted_nuclei: the nuclei of watershed_volume without the fragments of the prompted nuclei, plus the prompted
 nuclei (with their ids). The prompted nuclei of NUCLEUS_SEED_ONLY_POINTS are not full nuclei, only seeds for their
@@ -76,12 +78,16 @@ check_border_seed: test the background seed of segment_cells_volume (the mask vo
 volume seed the resin around the spheroid, their region is set to zero) on slabs of s0, compare the block-wise version
 to the watershed of the whole slab and both to a tissue mask from the texture of the raw.
 
-export_segmentations: write the cells ('segment_cells_volume --border_seed --nuclei joined') and their nuclei
-(join_nucleus_fragments) as one OME-Zarr with two multiscale label images on the levels of the raw, next to the data
-(EXPORT_PATH).
+export_segmentations: write the cells and their nuclei as one OME-Zarr with two multiscale label images on the levels
+of the raw, next to the data (EXPORT_PATH). By default the updated nuclei and cells of update_partial_nuclei.py (the
+joined nuclei with the partial nuclei segmented again from prompts and without small fragments, and their cells), with
+the list of the objects to exclude from the analysis in the attributes.
 
 export_contours: write one level (s2) of the inverted raw and the contours of the exported cells and nuclei as a
 multichannel ImageJ hyperstack (tif) for Fiji, next to the export.
+
+export_tifs: write one level (s0) of the exported cells and nuclei as label tifs for Fiji (ImageJ format), with the
+list of the objects to exclude and a description, in one zip archive next to the export.
 
 check_cells_volume: run the block-wise stages of segment_cells_volume on the inputs of the cell crop and compare them
 to the result of watershed_cell_crop.
@@ -93,9 +99,11 @@ render_section: find an xy plane where every nucleus is segmented (2d micro-sam2
 the nuclei in the studio with the plane and the nuclei of the plane standing on its raw, and plot them side by side.
 """
 import os
+import csv
 import math
 import time
 import shutil
+import zipfile
 import argparse
 import tempfile
 from itertools import product
@@ -255,10 +263,16 @@ TISSUE_SURFACE_MARGIN = 8
 SEGMENTATION_PYRAMID_PATH = os.path.join(VOLUME_PREDICTION_DIR, "segmentation_pyramids.zarr")
 # The export of the cells and nuclei (export_segmentations), at the top level of the data folder of the Beghin lab.
 EXPORT_PATH = os.path.join(os.path.dirname(DATA_DIR), "PF_Dish_C_pin3new_Spheroid3_segmentation.ome.zarr")
+# The label tifs for Fiji (export_tifs): the level and the level that gives the display range (the largest id).
+TIF_LEVEL = 0
+TIF_RANGE_LEVEL = 2
 # The hyperstack for Fiji (export_contours): its level and the channels with their colors (RGB).
 CONTOUR_LEVEL = 2
 CONTOUR_CHANNELS = {"EM (inverted)": (255, 255, 255), "cell contours": (255, 0, 255), "nucleus contours": (0, 255, 0)}
 SEGMENTATION_PYRAMID_CHUNKS = (64, 256, 256)
+# The candidates for the partial nuclei from prompts (reprompt_partial_nuclei.py): the label volume 'suggested' at s1
+# with the suggested candidate of each partial nucleus under the id of the nucleus.
+REPROMPTED_NUCLEI_PATH = os.path.join(VOLUME_PREDICTION_DIR, "partial_nuclei", "reprompted.zarr")
 # The nuclei the decoder misses, segmented from one point each (segment_nuclei_from_prompts). The points are a napari
 # points layer saved as csv (index, z, y, x in voxels of NUCLEUS_POINTS_LEVEL of the raw). Each nucleus is segmented in
 # a crop of NUCLEUS_PROMPT_CROP_SHAPE of s1 around its point (a nucleus spans up to ~110 slices and ~170 px of s1).
@@ -1397,12 +1411,18 @@ def get_joined_nuclei_path():
     return os.path.join(VOLUME_PREDICTION_DIR, "nuclei_s1_joined.zarr")
 
 
+def get_updated_nuclei_path():
+    return os.path.join(VOLUME_PREDICTION_DIR, "nuclei_s1_updated.zarr")
+
+
 def get_nuclei_path(nuclei="watershed"):
-    """The group with the nuclei of s1: those of watershed_volume ('watershed'), of merge_prompted_nuclei ('merged')
-    or of join_nucleus_fragments ('joined'). Each one builds on the one before."""
+    """The group with the nuclei of s1: those of watershed_volume ('watershed'), of merge_prompted_nuclei ('merged'),
+    of join_nucleus_fragments ('joined') or of update_partial_nuclei.py ('updated'). Each one builds on the one
+    before. The cells of the updated nuclei are not from segment_cells_volume, update_partial_nuclei.py relabels the
+    cells of the joined nuclei."""
     paths = {
         "watershed": get_watershed_path(1, "nuclei"), "merged": get_merged_nuclei_path(),
-        "joined": get_joined_nuclei_path(),
+        "joined": get_joined_nuclei_path(), "updated": get_updated_nuclei_path(),
     }
     return paths[nuclei]
 
@@ -1491,12 +1511,14 @@ def get_segmentation_sources():
         sources["nuclei_prompted"] = (get_prompted_nuclei_path(), "segmentation", 1)
     if os.path.exists(get_border_seed_check_path()):
         sources["cells_border_seed"] = (get_border_seed_check_path(), "segmentation", BORDER_SEED_CHECK_LEVEL)
-    for nuclei in ("merged", "joined"):
+    for nuclei in ("merged", "joined", "updated"):
         if os.path.exists(get_nuclei_path(nuclei)):
             sources[f"nuclei_{nuclei}"] = (get_nuclei_path(nuclei), "segmentation", 1)
         path = get_cell_volume_path(0, border_seed=True, nuclei=nuclei)
         if os.path.exists(path):
             sources[f"cells_{nuclei}_nuclei_border_seed"] = (path, "segmentation", 0)
+    if os.path.exists(os.path.join(REPROMPTED_NUCLEI_PATH, "suggested")):
+        sources["nuclei_reprompted"] = (REPROMPTED_NUCLEI_PATH, "suggested", 1)
     return sources
 
 
@@ -1541,18 +1563,22 @@ def _to_uint16(labels):
     return labels.astype("uint16")
 
 
-def export_segmentations(output_path=EXPORT_PATH, nuclei="joined", num_workers=1):
+def export_segmentations(output_path=EXPORT_PATH, nuclei="updated", num_workers=1):
     """Export the cells and their nuclei as an OME-Zarr with two multiscale label images, 'cells' and 'nuclei'.
 
-    The cells are those of 'segment_cells_volume --border_seed' for the given nuclei (computed at s0), the nuclei
-    those of get_nuclei_path(nuclei) (computed at s1). Both have the levels s0 - s3 of the raw (the same shapes,
+    The cells are those of 'segment_cells_volume --border_seed' for the given nuclei (computed at s0; for the updated
+    nuclei the relabeled cells of update_partial_nuclei.py), the nuclei those of get_nuclei_path(nuclei) (computed at
+    s1). Both have the levels s0 - s3 of the raw (the same shapes,
     DOWNSCALE_FACTORS), as uint16 with the shards and chunks of the raw: the nuclei at s0 are those of s1 repeated
     twice in y and x, and each level above the one a segmentation was computed at takes the first voxel of each
     block of the level below (as the pyramids of downsample_segmentations and the label images of the raw). So the
     voxel i of a level is the voxel factor * i of s0, in both images, and a cell has the id of its nucleus.
 
     The attributes of the root list the sources and the notes on the nuclei: the prompted nuclei that are only
-    seeds for their cell and not full nuclei ('seed_only'), and the nuclei joined from fragments ('joined').
+    seeds for their cell and not full nuclei ('seed_only'), the nuclei joined from fragments ('joined') and, for the
+    updated nuclei, the objects that are not full nuclei or cells and should be excluded from the analysis
+    ('excluded': id, what to exclude and the reason) and the changes of update_partial_nuclei.py ('candidates',
+    'merged', 'removed').
 
     Args:
         output_path: The path of the OME-Zarr. It must not exist.
@@ -1609,12 +1635,17 @@ def export_segmentations(output_path=EXPORT_PATH, nuclei="joined", num_workers=1
         group.attrs["ome"] = {"version": "0.5", "multiscales": [multiscale], "image-label": {"version": "0.5"}}
 
     nuclei_attrs = dict(nuclei_group.attrs)
+    updated = (
+        " The partial nuclei were segmented again from prompts, the pieces of one nucleus are one object and small "
+        "nucleus fragments are removed, with their cells as part of the neighboring cell (update_partial_nuclei.py). "
+        "The objects of 'excluded' are not full nuclei or cells and should be excluded from the analysis."
+    ) if "excluded" in nuclei_attrs else ""
     root.attrs.update({
         "raw": OUTPUT_PATH, "voxel_size_s0": list(VOXEL_SIZE), "cells": cells_path, "nuclei": nuclei_path,
         "description": (
             "Cells and nuclei of the whole spheroid, instance labels (0 is background). A cell has the id of its "
             "nucleus. 'nuclei' was segmented at s1 (its s0 is s1 repeated twice in y and x), 'cells' at s0 by a "
-            "watershed seeded with the nuclei. Written by export_segmentations of "
+            f"watershed seeded with the nuclei.{updated} Written by export_segmentations of "
             "micro-sam/scripts/user_study/v2/beghin_lab/explore_beghin_em_data.py."
         ),
         "seed_only": [
@@ -1624,6 +1655,7 @@ def export_segmentations(output_path=EXPORT_PATH, nuclei="joined", num_workers=1
             {"id": obj["id"], "fragments": obj["fragments"], "comments": obj["comments"]}
             for obj in nuclei_attrs.get("joined", [])
         ],
+        **{name: nuclei_attrs[name] for name in ("excluded", "candidates", "merged", "removed") if updated},
     })
     print(f"Exported to {output_path}", flush=True)
 
@@ -1680,6 +1712,99 @@ def export_contours(zarr_path, export_path=EXPORT_PATH, level=CONTOUR_LEVEL, out
     print(
         f"Saved {output_path}: {data.shape} (ZCYX) {data.dtype}, voxel size {voxel_size} um (ZYX), channels "
         f"{list(CONTOUR_CHANNELS)}, {os.path.getsize(output_path) / 1e6:.0f} MB", flush=True,
+    )
+
+
+def get_tif_archive_path(level=TIF_LEVEL):
+    return os.path.join(os.path.dirname(DATA_DIR), f"PF_Dish_C_pin3new_Spheroid3_segmentation_s{level}_tif.zip")
+
+
+def _iterate_planes(array, step=SHARD_SHAPE[0] // 4):
+    for z in range(0, array.shape[0], step):
+        yield from array[z:z + step]
+
+
+TIF_README = """Cells and nuclei of the EM spheroid PF_Dish_C_pin3new_Spheroid3 at the scale level s{level}.
+
+cells_s{level}.tif, nuclei_s{level}.tif: instance labels, {shape} (ZYX) uint16, voxel size {voxel_size} um (ZYX).
+0 is the background, a cell has the id of its nucleus. {n_cells} cells and {n_nuclei} nuclei. The voxels are those of
+the raw data (PF_Dish_C_pin3new_Spheroid3.tif{raw_note}).
+
+The tifs are uncompressed ImageJ tifs, {size:.1f} GB each. Fiji opens them with File > Open (they are loaded into
+memory) or, without loading them, with File > Import > TIFF Virtual Stack. The voxel size is set, the display range
+is 0 to the largest id; a LUT such as 'glasbey on dark' (Image > Lookup Tables) shows the objects in colors.
+{excluded}
+Exported from {export_path} by export_tifs of
+micro-sam/scripts/user_study/v2/beghin_lab/explore_beghin_em_data.py.
+"""
+TIF_README_EXCLUDED = """
+excluded.csv: the objects that are not full nuclei or cells and should be excluded from the analysis, with the id,
+what to exclude ('nucleus and cell' or only the 'nucleus') and the reason.
+"""
+
+
+def export_tifs(export_path=EXPORT_PATH, level=TIF_LEVEL, output_path=None):
+    """Export a level of the cells and nuclei of export_segmentations as label tifs for Fiji, in a zip archive.
+
+    The archive has one folder with 'cells_s<level>.tif' and 'nuclei_s<level>.tif' (instance labels, uint16, ZYX),
+    'excluded.csv' (the objects to exclude from the analysis, if the export lists them) and 'README.txt'. The tifs
+    are uncompressed ImageJ tifs with the voxel size in micrometer and the ids as display range. Above 4 GB (s0)
+    they are written as ImageJ does it: not as BigTIFF but with one image description and all planes one after the
+    other, so that Fiji opens them directly or as a virtual stack. The tifs only exist in the archive.
+
+    Args:
+        export_path: The OME-Zarr of export_segmentations.
+        level: The scale level.
+        output_path: The path of the zip archive, by default get_tif_archive_path(level).
+    """
+    output_path = get_tif_archive_path(level) if output_path is None else output_path
+    name = os.path.splitext(os.path.basename(output_path))[0]
+    folder = os.path.join(os.path.dirname(output_path), f".{name}")
+    assert not os.path.exists(folder), f"{folder} exists."
+    os.makedirs(folder)
+    export = zarr.open_group(export_path, mode="r")
+    voxel_size = [vs / 1000 for vs in get_level_voxel_size(level)]
+
+    files, counts = [], {}
+    for image in ("cells", "nuclei"):
+        t0 = time.time()
+        array = export[image][f"s{level}"]
+        ids = np.unique(export[image][f"s{max(level, TIF_RANGE_LEVEL)}"][:])
+        counts[image] = int(np.count_nonzero(ids))
+        path = os.path.join(folder, f"{image}_s{level}.tif")
+        tifffile.imwrite(
+            path, _iterate_planes(array), shape=array.shape, dtype=array.dtype, imagej=True, truncate=True,
+            resolution=(1 / voxel_size[2], 1 / voxel_size[1]),
+            metadata={"axes": "ZYX", "spacing": voxel_size[0], "unit": "micron", "min": 0, "max": int(ids.max())},
+        )
+        files.append(path)
+        print(f"{image}: {array.shape} {array.dtype}, {os.path.getsize(path) / 1e9:.1f} GB in {time.time() - t0:.0f} s",
+              flush=True)
+
+    excluded = export.attrs.get("excluded", [])
+    if excluded:
+        files.append(os.path.join(folder, "excluded.csv"))
+        with open(files[-1], "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(excluded[0]))
+            writer.writeheader()
+            writer.writerows(excluded)
+    files.append(os.path.join(folder, "README.txt"))
+    with open(files[-1], "w") as f:
+        f.write(TIF_README.format(
+            level=level, shape=tuple(array.shape), voxel_size=" x ".join(f"{vs:g}" for vs in voxel_size),
+            n_cells=counts["cells"], n_nuclei=counts["nuclei"], size=os.path.getsize(files[0]) / 1e9,
+            raw_note="" if level == 0 else f", level s{level} of its OME-Zarr",
+            excluded=TIF_README_EXCLUDED if excluded else "", export_path=export_path,
+        ))
+
+    t0 = time.time()
+    with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        for path in files:
+            archive.write(path, arcname=os.path.join(name, os.path.basename(path)))
+    shutil.rmtree(folder)
+    print(
+        f"Saved {output_path}: {[os.path.basename(path) for path in files]}, "
+        f"{os.path.getsize(output_path) / 1e6:.0f} MB in {time.time() - t0:.0f} s", flush=True,
     )
 
 
@@ -3117,14 +3242,23 @@ def main():
         "export_segmentations", help="Export the cells and nuclei as an OME-Zarr with two multiscale label images.",
     )
     export.add_argument("--output_path", default=EXPORT_PATH)
-    export.add_argument("--nuclei", default="joined", choices=["watershed", "merged", "joined"])
+    export.add_argument("--nuclei", default="updated", choices=["watershed", "merged", "joined", "updated"])
     export.add_argument("--num_workers", type=int, default=len(os.sched_getaffinity(0)))
 
     contours = subparsers.add_parser(
         "export_contours", help="Export a level of the inverted raw and the contours of cells and nuclei for Fiji.",
     )
     contours.add_argument("--zarr_path", default=OUTPUT_PATH)
+    contours.add_argument("--export_path", default=EXPORT_PATH)
     contours.add_argument("--level", type=int, default=CONTOUR_LEVEL)
+    contours.add_argument("--output_path", default=None)
+
+    tifs = subparsers.add_parser(
+        "export_tifs", help="Export a level of the exported cells and nuclei as label tifs for Fiji in a zip archive.",
+    )
+    tifs.add_argument("--export_path", default=EXPORT_PATH)
+    tifs.add_argument("--level", type=int, default=TIF_LEVEL)
+    tifs.add_argument("--output_path", default=None)
 
     pyramids = subparsers.add_parser(
         "downsample_segmentations", help="Write the pyramids of the cell and nucleus segmentations up to s3.",
@@ -3237,7 +3371,9 @@ def main():
     elif args.task == "export_segmentations":
         export_segmentations(args.output_path, args.nuclei, args.num_workers)
     elif args.task == "export_contours":
-        export_contours(args.zarr_path, level=args.level)
+        export_contours(args.zarr_path, export_path=args.export_path, level=args.level, output_path=args.output_path)
+    elif args.task == "export_tifs":
+        export_tifs(args.export_path, args.level, args.output_path)
     elif args.task == "check_cells_volume":
         assert len(args.block_shapes) % 3 == 0 and len(args.ws_halos) == len(args.block_shapes)
         check_cells_volume(
