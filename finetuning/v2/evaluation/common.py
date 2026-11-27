@@ -559,11 +559,14 @@ SLIVER_DATASETS = frozenset(DATASETS_3D_LM + ["densecell"])
 # single crop is no measure: a plantseg_root crop with a few elongated cells has a median of 450000 voxels, and a
 # tenth of that is more than the smallest whole cell.
 SLIVER_FRACTION = 0.1
-# Dense datasets whose label zero is not scored by the CREMI score: zero marks voxels without annotation (for
-# platynereis_cells the neuropil and the cells that were left out, for synapsenet_compartments the unlabelled
-# parts of the tomogram, see load_volume), not a segment to match.
-# The other partially annotated dense datasets (e.g. synapseweb) keep the scoring of the reported results.
-CREMI_IGNORE_ZERO_LABEL = {"platynereis_cells", "synapsenet_compartments"}
+# The label that the CREMI score does not score, for every dense dataset (user, 2026-11-27), see `cremi_metrics`.
+# Zero marks voxels without annotation: the unlabelled parts of a partially annotated volume (up to half of the
+# liconn and xpress crops, a fifth of the zebrafinch_j0126 and snemi crops), the neuropil and the left-out cells of
+# platynereis_cells, the padding around a volume. The dense segmentation has no background, so its segments in
+# these voxels would count as splits of one large object if zero were scored like a segment. Ignoring zero changes
+# nothing for a volume without it. Before 2026-11-27 only platynereis_cells and synapsenet_compartments were
+# scored this way; their results are the same as before.
+CREMI_IGNORE_LABEL = 0
 
 # Everything outside the main in-domain and OOD panels: supplementary, held-out platform and reserve sets.
 # The submission script skips them unless asked for them.
@@ -2609,16 +2612,17 @@ def load_volume(
         # The neuropil is not resolved into cells and carries the ignore label. Zero is unlabelled as well: the
         # cells are labelled without a background, so zero marks cells that were left out (it occurs only in the
         # tuning volumes; the test region has no zero label). Both are excluded from scoring: the segmentation is
-        # cleared there, and the CREMI score ignores label zero (CREMI_IGNORE_ZERO_LABEL).
+        # cleared there, and the CREMI score ignores label zero (CREMI_IGNORE_LABEL).
         ignore = (labels == datasets.electron_microscopy.platynereis.CELL_IGNORE_LABEL) | (labels == 0)
         valid_roi = ~ignore
         labels[ignore] = 0
     elif dataset_name == "synapseweb":
-        # Annotation covers only part of the core, so the unlabelled voxels are excluded from scoring.
+        # Annotation covers only part of the core, so the unlabelled voxels are excluded from scoring: the
+        # segmentation is cleared there, and the CREMI score ignores label zero (CREMI_IGNORE_LABEL).
         valid_roi = labels != 0
     elif dataset_name == "synapsenet_compartments":
         # The compartments are labelled without a background: zero marks the parts of the tomogram that were not
-        # annotated. They are excluded from scoring, also by the CREMI score (CREMI_IGNORE_ZERO_LABEL).
+        # annotated. They are excluded from scoring, also by the CREMI score (CREMI_IGNORE_LABEL).
         valid_roi = labels != 0
     elif dataset_name == "plantseg_root":
         # Label 1 is the background, label 0 the unannotated deeper tissue.
@@ -3249,11 +3253,46 @@ def postprocess_unisam2(out, dataset_name, model_type, params=None):
     return seg.astype("uint32")
 
 
+def cremi_metrics(seg, labels, with_zero=False):
+    """Compute the CREMI score of a dense segmentation and its components, without the voxels of label zero.
+
+    Label zero of the ground truth is the ignore label of every dense dataset (CREMI_IGNORE_LABEL): its voxels are
+    left out of the ground truth and of the segmentation. The parameter search and the test both score with this
+    function.
+
+    Args:
+        seg: The segmentation.
+        labels: The ground truth.
+        with_zero: Also compute 'cremi_with_zero', the score that counts label zero as an object. Results from
+            before 2026-11-27 were scored this way (except platynereis_cells and synapsenet_compartments), so it
+            tells whether a recomputation reproduces them.
+
+    Returns:
+        The metrics 'cremi', 'vi_split', 'vi_merge' and 'adapted_rand', and 'ignored_fraction', the share of the
+        voxels that are not scored.
+    """
+    from elf.evaluation import cremi_score
+
+    vi_split, vi_merge, adapted_rand, cremi = cremi_score(seg, labels, ignore_gt=[CREMI_IGNORE_LABEL])
+    metrics = {
+        "cremi": float(cremi),
+        "vi_split": float(vi_split),
+        "vi_merge": float(vi_merge),
+        "adapted_rand": float(adapted_rand),
+        "ignored_fraction": float(np.mean(np.asarray(labels) == CREMI_IGNORE_LABEL)),
+    }
+    if with_zero:
+        metrics["cremi_with_zero"] = float(cremi_score(seg, labels)[3])
+    return metrics
+
+
 def run_dataset_evaluation(gt_paths, prediction_paths, dataset_name: str, save_path: str):
     """Score a dataset and write the results to 'save_path'.
 
     The instance segmentations report the symmetric best Dice (SBD) next to mSA. Neuron segmentation in EM is
-    ranked by the CREMI score instead of mSA. Those datasets report the VI and adapted-Rand components instead.
+    ranked by the CREMI score instead of mSA. Those datasets report the VI and adapted-Rand components instead,
+    the share of voxels with the ignore label zero ('ignored_fraction') and the score from before 2026-11-27, which
+    counted label zero as an object ('cremi_with_zero'), see `cremi_metrics`.
 
     Args:
         gt_paths: The ground-truth label arrays, or the paths to them.
@@ -3281,19 +3320,8 @@ def run_dataset_evaluation(gt_paths, prediction_paths, dataset_name: str, save_p
         return results
 
     import pandas as pd
-    from elf.evaluation import cremi_score
 
-    ignore_gt = [0] if dataset_name in CREMI_IGNORE_ZERO_LABEL else None
-    rows = []
-    for gt, seg in zip(gt_paths, prediction_paths):
-        vi_split, vi_merge, adapted_rand, cremi = cremi_score(seg, gt, ignore_gt=ignore_gt)
-        rows.append({
-            "cremi": float(cremi),
-            "vi_split": float(vi_split),
-            "vi_merge": float(vi_merge),
-            "adapted_rand": float(adapted_rand),
-        })
-
+    rows = [cremi_metrics(seg, gt, with_zero=True) for gt, seg in zip(gt_paths, prediction_paths)]
     results = pd.DataFrame(rows).mean().to_frame().T
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     results.to_csv(save_path, index=False)
@@ -3464,6 +3492,36 @@ def evaluate_samples(
     os.replace(tmp_path, save_path)
     print(results)
     return results
+
+
+def read_search_params(path, dataset_name, checkpoint_id, allow_check=False):
+    """Return the parameters of a dataset from the result of a search over the datasets of a setting.
+
+    The file is the 'best_parameters.json' of a session of `decoders/tune_decoder.py`: the best parameters over the
+    tuning datasets of one setting (2d, 3d or dense) and the 'min_size' per tuning dataset.
+
+    Args:
+        path: The file with the result of the search.
+        dataset_name: The dataset to segment.
+        checkpoint_id: The checksum of the weights that are evaluated. The search must be of the same weights.
+        allow_check: Accept the result of a check of the search (small grid or few samples).
+
+    Returns:
+        The parameters.
+    """
+    with open(path) as f:
+        entry = json.load(f)
+    setting = "dense" if dataset_name in DATASETS_DENSE else ("3d" if dataset_name in DATASETS_3D else "2d")
+    if entry["data"] != setting:
+        raise ValueError(f"'{path}' holds the parameters of '{entry['data']}', '{dataset_name}' needs '{setting}'.")
+    if entry["checksum"] != checkpoint_id:
+        raise ValueError(f"'{path}' was searched for the weights {entry['checksum']}, not for {checkpoint_id}.")
+    if (entry.get("check") or entry.get("n_samples")) and not allow_check:
+        raise ValueError(f"'{path}' is the result of a check (small grid or few samples).")
+    params = dict(entry["params"])
+    if dataset_name in entry.get("min_size_per_dataset", {}):
+        params["min_size"] = int(entry["min_size_per_dataset"][dataset_name])
+    return params
 
 
 def read_tuned_params(
@@ -3911,14 +3969,20 @@ def result_is_current(path, dataset_name):
     The results of the datasets in SLIVER_DATASETS hold the column 'gt_slivers' (the number of ground-truth slivers
     left out) since they are scored without slivers, and 'mSA_with_slivers', the score from before. A result without
     'gt_slivers' was scored with the slivers and is computed again.
+    The results of the datasets in DATASETS_DENSE hold the column 'ignored_fraction' since their CREMI score ignores
+    label zero (`cremi_metrics`). A result without it counted label zero as an object and is computed again.
     """
     if not os.path.exists(path):
         return False
-    if dataset_name not in SLIVER_DATASETS:
+    if dataset_name in SLIVER_DATASETS:
+        marker = "gt_slivers"
+    elif dataset_name in DATASETS_DENSE:
+        marker = "ignored_fraction"
+    else:
         return True
     with open(path) as f:
         columns = f.readline().strip().split(",")
-    return "gt_slivers" in columns or "skipped" in columns
+    return marker in columns or "skipped" in columns
 
 
 def severed_objects(gt, max_span=2):

@@ -243,8 +243,10 @@ two samples per dataset, so these numbers only show that the pipeline works):
 
 `tune_decoder.py` runs the search of `finetuning/v2/evaluation/parameter_search.py` (`search`) for a decoder
 checkpoint, once per setting (`TUNING_DATA.md` lists the tuning data): `2d` (flow, 31 datasets), `3d` (flow, 14
-datasets) and `dense` (multicut, 6 datasets). The run of the epoch 25 checkpoint below used the pools before
-2026-11-23: 2d without `orgline` (30 datasets), dense with `liconn` and `xpress` (8 datasets).
+datasets) and `dense` (multicut, 8 datasets). The run of the epoch 25 checkpoint below used the pools before
+2026-11-23: 2d without `orgline` (30 datasets), dense with `liconn` and `xpress` (8 datasets). Every dense search
+and dense test from before 2026-11-27 scored label zero as an object in the CREMI score (`TUNING_DATA.md`,
+"Update 2026-11-27"); these numbers are not comparable with later ones.
 
 ```bash
 python tune_decoder.py predict --checkpoint <staged checkpoint> --data 3d     # GPU, minutes
@@ -330,14 +332,24 @@ of the test samples. A fifth job computes the reference results that have no res
 python submit_checkpoint_evaluation.py --checkpoint <root>/checkpoints/hiera_u_hvit_t_cells/best.pt [--dry-run]
 python evaluate_decoder.py reference summary
 python evaluate_decoder.py report -e <root>/evaluation/<staged checkpoint>
+# Also search the parameters of the reference model for a setting and test it with them (one more job):
+python submit_checkpoint_evaluation.py --checkpoint <staged checkpoint> --data dense --reference_search dense
+python evaluate_decoder.py report -e <root>/evaluation/<staged checkpoint> --reference_parameters tuned
 ```
+
+- `--reference_search <setting>` runs the same search for the registry decoder of `hvit_t_cells`
+  (`tune_decoder.py --checkpoint hvit_t_cells`, session `<root>/tuning/hvit_t_cells_registry_<checksum>/<setting>`,
+  predictions with the library tiling like the reference results) and then the reference test with
+  `evaluate_automatic_segmentation.py --params_file`. The results are named `..._ais_tuned_...` and lie next to the
+  ones with the library defaults in `<root>/evaluation/reference_hvit_t/results`.
 
 - No job waits for the result of another one; the second 3d job only waits for the start of the first
   (`--dependency=after`) and ends after 3 h without an open task. All jobs have `--requeue` and continue after a
   preemption: prediction markers, finished sweeps and the per-sample result rows (`--n_shards`) are kept, and a
   search with a result is not started again.
-- Sizes (`JOBS`): 2d 2 x 32 CPUs / 48 GB, 3d 2 x 32 CPUs / 64 GB, dense 16 CPUs / 40 GB, reference 4 CPUs /
-  32 GB. Measured for the epoch 29 checkpoint: 3d search 970 core hours (19.7 h with the two jobs, 42 GB peak),
+- Sizes (`JOBS`): 2d 2 x 32 CPUs / 48 GB, 3d 2 x 32 CPUs / 64 GB, dense 16 CPUs / 40 GB, reference 8 CPUs /
+  32 GB, reference search 16 CPUs / 40 GB. The packages `micro_sam`, `torch_em` and `elf` are copied into the
+  code folder. Measured for the epoch 29 checkpoint: 3d search 970 core hours (19.7 h with the two jobs, 42 GB peak),
   3d test 2 h per job, dense 5.7 h in total, reference 7.2 h. The 2d search needs 1200 - 1400 core hours (the
   epoch 25 search: 591 in the driver and 568 in its four worker jobs), too much for one job of 32 CPUs in 48 h.
 
@@ -383,6 +395,39 @@ State 2026-11-26 15:45: the run is complete. 17569447 and 17569448 finished at 1
 11:52, the last `orgline` shards took about 8 h each), no failed dataset. `report_tuned.csv` holds all 86 datasets,
 each with a result of the checkpoint and a reference result with the same scoring.
 
+Dense rerun of 2026-11-27 (CREMI score without label zero, `liconn` and `xpress` back in the dense pool, see
+`TUNING_DATA.md`, "Update 2026-11-27"), submitted with
+`submit_checkpoint_evaluation.py --checkpoint <staged epoch 29> --data dense --reference_search dense --time 12:00:00`:
+
+| Job | Steps | Slurm job |
+|---|---|---|
+| `deceval_dense_epoch29_9a812c61` | predict `liconn` + `xpress`, dense search (8 datasets), test of 15 datasets | 17623024 |
+| `decref_search_hvit_t_dense` | reference model: predict, dense search (8 datasets), test of 15 datasets with its result | 17623025 |
+| `decref_hvit_t` | reference (hvit_t, library defaults) for the 15 dense datasets | 17623026 |
+
+Code folder `<root>/evaluation/hiera_u_hvit_t_cells_epoch29_9a812c61/jobs/code_20261127_135903`. The dense results
+from before (search session, test results, reference results) are in `superseded_20261127_zero_label/` folders of
+the session, the evaluation folder and `reference_hvit_t`.
+
+How the rerun went (2026-11-27):
+- 17623026 completed (3 h 22 min, 15 datasets).
+- 17623024 and 17623025 were preempted after 2 h 56 min and did not start again (no node of `grete:preemptible`
+  with a free `1g.10gb` slice had 16 idle CPUs); they were cancelled. Both searches were finished in an interactive
+  session from the same code folder and the same queues (the tasks that were done are kept): `hvit_t` at 17:47,
+  Hiera-U at 18:49. No task failed.
+- Test of `hvit_t` with its search result: job 17630700 on `grete:interactive`
+  (`reference_hvit_t/jobs/decref_tuned_hvit_t_dense_interactive_20261127.sh`, test loop only). Test of the Hiera-U
+  checkpoint with its search result: in an interactive session (`evaluate_decoder.py run --params
+  <best_parameters.json> --datasets <the 15 dense datasets>`, log `logs/local_dense_test_20261127.log`), done 21:14.
+- Found on the way: the slots of `tune_decoder.py search` shared one worker thread, and a slot that found no open
+  task between two stages was not started again, so a later stage could run on one slot. Each slot is its own
+  thread now and is started again for every stage (`QueueRunner.submit_workers`).
+
+Results: `TUNING_EVALUATION_RESULTS.md`, "Dense rerun of 2026-11-27". The comparison of the old and new scores is
+written by `<root>/param_analysis/zero_label_20261127/compare_rerun.py` (`compare_rerun.csv`), the reports by
+`evaluate_decoder.py report -e <folder>` (reference with the library defaults) and the same with
+`--reference_parameters tuned` (reference with its own search result).
+
 ## Post-processing parameter search: offline analysis
 
 `analyze_parameter_search.py` (`cache`, `run`, `report`) analyses the existing sweeps without predicting anything: the
@@ -412,7 +457,7 @@ The v6 search tuned the 3D parameters on one 32x512x512 center crop per validati
   CREMI score in tuning (`parameter_search.IN_DOMAIN_CELLS["dense"]`) and in the test evaluation
   (`common.DATASETS_DENSE`). Its labels hold many small objects that are no cells (ids of a few hundred voxels on
   one or two sections, specks split off the cells), which mSA counts like cells. Label zero and the neuropil label
-  are not scored (`common.CREMI_IGNORE_ZERO_LABEL`). The tuning volumes 7-8 are read inside the bounding box of
+  are not scored (`common.CREMI_IGNORE_LABEL`). The tuning volumes 7-8 are read inside the bounding box of
   their labels (`common.PLATYNEREIS_CELLS_VAL_ROIS`; half of each volume is an unlabelled halo that shows cells)
   and tune on the 6 tiles of these boxes (`tuning_crops.json`). The test crops already tile the labelled box of
   volume 9, which holds no zero label. The sparse scores of the earlier tiles: `tune_set/superseded_20261120*/`.

@@ -315,12 +315,131 @@ def test_compute_metrics_ignores_label_zero_in_the_cremi_score():
     labels[:, :4, :4], labels[:, :4, 4:] = 1, 2  # The lower half is not annotated.
     seg = np.zeros_like(labels)
     seg[:, :4] = 1  # Merges the two objects.
-    scored = parameter_search.compute_metrics(seg, labels, "dense", valid_roi=labels > 0)
-    ignored = parameter_search.compute_metrics(seg, labels, "dense", valid_roi=labels > 0, ignore_zero=True)
-    # The unannotated half matches trivially, which hides a part of the merge unless it is ignored.
-    assert ignored["vi_merge"] == pytest.approx(1.0)
-    assert scored["vi_merge"] == pytest.approx(0.5)
-    assert ignored["cremi"] > scored["cremi"]
+    metrics = parameter_search.compute_metrics(seg, labels, "dense")
+    assert metrics["vi_merge"] == pytest.approx(1.0)
+    assert metrics["vi_split"] == pytest.approx(0.0)
+    assert metrics["ignored_fraction"] == pytest.approx(0.5)
+    # What is segmented in the voxels of label zero does not change the score: the dense mode has no background.
+    filled = seg.copy()
+    filled[:, 4:] = np.arange(2, 34).reshape(1, 4, 8)
+    assert parameter_search.compute_metrics(filled, labels, "dense")["cremi"] == pytest.approx(metrics["cremi"])
+
+
+def test_cremi_metrics_keep_the_score_that_counts_label_zero():
+    import numpy as np
+    import common
+    from elf.evaluation import cremi_score
+
+    labels = np.zeros((4, 8, 8), dtype="uint32")
+    labels[:, :4, :4], labels[:, :4, 4:] = 1, 2
+    seg = np.ones_like(labels)
+    seg[:, 4:] = np.arange(2, 34).reshape(1, 4, 8)  # Segments in the voxels without annotation.
+    metrics = common.cremi_metrics(seg, labels, with_zero=True)
+    assert metrics["cremi"] == pytest.approx(cremi_score(seg, labels, ignore_gt=[0])[3])
+    # The score from before 2026-11-27 counts the segments in label zero as splits of one object.
+    assert metrics["cremi_with_zero"] == pytest.approx(cremi_score(seg, labels)[3])
+    assert metrics["cremi_with_zero"] != pytest.approx(metrics["cremi"])
+    assert "cremi_with_zero" not in common.cremi_metrics(seg, labels)
+    # A volume without label zero scores the same either way.
+    full = np.where(labels == 0, 3, labels)
+    metrics = common.cremi_metrics(seg, full, with_zero=True)
+    assert metrics["ignored_fraction"] == 0.0
+    assert metrics["cremi_with_zero"] == pytest.approx(metrics["cremi"])
+
+
+def test_dense_results_that_scored_label_zero_are_not_current(tmp_path):
+    import numpy as np
+    import common
+
+    labels = np.zeros((4, 8, 8), dtype="uint32")
+    labels[:, :4, :4], labels[:, :4, 4:] = 1, 2
+    path = str(tmp_path / "cremi.csv")
+    results = common.run_dataset_evaluation([labels], [labels.copy()], "cremi", path)
+    assert results["cremi"].iloc[0] == pytest.approx(0.0)
+    assert {"ignored_fraction", "cremi_with_zero"} <= set(results.columns)
+    assert common.result_is_current(path, "cremi")
+    # A result from before 2026-11-27 has no column for the ignored voxels and is computed again.
+    old = str(tmp_path / "old.csv")
+    pd.DataFrame([{"cremi": 1.0, "vi_split": 1.0, "vi_merge": 0.0, "adapted_rand": 0.5}]).to_csv(old, index=False)
+    assert not common.result_is_current(old, "cremi")
+    assert common.result_is_current(old, "lucchi")
+
+    # The same holds for a sweep of the parameter search.
+    config = parameter_search.tuning_config("cremi", "ais")
+    assert config["ignore_zero"] and not parameter_search.tuning_config("gonuclear", "ais")["ignore_zero"]
+    row = {key: values[0] for key, values in config["grid"].items()}
+    old_sweep, new_sweep = tmp_path / "old_sweep.csv", tmp_path / "new_sweep.csv"
+    pd.DataFrame([{**row, "cremi_mean": 1.0}]).to_csv(old_sweep, index=False)
+    pd.DataFrame([{**row, "cremi_mean": 0.3, "ignored_fraction_mean": 0.2}]).to_csv(new_sweep, index=False)
+    assert not parameter_search.sweep_cache_is_current(old_sweep, config)
+    assert parameter_search.sweep_cache_is_current(new_sweep, config)
+
+
+def test_dense_sweeps_that_scored_label_zero_are_not_done(tmp_path):
+    import numpy as np
+
+    context = {"experiment_folder": str(tmp_path), "identities": {"hvit_t": "abc"}, "lock": threading.Lock()}
+    sweep = {
+        "root": str(tmp_path), "mode": "ais", "model": "hvit_t", "model_type": "hvit_t", "dataset": "cremi",
+        "params_file": None,
+    }
+    csv_path = parameter_search.sweep_csv(context, sweep)
+    os.makedirs(os.path.dirname(csv_path))
+    np.savez(parameter_search.per_image_path(csv_path), params="[]")
+    pd.DataFrame([{"beta": 0.5, "cremi_mean": 1.0}]).to_csv(csv_path, index=False)
+    assert not parameter_search.sweep_is_done(context, sweep)
+    pd.DataFrame([{"beta": 0.5, "cremi_mean": 0.3, "ignored_fraction_mean": 0.2}]).to_csv(csv_path, index=False)
+    assert parameter_search.sweep_is_done(context, sweep)
+
+
+def test_load_volume_separates_the_pieces_of_an_id_and_keeps_label_zero(tmp_path):
+    import h5py
+    import numpy as np
+    import common
+
+    labels = np.zeros((4, 16, 16), dtype="uint32")
+    labels[:, :4, :], labels[:, 12:, :] = 7, 7  # One id in two pieces that do not touch.
+    labels[:, 4:8, :] = 3  # Rows 8-11 are not annotated.
+    path = str(tmp_path / "volume.h5")
+    with h5py.File(path, "w") as f:
+        f.create_dataset("raw", data=np.random.RandomState(0).rand(*labels.shape).astype("float32"))
+        f.create_dataset("labels", data=labels)
+    # 'cremi' has no special handling in load_volume; every dense dataset takes this path.
+    _, loaded, valid_roi = common.load_volume(path, path, "raw", "labels", "cremi", crop_shape=labels.shape)
+    assert valid_roi is None
+    assert np.array_equal(loaded == 0, labels == 0)
+    assert len(np.unique(loaded[labels == 7])) == 2
+    assert loaded[0, 0, 0] != loaded[0, 15, 0]
+    assert len(np.unique(loaded[labels == 3])) == 1
+
+
+def test_read_search_params_checks_the_setting_and_the_weights(tmp_path):
+    import json
+    import common
+
+    path = str(tmp_path / "best_parameters.json")
+    entry = {
+        "checksum": "abc", "data": "dense", "params": {"beta": 0.5, "sigma": 1.0}, "min_size_per_dataset": {},
+        "check": False, "n_samples": None,
+    }
+    with open(path, "w") as f:
+        json.dump(entry, f)
+    assert common.read_search_params(path, "cremi", "abc") == {"beta": 0.5, "sigma": 1.0}
+    with pytest.raises(ValueError, match="needs '3d'"):
+        common.read_search_params(path, "gonuclear", "abc")
+    with pytest.raises(ValueError, match="not for other"):
+        common.read_search_params(path, "cremi", "other")
+    # The result of a check of the search is only read for a check of the test.
+    with open(path, "w") as f:
+        json.dump({**entry, "check": True}, f)
+    with pytest.raises(ValueError, match="result of a check"):
+        common.read_search_params(path, "cremi", "abc")
+    assert common.read_search_params(path, "cremi", "abc", allow_check=True)["beta"] == 0.5
+    # A sparse setting takes the 'min_size' of the dataset where it was tuned on.
+    with open(path, "w") as f:
+        json.dump({**entry, "data": "3d", "params": {"min_size": 500}, "min_size_per_dataset": {"gonuclear": 1000}}, f)
+    assert common.read_search_params(path, "gonuclear", "abc") == {"min_size": 1000}
+    assert common.read_search_params(path, "nis3d", "abc") == {"min_size": 500}
 
 
 @pytest.mark.parametrize("dataset", ["platynereis_cells", "synapsenet_compartments"])
@@ -328,20 +447,22 @@ def test_volume_filling_em_cells_are_tuned_and_scored_as_dense_datasets(dataset)
     import common
 
     assert dataset in common.DATASETS_DENSE
-    assert dataset in common.CREMI_IGNORE_ZERO_LABEL
     assert dataset in parameter_search.IN_DOMAIN_CELLS["dense"]
     assert dataset not in parameter_search.IN_DOMAIN_CELLS["3d"]
     assert parameter_search.tuning_config(dataset, "ais")["metric_mode"] == "dense"
     assert dataset in common.TUNING_CROPS
 
 
-@pytest.mark.parametrize("dataset", ["liconn", "xpress"])
-def test_liconn_and_xpress_are_evaluated_but_not_tuned_on(dataset):
+def test_the_dense_pool_holds_every_in_domain_dataset_with_tuning_data():
     import common
 
-    assert dataset in common.DATASETS_DENSE
-    assert dataset in common.DATASETS_3D_EM_NEURITE_ID
-    assert dataset not in parameter_search.search_datasets(None, ["dense"], "cells")["dense"]
+    pool = parameter_search.search_datasets(None, ["dense"], "cells")["dense"]
+    assert pool == [
+        "cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress", "platynereis_cells",
+        "synapsenet_compartments",
+    ]
+    # liconn and xpress are back since the CREMI score ignores label zero (2026-11-27).
+    assert all(dataset in common.DATASETS_DENSE for dataset in pool)
 
 
 def test_orgline_is_in_the_2d_tuning_pool():

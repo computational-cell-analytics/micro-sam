@@ -14,6 +14,8 @@ Usage examples:
     python evaluate_automatic_segmentation.py -d livecell -m hvit_b -e <exp> --mode ais
     python evaluate_automatic_segmentation.py -d gonuclear -m hvit_b -e <exp> --mode apg
     python evaluate_automatic_segmentation.py -d cremi -m hvit_b -e <exp> --mode ais --skip_tuning
+    python evaluate_automatic_segmentation.py -d cremi -m hvit_t -e <exp> --mode ais -c <decoder> \
+        --params_file <session>/best_parameters.json
 """
 
 import os
@@ -31,7 +33,8 @@ from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder
 from common import (
     DATA_ROOT, DATASETS_2D, DATASETS_3D, DATASET_SPACING, MODEL_TYPES, MODES, VOLUME_SPEED_OPTIONS, build_model,
     check_data_download, evaluate_samples, has_val_split, load_apg_overrides, postprocess_unisam2, predict_unisam2,
-    pad_to_min_shape, read_tuned_params, resolve_checkpoint_identity, result_is_current, use_tmpdir_for_embeddings,
+    pad_to_min_shape, read_search_params, read_tuned_params, resolve_checkpoint_identity, result_is_current,
+    use_tmpdir_for_embeddings,
 )
 
 # The 2d datasets whose test images are smaller than their training images at the same pixel size. They are
@@ -183,6 +186,11 @@ def main():
              "Requires -c/--checkpoint for the decoder half too.",
     )
     parser.add_argument("--skip_tuning", action="store_true", help="Evaluate with the library defaults.")
+    parser.add_argument(
+        "--params_file", type=str, default=None,
+        help="The 'best_parameters.json' of a search over the datasets of a setting (decoders/tune_decoder.py). "
+        "Its parameters are used instead of the ones tuned on the dataset; the results are named 'tuned'.",
+    )
     parser.add_argument("--n_samples", type=int, default=None, help="Score only the first N samples, for a check.")
     parser.add_argument("--sample_index", type=int, default=None, help="Score only this sample, as one array task.")
     parser.add_argument("--n_shards", type=int, default=None, help="Split the samples over this many array tasks.")
@@ -213,6 +221,8 @@ def main():
     check_data_download(args.dataset_name, args.input_path)
     if args.apg_params is not None and args.mode != "apg":
         parser.error("--apg_params applies to --mode apg only.")
+    if args.params_file is not None and args.skip_tuning:
+        parser.error("Pass either --params_file or --skip_tuning.")
 
     print("Device:", torch.cuda.get_device_name() if torch.cuda.is_available() else "CPU")
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -231,7 +241,13 @@ def main():
     )
     params = None
     tuned = False
-    if not args.skip_tuning:
+    if args.params_file is not None:
+        params = read_search_params(
+            args.params_file, args.dataset_name, checkpoint_id, allow_check=args.n_samples is not None
+        )
+        tuned = True
+        print(f"{args.dataset_name}: {params}")
+    elif not args.skip_tuning:
         if has_val_split(args.dataset_name):
             tuning_root = args.tuning_root or os.path.join(args.experiment_folder, "tuning")
             tuning_root = os.path.join(tuning_root, args.mode)

@@ -1,6 +1,6 @@
 # Tuning and test data of the post-processing search (cells)
 
-State of 2026-11-23, branch `ais-hiera-training`. The tables are read from the code: the tuning pools are
+State of 2026-11-27, branch `ais-hiera-training`. The tables are read from the code: the tuning pools are
 `parameter_search.IN_DOMAIN_CELLS`, the pinned tuning crops `evaluation/tuning_crops.json`, the test panels
 `PANEL_DATASETS` of `scripts/plotting/v2/for_paper/plots_for_figure{2,3}.py`, and the counts `common.n_samples`.
 
@@ -11,7 +11,7 @@ is fine; three datasets were scored in a way that does not fit them.
 
 | dataset | finding | now |
 |---|---|---|
-| `platynereis_cells` | Half of each tuning volume is an unlabelled halo that shows cells; label zero inside marks cells that were left out; many label ids are no cells (a few hundred voxels on 1-2 sections). | Multicut + CREMI score, in tuning and test (`common.DATASETS_DENSE`). Label zero and the neuropil label are not scored (`common.CREMI_IGNORE_ZERO_LABEL`). Tuning reads the volumes inside the bounding box of their labels (`common.PLATYNEREIS_CELLS_VAL_ROIS`), 6 tiles. The test crops already tile the labelled box of volume 9. |
+| `platynereis_cells` | Half of each tuning volume is an unlabelled halo that shows cells; label zero inside marks cells that were left out; many label ids are no cells (a few hundred voxels on 1-2 sections). | Multicut + CREMI score, in tuning and test (`common.DATASETS_DENSE`). Label zero and the neuropil label are not scored (`common.CREMI_IGNORE_LABEL`, since 2026-11-27 the rule of every dense dataset). Tuning reads the volumes inside the bounding box of their labels (`common.PLATYNEREIS_CELLS_VAL_ROIS`), 6 tiles. The test crops already tile the labelled box of volume 9. |
 | `synapsenet_compartments` | Label zero (2-46 % of a tile) marks unannotated parts; more than half of the objects are fragments below 1000 voxels next to compartments of 1e5-1e6 voxels. | Multicut + CREMI score, in tuning and test; label zero not scored. One tile per tuning tomogram, 8 tiles. |
 | `cartocell` | The cells are thin (about 12 x 17 x 17 voxels): the ground truth shrunk by one voxel scores mSA 0.01. The 2 volumes of the validation folder are of the `train_M1` acquisition ("cyst ..."), which the test split does not hold. | Flow-based segmentation, ranked and compared by SA50 (`common.DATASETS_SA50`). Tuning on 9 tiles of the 6 test volumes that moved into tuning (`common.CARTOCELL_TUNING_TEST_VOLUMES`); the test split holds the other 54 volumes (68 crops). |
 
@@ -40,7 +40,7 @@ Update 2026-11-23 (after the comparison of the epoch 25 checkpoint with the refe
   it; no other 2D tuning dataset has such objects. The broad grid holds the longer flow travel these objects need:
   on the validation split the epoch 25 checkpoint scores mSA 0.287 at the 2D winner (`n_iter` 50, `dt` 1) and 0.379
   at twice the travel, the same for `n_iter` 50 with `dt` 2 (the form in the grid) and `n_iter` 100 with `dt` 1.
-- `liconn` and `xpress` are out of the dense pool. They are no EM volumes (expansion microscopy, X-ray), have one
+- (Reverted on 2026-11-27, see below.) `liconn` and `xpress` are out of the dense pool. They are no EM volumes (expansion microscopy, X-ray), have one
   tuning crop each and decided the dense parameters: without them the search gives the parameters of the reference.
   Both are still evaluated: `liconn` in the EM neurites panel, `xpress` with the supplement datasets
   (`evaluate_decoder.SUPPLEMENT_DATASETS`; it is not in the panel because its test data is a single slab of 20
@@ -97,9 +97,42 @@ Update 2026-11-23 (after the comparison of the epoch 25 checkpoint with the refe
   index), and a search that is started again runs the sweeps of a later stage again if their combinations changed
   (`parameter_search.sweep_has_params`).
 
+Update 2026-11-27 (scoring of the dense datasets; user decision):
+- Label zero is the ignore label of every dataset that is scored by the CREMI score, in the parameter search and
+  in the test (`common.cremi_metrics`, `common.CREMI_IGNORE_LABEL`): its voxels are left out of the ground truth
+  and of the segmentation. Before, this held only for `platynereis_cells` and `synapsenet_compartments`; for the
+  other dense datasets label zero was scored as one object, and the segments of the dense mode (which has no
+  background) in it counted as splits. Label zero covers 53 % of the `xpress`, 43 % of the `liconn`, 35 % of the
+  `synapseweb`, 22 % of the `microns_basil`, 21 % of the `humanneurons`, 19 % of the `zebrafinch_j0126` and
+  `snemi` and 17 % of the `nisb` test crops; `cremi` and `fafb` have none, so their scores do not change. One
+  tuning crop each at the dense baseline, CREMI score with / without label zero: `zebrafinch_j0126` 1.333 / 0.298,
+  `liconn` 2.404 / 0.372, `xpress` 2.507 / 2.269, `hemibrain` 0.086 / 0.060.
+- `liconn` and `xpress` are in the dense pool again (8 datasets, 21 crops). They had decided the dense parameters
+  at the cost of the EM datasets because about half of their tuning crops is label zero.
+- The results hold `ignored_fraction` (the share of the voxels with label zero) and, in the test,
+  `cremi_with_zero` (the score from before, to check a recomputation against the old results). A result, sample
+  row or sweep of a dense dataset without `ignored_fraction` counts as not computed (`common.result_is_current`,
+  `parameter_search.sweep_cache_is_current`, `sweep_is_done`), and `evaluate_decoder.py report` does not compare
+  a result with the old scoring with one with the new scoring.
+- Connected components are applied to the labels of every tuning and test crop after cropping
+  (`common.load_volume`, `skimage.measure.label` with full connectivity; label zero is kept), so the pieces of an
+  id that do not touch in the crop are separate objects. This was the case before; a test checks it now.
+- Stale until they are computed again: every dense search and dense test result from before 2026-11-27, i.e. the
+  neurite numbers in `TUNING_EVALUATION_RESULTS.md` (epoch 25), the dense rows of the epoch 29 report of
+  2026-11-26, the neurite results of the baselines and of the other micro-sam2 models in the figure tables, and the
+  dense library defaults of `hvit_s`, `hvit_b` and `hvit_l` (`micro_sam/_model_settings.py`), which come from a
+  search with the old scoring. The dense defaults of `hvit_t` are the result of its search of 2026-11-27 (beta 0.4,
+  density_threshold 3.0, sigma 0.25, n_iter 100, dt 0.5; before: beta 0.5, sigma 0.5, n_iter 50). The old
+  results of the epoch 29 checkpoint and of the reference are in `superseded_20261127_zero_label/` folders next
+  to the new ones.
+- The reference model (registry `hvit_t_cells` decoder) gets its own dense search with the same tuning data, grid
+  and stages (`tune_decoder.py --checkpoint hvit_t_cells`), and a test with its result next to the test with the
+  library defaults (`submit_checkpoint_evaluation.py --reference_search dense`, `evaluate_decoder.py report
+  --reference_parameters tuned`).
+
 Open:
-- The dense search of the new decoder includes `platynereis_cells` and `synapsenet_compartments`; the dense defaults
-  of the previous decoder (the reference) were tuned on neurites only.
+- The figure tables (collector script of the baselines) and the other micro-sam2 models hold neurite results with
+  the old CREMI scoring.
 - The figure tables (collector script of the baselines) read mSA for cartocell.
 
 ## Next steps: rerunning the search and the evaluations
@@ -121,8 +154,9 @@ are in `README.md` (search drivers and test arrays on `grete:preemptible`, 10 GB
      about 7 %: expect about 1.7 times the earlier search, which took 24 h on 8 threads plus 7 h on 64 threads.
    - 2D: the stored session can continue. `predict` adds `orgline` (515 images), `search` reuses the sweeps of the
      other 30 datasets, sweeps `orgline` and runs the later stages again where the best combinations change.
-   - Dense: the stored session can continue. The sweeps of `liconn` and `xpress` are no longer read; the later
-     stages run again where the best combinations change. The earlier search took 2 h.
+   - Dense: a session from before 2026-11-27 was scored with label zero as an object. Its sweeps count as not
+     computed; move `tuning/`, `params/`, `selection/`, `queue/` and `best_parameters.json` aside and keep
+     `predictions/` (`predict` adds `liconn` and `xpress`). The epoch 29 search took about 3 h on 16 CPUs.
    - A checkpoint that was not searched before needs nothing special.
 3. Test of the checkpoint with the new parameters: `evaluate_decoder.py submit --checkpoint <staged checkpoint>
    -e <new folder> --data <setting> --params <session>/best_parameters.json`, one array per setting. Use a new
@@ -149,7 +183,7 @@ are in `README.md` (search drivers and test arrays on `grete:preemptible`, 10 GB
 |---|---|---|---|---|
 | 2D | flow | mSA | 31 | 3609 |
 | 3D | flow | mSA (13 datasets), SA50 (1 dataset) | 14 | 105 |
-| dense (3D EM) | multicut | CREMI | 6 | 19 |
+| dense (3D EM) | multicut | CREMI (label zero ignored) | 8 | 21 |
 
 Tuning samples are images (2D) or crops of up to 32 x 512 x 512 (3D, dense). OOD datasets are never tuned on.
 
@@ -218,10 +252,12 @@ Tuning samples are images (2D) or crops of up to 32 x 512 x 512 (3D, dense). OOD
 | `fafb` | 1 | CREMI | center crop per volume | EM neurites |
 | `hemibrain` | 1 | CREMI | center crop per volume | EM neurites |
 | `zebrafinch_j0126` | 1 | CREMI | center crop per volume | EM neurites |
+| `liconn` | 1 | CREMI | center crop per volume | EM neurites |
+| `xpress` | 1 | CREMI | center crop per volume | not in a panel |
 | `platynereis_cells` | 6 | CREMI | pinned tiles | not in a panel |
 | `synapsenet_compartments` | 8 | CREMI | pinned tiles | not in a panel |
 
-`liconn` and `xpress` have validation data (one center crop each) but are not tuned on, see above.
+`snemi` is in the EM neurites panel but has never been tuned on.
 
 ## Test data
 
@@ -238,7 +274,7 @@ an ID dataset has tuning data in; "-" means it has none.
 | Fig. 2 (2D) | fluorescence cells | mSA | 6 (1440) | 5 | 6 (173) |
 | Fig. 3 (3D) | fluorescence cells | mSA / SA50 | 6 (367) | 6 | 3 (327) |
 | Fig. 3 (3D) | fluorescence nuclei | mSA | 6 (92) | 6 | 6 (199) |
-| Fig. 3 (3D) | EM neurites | CREMI | 6 (134) | 4 | 6 (72) |
+| Fig. 3 (3D) | EM neurites | CREMI | 6 (134) | 5 | 6 (72) |
 
 Extended Data Fig. 1 uses the same datasets. The EM cell datasets are scored for the supplement only.
 
@@ -323,7 +359,7 @@ Extended Data Fig. 1 uses the same datasets. The EM cell datasets are scored for
 | EM neurites | ID | `cremi` | 12 | multicut | CREMI | dense |
 | EM neurites | ID | `fafb` | 44 | multicut | CREMI | dense |
 | EM neurites | ID | `hemibrain` | 24 | multicut | CREMI | dense |
-| EM neurites | ID | `liconn` | 25 | multicut | CREMI | - |
+| EM neurites | ID | `liconn` | 25 | multicut | CREMI | dense |
 | EM neurites | ID | `snemi` | 4 | multicut | CREMI | - |
 | EM neurites | ID | `zebrafinch_j0126` | 25 | multicut | CREMI | dense |
 | EM neurites | OOD | `humanneurons` | 16 | multicut | CREMI | - |
@@ -341,4 +377,4 @@ Extended Data Fig. 1 uses the same datasets. The EM cell datasets are scored for
 | EM cells | ID | `densecell` | 1 | flow | mSA | 3D |
 | EM cells | ID | `synapsenet_compartments` | 8 | multicut | CREMI | dense |
 | - | ID | `embedseg_platy_ish` | 2 | flow | mSA | 3D |
-| X-ray neurites | ID | `xpress` | 1 | multicut | CREMI | - |
+| X-ray neurites | ID | `xpress` | 1 | multicut | CREMI | dense |

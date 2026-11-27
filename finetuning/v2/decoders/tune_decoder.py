@@ -21,6 +21,12 @@ the decoder of a training checkpoint instead, in blocks of 14 slices for volumes
 A session writes '<session folder>/best_parameters.json' with the best parameters over the datasets and the
 'min_size' per dataset, which 'evaluate_decoder.py run --params' reads. Finished sweeps are kept, so a search that is
 started again continues. The sessions of a checkpoint are in '<DECODER_SAVE_ROOT>/tuning/<staged checkpoint>/<data>'.
+
+The same search runs for the decoder of a registry model with its name as checkpoint (REGISTRY_MODELS), e.g. for the
+reference of the decoder evaluation. It predicts with the library defaults, like the reference results, and
+'evaluate_automatic_segmentation.py --params_file' reads its result.
+    python tune_decoder.py predict --checkpoint hvit_t_cells --data dense
+    python tune_decoder.py search --checkpoint hvit_t_cells --data dense
 """
 
 import argparse
@@ -44,6 +50,9 @@ MODEL = evaluate_decoder.DEFAULT_MODEL_TYPE
 SETTINGS = ("2d", "3d", "dense")
 # Written next to the cached predictions of a dataset once all of them are there.
 COMPLETE = "complete.json"
+# The registry models whose decoder can be searched like a checkpoint: pass the name as '--checkpoint'. The reference
+# of the decoder evaluation is hvit_t_cells (`evaluate_decoder.REFERENCE_ROOT`).
+REGISTRY_MODELS = ("hvit_t_cells",)
 # With this variable set, the search runs on small grids, to check the pipeline.
 CHECK_ENV = "TUNE_DECODER_CHECK"
 CHECK_GRIDS = {
@@ -66,8 +75,64 @@ def import_search():
     return search, search_common
 
 
+def stage_registry_decoder(model_name):
+    """Stage the decoder of a registry model, so that a session can search its parameters like those of a checkpoint
+    of the decoder training.
+
+    The copy is named '<model>_registry_<checksum>.pt'. Its sidecar file names the registry model, which
+    `load_model` reads. The checksum is the one of the decoder file, i.e. the checkpoint id of its results in
+    `evaluate_automatic_segmentation.py -c <decoder>`.
+    """
+    _, search_common = import_search()
+    _, decoder_path = search_common.registry_weight_paths(model_name)
+    checksum = search_common.checkpoint_checksum(decoder_path)
+    folder = os.path.join(TUNING_ROOT, "checkpoints")
+    os.makedirs(folder, exist_ok=True)
+    staged = os.path.join(folder, f"{model_name}_registry_{checksum[:8]}.pt")
+    if not os.path.exists(staged):
+        shutil.copyfile(decoder_path, f"{staged}.{os.getpid()}.tmp")
+        os.replace(f"{staged}.{os.getpid()}.tmp", staged)
+    if not os.path.exists(staged + ".json"):
+        with open(f"{staged}.json.{os.getpid()}.tmp", "w") as f:
+            json.dump({
+                "source": decoder_path, "checksum": checksum, "registry_model": model_name,
+                "staged": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }, f, indent=2)
+        os.replace(f"{staged}.json.{os.getpid()}.tmp", staged + ".json")
+    return staged, checksum
+
+
+def registry_model(staged):
+    """The registry model a staged checkpoint is the decoder of, or None for a checkpoint of the decoder training."""
+    with open(staged + ".json") as f:
+        return json.load(f).get("registry_model")
+
+
+def load_model(staged, device):
+    """The model of a staged checkpoint and the arguments of its prediction.
+
+    A checkpoint of the decoder training predicts volumes in the z blocks of the test evaluation
+    (evaluate_decoder.py). The decoder of a registry model predicts like its reference results do
+    (`evaluate_automatic_segmentation.py`, library defaults).
+    """
+    import torch
+
+    name = registry_model(staged)
+    if name is None:
+        model = evaluate_decoder.load_decoder_model(torch.load(staged, map_location="cpu", weights_only=True), device)
+        return model, tune_set.HIERA_U_TILING
+    _, search_common = import_search()
+    return search_common.build_model("ais", name, device, 3, checkpoint_path=staged), None
+
+
 def resolve_checkpoint(checkpoint_path):
-    """The staged copy of a checkpoint and the checksum of the training checkpoint it was made from."""
+    """The staged copy of a checkpoint and the checksum of the training checkpoint it was made from.
+
+    'checkpoint_path' is a training checkpoint, a staged copy, or the name of a registry model in REGISTRY_MODELS,
+    whose decoder is staged (`stage_registry_decoder`).
+    """
+    if checkpoint_path in REGISTRY_MODELS:
+        return stage_registry_decoder(checkpoint_path)
     checkpoint_path = os.path.abspath(checkpoint_path)
     if not os.path.exists(checkpoint_path + ".json"):
         staged, checksum, _ = evaluate_decoder.stage_checkpoint(checkpoint_path, TUNING_ROOT)
@@ -148,7 +213,7 @@ def predict_command(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Device:", torch.cuda.get_device_name() if device == "cuda" else "CPU")
     print(f"Checkpoint {staged} ({checksum}).")
-    model = None
+    model, predict_kwargs = None, None
     for dataset in context["datasets"][args.data]:
         marker = os.path.join(cache_dir(context["experiment_folder"], checksum, dataset), COMPLETE)
         if os.path.exists(marker):
@@ -156,9 +221,7 @@ def predict_command(args):
             print(f"{dataset}: predictions are complete.")
             continue
         if model is None:
-            model = evaluate_decoder.load_decoder_model(
-                torch.load(staged, map_location="cpu", weights_only=True), device
-            )
+            model, predict_kwargs = load_model(staged, device)
         search_common.check_data_download(dataset, search_common.DATA_ROOT, download=False, split="val")
         options = search.sample_options(context, args.data, dataset)
         t0 = time.time()
@@ -167,8 +230,8 @@ def predict_command(args):
             os.path.join(context["experiment_folder"], "tuning", args.data, "cache", "ais"), device,
             crop_shape=options["crop"], checkpoint_id=checksum, grid_preset="broad", subsample=options["subsample"],
             prediction_cache=os.path.join(context["experiment_folder"], "predictions"), cache_only=True,
-            # The z blocks and the padding of small images of the test evaluation, see evaluate_decoder.py.
-            predict_kwargs=tune_set.HIERA_U_TILING, min_shape=evaluation.TRAINING_SCALE_MIN_SHAPE_2D.get(dataset),
+            # The tiling and the padding of small images of the test evaluation, see `load_model`.
+            predict_kwargs=predict_kwargs, min_shape=evaluation.TRAINING_SCALE_MIN_SHAPE_2D.get(dataset),
         )
         n_predictions = len([name for name in os.listdir(os.path.dirname(marker)) if name.endswith(".npy")])
         if n_predictions == 0:
@@ -209,7 +272,7 @@ def make_runner(search, context, staged, threads, slots, max_shards):
     class QueueRunner(search.SlurmRunner):
         def __init__(self):
             super().__init__(context, "", 0, threads, slots, max_shards)
-            self.worker = None
+            self.workers = []
 
         def command(self, sweep, shard_index=0, num_shards=1, cache_only=False):
             command = [
@@ -229,12 +292,17 @@ def make_runner(search, context, staged, threads, slots, max_shards):
             return command
 
         def submit_workers(self):
-            # The worker ends when no task is open, and a later stage adds tasks.
-            if self.worker is None or not self.worker.is_alive():
-                self.worker = threading.Thread(
-                    target=search.run_worker, args=(str(self.queue_dir), threads, slots), daemon=True
+            # A slot ends when it finds no open task, and a later stage adds tasks. Each slot is a thread of its
+            # own that is started again here: slots that share one worker thread are not, as long as one of them
+            # is left, and then the next stage runs on that single slot.
+            self.workers = [worker for worker in self.workers if worker.is_alive()]
+            for _ in range(max(1, slots) - len(self.workers)):
+                worker = threading.Thread(
+                    target=search.worker_loop, args=(str(self.queue_dir), max(1, threads // max(1, slots))),
+                    daemon=True,
                 )
-                self.worker.start()
+                worker.start()
+                self.workers.append(worker)
 
     return QueueRunner()
 
@@ -396,7 +464,8 @@ def main():
     commands = parser.add_subparsers(dest="command", required=True)
 
     def add_session(sub):
-        sub.add_argument("--checkpoint", required=True, help="The training checkpoint, or its staged copy.")
+        sub.add_argument("--checkpoint", required=True,
+                         help="The training checkpoint, its staged copy, or a registry model (REGISTRY_MODELS).")
         sub.add_argument("--data", required=True, choices=SETTINGS, help="The setting of the session.")
         sub.add_argument("-e", "--experiment_folder", default=None,
                          help="The folder of the session. Default: <DECODER_SAVE_ROOT>/tuning/<checkpoint>/<data>.")
@@ -439,7 +508,8 @@ def main():
                      help="End after this many seconds in which no task was started or closed.")
 
     sub = commands.add_parser("submit", help="Submit the sessions as Slurm jobs.")
-    sub.add_argument("--checkpoint", required=True, help="The training checkpoint, or its staged copy.")
+    sub.add_argument("--checkpoint", required=True,
+                     help="The training checkpoint, its staged copy, or a registry model (REGISTRY_MODELS).")
     sub.add_argument("--data", nargs="+", default=list(SETTINGS), choices=SETTINGS)
     sub.add_argument("--gpu_partition", default="grete:shared")
     sub.add_argument("--gres", default="A100:1")

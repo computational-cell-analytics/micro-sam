@@ -64,7 +64,7 @@ from micro_sam.v2.postprocessing import multicut_boundary_map, watershed_heightm
 from micro_sam.v2.util import FINETUNED_MODELS, has_registered_decoder, models as model_registry
 
 from common import (
-    CREMI_IGNORE_ZERO_LABEL, DATASETS_SA50,
+    DATASETS_SA50, cremi_metrics,
     DATASETS_2D_EM_NUCLEUS_MOCK, DATASETS_3D, DATASETS_DENSE, DATASET_SPACING, VAL_SPLITS, VAL_Z_RANGE,
     EM_NUCLEUS_MOCK_2D_ROOT, GT_MIN_SIZE_2D, CROP_SHAPE_3D, DATA_ROOT, LABELLED_ONLY_DATASETS, MODEL_TYPES, MODES,
     SLIVER_DATASETS, SLIVER_FRACTION, SLIVER_SIZES, TUNING_CROPS, VOLUME_SPEED_OPTIONS, build_model,
@@ -308,12 +308,13 @@ def tuning_config(dataset_name, mode, criterion=None, crop_shape=None, grid_over
         "z_range": VAL_Z_RANGE.get(dataset_name),
         # Whether the slivers of cut objects are left out of the scoring, see `common.exclude_slivers`.
         "slivers": dataset_name in SLIVER_DATASETS,
+        # Whether the CREMI score ignores label zero, see `common.cremi_metrics`.
+        "ignore_zero": is_dense,
     }
 
 
 def compute_metrics(
-    seg, labels, metric_mode, border_min_size=0, valid_roi=None, labelled_only=False, ignore_zero=False,
-    slivers=None,
+    seg, labels, metric_mode, border_min_size=0, valid_roi=None, labelled_only=False, slivers=None,
 ):
     """Compute the evaluation metrics for one segmentation.
 
@@ -323,8 +324,9 @@ def compute_metrics(
     The function always reports mSA and SA50. Sparse mode also logs the symmetric best Dice (SBD), which no ranking
     uses.
     Dense (EM neuron) mode also reports the CREMI score with its VI-split, VI-merge and adapted-Rand components.
-    Neuron segmentation is ranked by CREMI (lower is better) instead of mSA. With 'ignore_zero' the CREMI score
-    leaves out the voxels with label zero (see `common.CREMI_IGNORE_ZERO_LABEL`).
+    Neuron segmentation is ranked by CREMI (lower is better) instead of mSA. The CREMI score leaves out the voxels
+    with label zero, the ignore label of every dense dataset, and their share is reported as 'ignored_fraction'
+    (see `common.cremi_metrics`).
     With 'slivers' (the result of `common.dataset_slivers` for 'labels') the slivers of cut objects are left out of
     the ground truth and the segmentation of a volume, and their number is reported as 'gt_slivers'.
     """
@@ -345,12 +347,7 @@ def compute_metrics(
     if metric_mode == "sparse":
         metrics["sbd"] = float(symmetric_best_dice_score(seg, labels))
     if metric_mode == "dense":
-        from elf.evaluation import cremi_score
-        vi_split, vi_merge, adapted_rand, cremi = cremi_score(seg, labels, ignore_gt=[0] if ignore_zero else None)
-        metrics["cremi"] = float(cremi)
-        metrics["vi_split"] = float(vi_split)
-        metrics["vi_merge"] = float(vi_merge)
-        metrics["adapted_rand"] = float(adapted_rand)
+        metrics.update(cremi_metrics(seg, labels))
     return metrics
 
 
@@ -588,7 +585,7 @@ def dense_solve(rag, feats, z_edges, overseg, n_slices, beta):
 
 def score_image_dense_cached(
     prediction, labels, params_list, n_threads=POSTPROC_THREADS, border_min_size=0, valid_roi=None,
-    labelled_only=False, ignore_zero=False,
+    labelled_only=False,
 ):
     """Score all dense combos on one image, sharing the oversegmentation and RAG between the combos of a group.
 
@@ -619,9 +616,7 @@ def score_image_dense_cached(
         for index in indices:
             try:
                 seg = dense_solve(rag, feats, z_edges, overseg, n_slices, params_list[index]["beta"])
-                scores[index] = compute_metrics(
-                    seg, labels, "dense", border_min_size, valid_roi, labelled_only, ignore_zero,
-                )
+                scores[index] = compute_metrics(seg, labels, "dense", border_min_size, valid_roi, labelled_only)
             except Exception as e:
                 warnings.warn(f"Dense multicut solve failed for {params_list[index]}: {e}")
     return scores
@@ -722,12 +717,12 @@ def cached_prediction(cache_dir, index, model, raw, ndim, device, predict_kwargs
 
 def score_image(
     prediction, labels, mode, params_list, n_threads=POSTPROC_THREADS, spacing=None, border_min_size=0,
-    valid_roi=None, labelled_only=False, ignore_zero=False, slivers=None,
+    valid_roi=None, labelled_only=False, slivers=None,
 ):
     """Return a per-combo list of metric dicts for one decoder prediction, aligned with params_list.
 
-    'valid_roi' and 'labelled_only' restrict the scored region, 'ignore_zero' the CREMI score of the dense mode,
-    and 'slivers' leaves the slivers of cut objects out of the sparse mode, see `compute_metrics`.
+    'valid_roi' and 'labelled_only' restrict the scored region, and 'slivers' leaves the slivers of cut objects out
+    of the sparse mode, see `compute_metrics`.
     """
     if mode == "sparse":
         return score_image_sparse_cached(
@@ -736,7 +731,7 @@ def score_image(
         )
     return score_image_dense_cached(
         prediction, labels, params_list, n_threads=n_threads, border_min_size=border_min_size,
-        valid_roi=valid_roi, labelled_only=labelled_only, ignore_zero=ignore_zero,
+        valid_roi=valid_roi, labelled_only=labelled_only,
     )
 
 
@@ -758,11 +753,15 @@ def report_best(df, dataset_name, config):
 def sweep_cache_is_current(csv_path, config):
     """Return whether a cached sweep contains every parameter in the current grid and the metric it is ranked by.
 
-    A sweep of a dataset that is scored without slivers (`common.SLIVER_DATASETS`) must have been scored that way.
+    A sweep of a dataset that is scored without slivers (`common.SLIVER_DATASETS`) must have been scored that way,
+    and a sweep of a dense dataset with a CREMI score that ignores label zero (`common.cremi_metrics`).
     """
     columns = set(pd.read_csv(csv_path, nrows=0).columns)
     if config.get("slivers") and "gt_slivers_mean" not in columns:
         print(f"Ignoring the cached sweep at '{csv_path}'. It was scored with the slivers of cut objects.")
+        return False
+    if config.get("ignore_zero") and "ignored_fraction_mean" not in columns:
+        print(f"Ignoring the cached sweep at '{csv_path}'. Its CREMI score counted label zero as an object.")
         return False
     missing = [key for key in config["grid"] if key not in columns]
     if missing:
@@ -1001,8 +1000,7 @@ def tune_parameters(
                 scores = score_image(
                     prediction, labels, postproc_mode, params_list,
                     n_threads=n_threads, spacing=config["spacing"], border_min_size=border_min_size,
-                    valid_roi=valid_roi, labelled_only=labelled_only,
-                    ignore_zero=dataset_name in CREMI_IGNORE_ZERO_LABEL, slivers=slivers,
+                    valid_roi=valid_roi, labelled_only=labelled_only, slivers=slivers,
                 )
         except Exception as e:
             warnings.warn(f"Skipping validation sample {index} of '{dataset_name}': {e}")
@@ -1061,9 +1059,13 @@ IN_DOMAIN_CELLS = {
         "densecell", "embedseg_platy_ish",
     ],
     # The last two are segmented and scored like the neurites, see `common.DATASETS_DENSE`. liconn (expansion
-    # microscopy) and xpress (X-ray) are in-domain and evaluated, but not tuned on: they are no EM volumes, have one
-    # tuning crop each and decided the dense parameters at the cost of the EM datasets.
-    "dense": ["cremi", "fafb", "hemibrain", "zebrafinch_j0126", "platynereis_cells", "synapsenet_compartments"],
+    # microscopy) and xpress (X-ray) were out of the pool from 2026-11-23 to 2026-11-27: they decided the dense
+    # parameters at the cost of the EM datasets. That came from the scoring, not from the data: about half of their
+    # tuning crops has label zero, which the CREMI score counted as an object until 2026-11-27.
+    "dense": [
+        "cremi", "fafb", "hemibrain", "zebrafinch_j0126", "liconn", "xpress", "platynereis_cells",
+        "synapsenet_compartments",
+    ],
 }
 # The in-domain data of the EM mitochondria model: the held-out parts of its training data.
 IN_DOMAIN_EM_MITO = {
@@ -1196,12 +1198,16 @@ def sweep_csv(context, sweep, root=None):
 def sweep_is_done(context, sweep):
     """Whether a sweep is stored, with the current scoring and for the combinations it is asked for.
 
-    A sweep that was scored with slivers does not count for a dataset that is scored without them.
+    A sweep that was scored with slivers does not count for a dataset that is scored without them, and neither does
+    a sweep of a dense dataset whose CREMI score counted label zero as an object.
     """
     csv_path = sweep_csv(context, sweep)
     if not (os.path.exists(csv_path) and os.path.exists(per_image_path(csv_path))):
         return False
-    if sweep["dataset"] in SLIVER_DATASETS and "gt_slivers_mean" not in pd.read_csv(csv_path, nrows=0).columns:
+    columns = pd.read_csv(csv_path, nrows=0).columns
+    if sweep["dataset"] in SLIVER_DATASETS and "gt_slivers_mean" not in columns:
+        return False
+    if sweep["dataset"] in DATASETS_DENSE and "ignored_fraction_mean" not in columns:
         return False
     if sweep["params_file"] is None:
         return True

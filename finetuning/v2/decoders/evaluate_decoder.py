@@ -88,11 +88,12 @@ REFERENCE_FOLDERS = [os.path.join(REFERENCE_ROOT, "results")]
 # platynereis_cells and synapsenet_compartments are segmented with the multicut and scored by the CREMI score now
 # (`common.DATASETS_DENSE`), and six test volumes of cartocell moved into tuning
 # (`common.CARTOCELL_TUNING_TEST_VOLUMES`). The volumes that are scored without slivers since 2026-11-23
-# (`common.SLIVER_DATASETS`) are recomputed as well, see `is_recomputed`.
+# (`common.SLIVER_DATASETS`) and the dense datasets, whose CREMI score ignores label zero since 2026-11-27
+# (`common.cremi_metrics`), are recomputed as well, see `is_recomputed`.
 REFERENCE_RECOMPUTED = ("platynereis_cells", "synapsenet_compartments", "cartocell")
 
-# The datasets outside the figure panels that are scored as well: (dataset, panel). They are in-domain. xpress is,
-# like liconn of the neurite panel, not tuned on (see `parameter_search.IN_DOMAIN_CELLS`).
+# The datasets outside the figure panels that are scored as well: (dataset, panel). They are in-domain. xpress is
+# not in the neurite panel because its test data is a single slab of 20 slices.
 SUPPLEMENT_DATASETS = (
     ("platynereis_cells", "EM cells"), ("densecell", "EM cells"), ("synapsenet_compartments", "EM cells"),
     ("embedseg_platy_ish", "other"), ("xpress", "X-ray neurites"),
@@ -103,7 +104,7 @@ SAMPLES_PER_TASK = {2: 250, 3: 8}
 
 # The packages that are installed from their working trees (editable installs). A job would import whatever branch
 # is checked out there while it runs, so `freeze_code` copies them and the job scripts put the copy first.
-FROZEN_PACKAGES = ("micro_sam", "torch_em")
+FROZEN_PACKAGES = ("micro_sam", "torch_em", "elf")
 
 
 def _find_dir(*candidates):
@@ -412,14 +413,20 @@ def _metric_column(dataset, evaluation_common):
 
 def is_recomputed(dataset, evaluation_common):
     """Whether the reference of a dataset is recomputed, since the registry evaluation scored it in another way."""
-    return dataset in REFERENCE_RECOMPUTED or dataset in evaluation_common.SLIVER_DATASETS
+    return (
+        dataset in REFERENCE_RECOMPUTED or dataset in evaluation_common.SLIVER_DATASETS
+        or dataset in evaluation_common.DATASETS_DENSE
+    )
 
 
-def _reference_result(dataset):
+def _reference_result(dataset, parameters="default"):
+    """The reference result of a dataset: with the library defaults, or 'tuned' with the parameters of the search of
+    the reference model (`submit_checkpoint_evaluation.py --reference_search`).
+    """
     _, evaluation_common = import_evaluation()
     found = None
     for folder in REFERENCE_FOLDERS:
-        paths = glob.glob(os.path.join(folder, f"{dataset}_micro_sam2_hvit_t_ais_default_ckpt-*.csv"))
+        paths = glob.glob(os.path.join(folder, f"{dataset}_micro_sam2_hvit_t_ais_{parameters}_ckpt-*.csv"))
         # A recomputed result replaces the copy that was scored the old way (`common.result_is_current`).
         paths = [path for path in paths if evaluation_common.result_is_current(path, dataset)] or paths
         if len(paths) > 1:
@@ -473,7 +480,10 @@ def report(args):
     if parameters is None:  # The tuned results if there are any.
         tuned = glob.glob(os.path.join(args.experiment_folder, "results", f"*_ais_tuned{tag}_ckpt-*.csv"))
         parameters = "tuned" if tuned else "default"
-    print(f"Results with the {parameters} parameters, reference: {REFERENCE_FOLDERS[-1]}")
+    print(
+        f"Results with the {parameters} parameters, reference with the {args.reference_parameters} parameters: "
+        f"{REFERENCE_FOLDERS[-1]}"
+    )
 
     rows = []
     for dataset, figure, panel, domain in evaluation_datasets():
@@ -485,9 +495,10 @@ def report(args):
         new_path = _new_result(args.experiment_folder, dataset, tag, args.checkpoint_id, parameters)
         if new_path is not None:
             row["new"] = float(pd.read_csv(new_path)[column].iloc[0])
-        reference_path = _reference_result(dataset)
+        reference_path = _reference_result(dataset, args.reference_parameters)
         if new_path is not None and reference_path is not None:
-            # Results scored with and without slivers (`common.exclude_slivers`) are not compared.
+            # Results that were scored in different ways are not compared: with and without slivers
+            # (`common.exclude_slivers`), or with and without label zero in the CREMI score (`common.cremi_metrics`).
             row["same_scoring"] = evaluation_common.result_is_current(new_path, dataset) == (
                 evaluation_common.result_is_current(reference_path, dataset)
             )
@@ -502,7 +513,8 @@ def report(args):
 
     table = pd.DataFrame(rows)
     table["delta"] = (table["new"] - table["reference"]).where(table["same_scoring"])
-    path = os.path.join(args.experiment_folder, f"report_{parameters}{tag}.csv")
+    versus = "" if args.reference_parameters == "default" else f"_vs_{args.reference_parameters}_reference"
+    path = os.path.join(args.experiment_folder, f"report_{parameters}{tag}{versus}.csv")
     table.to_csv(path, index=False)
 
     pd.set_option("display.width", 200)
@@ -520,8 +532,8 @@ def report(args):
     other_scoring = table[~table["same_scoring"]]["dataset"].tolist()
     if other_scoring:
         print(
-            f"\nNot compared, since only one of the two results is scored without slivers "
-            f"({len(other_scoring)} dataset(s), rescore the older one): {other_scoring}"
+            f"\nNot compared, since only one of the two results has the current scoring (without slivers, CREMI "
+            f"score without label zero; {len(other_scoring)} dataset(s), rescore the older one): {other_scoring}"
         )
     print(f"\nWritten to {path}")
 
@@ -674,7 +686,7 @@ def reference_summary():
     print(f"Reference results of {len(table) - len(missing)} of {len(table)} datasets; open: {missing or 'none'}")
     outdated = table[table["current"].eq(False)]["dataset"].tolist()
     if outdated:
-        print(f"Scored with slivers, to recompute ('reference submit'): {outdated}")
+        print(f"Scored the old way (slivers, label zero in the CREMI score), to recompute: {outdated}")
     print(f"Written to {path}")
     return table
 
@@ -778,6 +790,9 @@ def main():
     sub.add_argument("--checkpoint_id", default=None, help="The checksum of the checkpoint, if there are several.")
     sub.add_argument("--parameters", default=None, choices=("default", "tuned"),
                      help="The results to report. Default: the tuned ones if there are any.")
+    sub.add_argument("--reference_parameters", default="default", choices=("default", "tuned"),
+                     help="The reference results to compare with: the library defaults, or the parameters of the "
+                     "search of the reference model.")
     sub.add_argument("--z_tile", type=int, default=Z_TILE)
     sub.add_argument("--z_halo", type=int, default=Z_HALO)
 
