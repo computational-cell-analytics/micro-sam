@@ -151,7 +151,9 @@ ND_SEGMENT_SETTINGS = {
 
 # Defaults per model family and backbone from the 2026-10 parameter searches, see
 # `micro_sam.v2.postprocessing.default_postprocessing`.
-# 'dense' is for neurite EM volumes, so only the cells models have it.
+# 'dense' is for neurite EM volumes, so only the cells models have it. The dense defaults of 'hvit_t' are from the
+# search of 2026-11-27, which leaves label zero out of the CREMI score; the ones of the other backbones are from
+# the 2026-10 search, which scored it as an object.
 DEFAULT_POSTPROCESSING = {
     "cells": {
         "hvit_t": {
@@ -165,7 +167,7 @@ DEFAULT_POSTPROCESSING = {
                     "sigma": 0.5, "n_iter": 50, "dt": 1.0, "foreground_weight": 0.9,
                 },
             },
-            "dense": {"beta": 0.5, "density_threshold": 3.0, "sigma": 0.5, "n_iter": 50, "dt": 0.5},
+            "dense": {"beta": 0.4, "density_threshold": 3.0, "sigma": 0.25, "n_iter": 100, "dt": 0.5},
         },
         "hvit_s": {
             "sparse": {
