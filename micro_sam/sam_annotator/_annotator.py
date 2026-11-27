@@ -506,7 +506,18 @@ class _ClassifierBase(QtWidgets.QScrollArea):
                 return None, None, None, False
         classical_features = self._get_classical_features()
         use_image = upsampler is not None or classical_features is not None
-        image = self._viewer.layers["image"].data if use_image else None
+        image = None
+        if use_image:
+            state = AnnotatorState()
+            try:
+                image_name = state.get_image_name(self._viewer)
+            except RuntimeError as e:
+                widgets._generate_message("error", str(e))
+                return None, None, None, False
+            if image_name not in self._viewer.layers:
+                widgets._generate_message("error", f"Could not find image layer '{image_name}' in viewer.")
+                return None, None, None, False
+            image = self._viewer.layers[image_name].data
         return image, upsampler, classical_features, True
 
     def _feature_settings(self):
