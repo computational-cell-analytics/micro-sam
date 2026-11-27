@@ -379,6 +379,10 @@ kept. Changes:
   open task a second time. With a new queue the 297 stored shards are read (at most 92 s per task) and the
   others run once.
 
+State 2026-11-26 15:45: the run is complete. 17569447 and 17569448 finished at 12:22 (12.5 h; search result at
+11:52, the last `orgline` shards took about 8 h each), no failed dataset. `report_tuned.csv` holds all 86 datasets,
+each with a result of the checkpoint and a reference result with the same scoring.
+
 ## Post-processing parameter search: offline analysis
 
 `analyze_parameter_search.py` (`cache`, `run`, `report`) analyses the existing sweeps without predicting anything: the
